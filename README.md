@@ -16,9 +16,10 @@ Please plan for the cycles needed to create this game allowing for 100 cycles or
 
 ### Current Cycle 
 
-Planning / pre-production
+5
 
-Cycle 0 is intended to start next cycle.
+Cycle 4 was completed on April 16, 2026.
+See `docs/cycles/cycle-4.md` for the cycle report.
 
 ### Cycle Plan
 
@@ -192,6 +193,15 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - End of Cycle 74: beta with locked feature scope
 - End of Cycle 94: release candidate
 - End of Cycle 99: ship target or disciplined extension decision
+
+### Build And Run
+
+- `swift build`
+- `swift run MusicToDriveBy`
+- Open `MusicToDriveBy.xcodeproj` in Xcode and run the `MusicToDriveBy` scheme on `My Mac`
+- Click inside the game view to capture mouse look, and press `Esc` to release it again.
+
+The current prototype is a macOS graybox four-way traversal slice with denser storefront frontage, stronger route framing for first-person play, more nuanced lot-edge collisions, and a first ambient motion layer across the intersection and key landmarks. Use the on-screen overlay for controls.
 
 ### Any questions ###
 

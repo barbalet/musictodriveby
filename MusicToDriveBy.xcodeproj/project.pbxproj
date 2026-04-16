@@ -1,0 +1,331 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		9A1B2C3D4E5F678901000200 /* MusicToDriveByApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000100 /* MusicToDriveByApp.swift */; };
+		9A1B2C3D4E5F678901000201 /* GameRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000101 /* GameRootView.swift */; };
+		9A1B2C3D4E5F678901000202 /* GameViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000102 /* GameViewModel.swift */; };
+		9A1B2C3D4E5F678901000203 /* InputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000103 /* InputController.swift */; };
+		9A1B2C3D4E5F678901000204 /* Math.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000104 /* Math.swift */; };
+		9A1B2C3D4E5F678901000205 /* MetalGameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000105 /* MetalGameView.swift */; };
+		9A1B2C3D4E5F678901000206 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000106 /* Renderer.swift */; };
+		9A1B2C3D4E5F678901000207 /* ShaderSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000107 /* ShaderSource.swift */; };
+		9A1B2C3D4E5F678901000208 /* engine_core.c in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000108 /* engine_core.c */; };
+		9A1B2C3D4E5F67890100020C /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010C /* AppKit.framework */; };
+		9A1B2C3D4E5F67890100020D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010D /* Metal.framework */; };
+		9A1B2C3D4E5F67890100020E /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010E /* MetalKit.framework */; };
+		9A1B2C3D4E5F67890100020F /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010F /* QuartzCore.framework */; };
+		9A1B2C3D4E5F678901000210 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000110 /* SwiftUI.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusicToDriveBy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A1B2C3D4E5F678901000100 /* MusicToDriveByApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicToDriveByApp.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000101 /* GameRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameRootView.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000102 /* GameViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewModel.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000103 /* InputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputController.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000104 /* Math.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Math.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000105 /* MetalGameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalGameView.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000106 /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000107 /* ShaderSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShaderSource.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000108 /* engine_core.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = engine_core.c; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000109 /* engine_core.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = engine_core.h; sourceTree = "<group>"; };
+		9A1B2C3D4E5F67890100010A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		9A1B2C3D4E5F67890100010B /* MusicToDriveBy-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MusicToDriveBy-Bridging-Header.h"; sourceTree = "<group>"; };
+		9A1B2C3D4E5F67890100010C /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		9A1B2C3D4E5F67890100010D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		9A1B2C3D4E5F67890100010E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		9A1B2C3D4E5F67890100010F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		9A1B2C3D4E5F678901000110 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9A1B2C3D4E5F678901000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A1B2C3D4E5F67890100020C /* AppKit.framework in Frameworks */,
+				9A1B2C3D4E5F67890100020D /* Metal.framework in Frameworks */,
+				9A1B2C3D4E5F67890100020E /* MetalKit.framework in Frameworks */,
+				9A1B2C3D4E5F67890100020F /* QuartzCore.framework in Frameworks */,
+				9A1B2C3D4E5F678901000210 /* SwiftUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		9A1B2C3D4E5F678901000002 = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000004 /* Sources */,
+				9A1B2C3D4E5F678901000007 /* XcodeSupport */,
+				9A1B2C3D4E5F678901000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000004 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000005 /* MusicToDriveBy */,
+				9A1B2C3D4E5F678901000006 /* EngineCore */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000005 /* MusicToDriveBy */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000100 /* MusicToDriveByApp.swift */,
+				9A1B2C3D4E5F678901000101 /* GameRootView.swift */,
+				9A1B2C3D4E5F678901000102 /* GameViewModel.swift */,
+				9A1B2C3D4E5F678901000103 /* InputController.swift */,
+				9A1B2C3D4E5F678901000104 /* Math.swift */,
+				9A1B2C3D4E5F678901000105 /* MetalGameView.swift */,
+				9A1B2C3D4E5F678901000106 /* Renderer.swift */,
+				9A1B2C3D4E5F678901000107 /* ShaderSource.swift */,
+			);
+			path = MusicToDriveBy;
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000006 /* EngineCore */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000108 /* engine_core.c */,
+				9A1B2C3D4E5F678901000109 /* engine_core.h */,
+			);
+			path = EngineCore;
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000007 /* XcodeSupport */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F67890100010A /* Info.plist */,
+				9A1B2C3D4E5F67890100010B /* MusicToDriveBy-Bridging-Header.h */,
+			);
+			path = XcodeSupport;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9A1B2C3D4E5F678901000010 /* MusicToDriveBy */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A1B2C3D4E5F678901000016 /* Build configuration list for PBXNativeTarget "MusicToDriveBy" */;
+			buildPhases = (
+				9A1B2C3D4E5F678901000012 /* Sources */,
+				9A1B2C3D4E5F678901000013 /* Frameworks */,
+				9A1B2C3D4E5F678901000014 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MusicToDriveBy;
+			productName = MusicToDriveBy;
+			productReference = 9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9A1B2C3D4E5F678901000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					9A1B2C3D4E5F678901000010 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+				};
+			};
+			buildConfigurationList = 9A1B2C3D4E5F678901000015 /* Build configuration list for PBXProject "MusicToDriveBy" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 9A1B2C3D4E5F678901000002;
+			productRefGroup = 9A1B2C3D4E5F678901000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9A1B2C3D4E5F678901000010 /* MusicToDriveBy */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9A1B2C3D4E5F678901000014 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		9A1B2C3D4E5F678901000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A1B2C3D4E5F678901000200 /* MusicToDriveByApp.swift in Sources */,
+				9A1B2C3D4E5F678901000201 /* GameRootView.swift in Sources */,
+				9A1B2C3D4E5F678901000202 /* GameViewModel.swift in Sources */,
+				9A1B2C3D4E5F678901000203 /* InputController.swift in Sources */,
+				9A1B2C3D4E5F678901000204 /* Math.swift in Sources */,
+				9A1B2C3D4E5F678901000205 /* MetalGameView.swift in Sources */,
+				9A1B2C3D4E5F678901000206 /* Renderer.swift in Sources */,
+				9A1B2C3D4E5F678901000207 /* ShaderSource.swift in Sources */,
+				9A1B2C3D4E5F678901000208 /* engine_core.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		9A1B2C3D4E5F678901000301 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		9A1B2C3D4E5F678901000302 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		9A1B2C3D4E5F678901000303 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/EngineCore/include",
+				);
+				INFOPLIST_FILE = XcodeSupport/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = by.barbalet.MusicToDriveBy;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = XcodeSupport/MusicToDriveBy-Bridging-Header.h;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		9A1B2C3D4E5F678901000304 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/EngineCore/include",
+				);
+				INFOPLIST_FILE = XcodeSupport/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = by.barbalet.MusicToDriveBy;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = XcodeSupport/MusicToDriveBy-Bridging-Header.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		9A1B2C3D4E5F678901000015 /* Build configuration list for PBXProject "MusicToDriveBy" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A1B2C3D4E5F678901000301 /* Debug */,
+				9A1B2C3D4E5F678901000302 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9A1B2C3D4E5F678901000016 /* Build configuration list for PBXNativeTarget "MusicToDriveBy" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A1B2C3D4E5F678901000303 /* Debug */,
+				9A1B2C3D4E5F678901000304 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9A1B2C3D4E5F678901000001 /* Project object */;
+}
