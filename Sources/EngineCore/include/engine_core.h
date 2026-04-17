@@ -41,6 +41,8 @@ typedef struct {
     uint32_t kind;
     uint32_t variant;
     float activation_radius;
+    uint32_t district;
+    uint32_t tag_mask;
 } MDTBBlockDescriptor;
 
 typedef struct {
@@ -57,6 +59,15 @@ typedef struct {
     float length;
     uint32_t axis;
 } MDTBRoadLink;
+
+typedef struct {
+    MDTBFloat3 position;
+    MDTBFloat3 half_extents;
+    MDTBFloat4 color;
+    float phase_offset;
+    uint32_t kind;
+    uint32_t block_index;
+} MDTBDynamicProp;
 
 typedef struct {
     MDTBCamera camera;
@@ -114,6 +125,21 @@ enum {
 };
 
 enum {
+    MDTBDistrictSouthHub = 0,
+    MDTBDistrictMapleHeights = 1,
+    MDTBDistrictMarketSpur = 2,
+};
+
+enum {
+    MDTBBlockTagRetail = 1u << 0,
+    MDTBBlockTagTransit = 1u << 1,
+    MDTBBlockTagLandmark = 1u << 2,
+    MDTBBlockTagCourt = 1u << 3,
+    MDTBBlockTagResidential = 1u << 4,
+    MDTBBlockTagSpur = 1u << 5,
+};
+
+enum {
     MDTBInterestPointPedestrianSpawn = 0,
     MDTBInterestPointVehicleSpawn = 1,
     MDTBInterestPointLandmark = 2,
@@ -129,6 +155,15 @@ enum {
     MDTBRoadAxisEastWest = 1,
 };
 
+enum {
+    MDTBDynamicPropSignalLamp = 0,
+    MDTBDynamicPropSwingSign = 1,
+    MDTBDynamicPropPennant = 2,
+    MDTBDynamicPropWindowGlow = 3,
+    MDTBDynamicPropTransitGlow = 4,
+    MDTBDynamicPropNeon = 5,
+};
+
 void mdtb_engine_init(MDTBEngineState *state);
 void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input);
 size_t mdtb_engine_box_count(void);
@@ -139,6 +174,8 @@ size_t mdtb_engine_road_link_count(void);
 void mdtb_engine_copy_road_links(MDTBRoadLink *links, size_t count);
 size_t mdtb_engine_interest_point_count(void);
 void mdtb_engine_copy_interest_points(MDTBInterestPoint *points, size_t count);
+size_t mdtb_engine_dynamic_prop_count(void);
+void mdtb_engine_copy_dynamic_props(MDTBDynamicProp *props, size_t count);
 
 #ifdef __cplusplus
 }

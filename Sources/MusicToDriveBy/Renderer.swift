@@ -22,6 +22,8 @@ private struct SceneBlock {
     var kind: UInt32
     var variant: UInt32
     var activationRadius: Float
+    var district: UInt32
+    var tagMask: UInt32
 }
 
 private struct SceneInterestPoint {
@@ -39,6 +41,32 @@ private struct SceneRoadLink {
     var axis: UInt32
 }
 
+private struct SceneDynamicProp {
+    var position: SIMD3<Float>
+    var halfExtents: SIMD3<Float>
+    var color: SIMD4<Float>
+    var phaseOffset: Float
+    var kind: UInt32
+    var blockIndex: UInt32
+}
+
+private struct PopulationActivity {
+    var livePedestrians: Int
+    var liveVehicles: Int
+}
+
+private struct PedestrianSample {
+    var position: SIMD3<Float>
+    var heading: Float
+    var tint: SIMD4<Float>
+}
+
+private struct VehicleSample {
+    var position: SIMD3<Float>
+    var yaw: Float
+    var tint: SIMD4<Float>
+}
+
 @MainActor
 final class Renderer: NSObject, MTKViewDelegate {
     private static let dynamicVertexBudget = 128 * 36
@@ -54,6 +82,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let blocks: [SceneBlock]
     private let roadLinks: [SceneRoadLink]
     private let interestPoints: [SceneInterestPoint]
+    private let dynamicProps: [SceneDynamicProp]
 
     private weak var viewModel: GameViewModel?
     private var engineState = MDTBEngineState()
@@ -75,6 +104,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.blocks = Renderer.loadBlocks()
         self.roadLinks = Renderer.loadRoadLinks()
         self.interestPoints = Renderer.loadInterestPoints()
+        self.dynamicProps = Renderer.loadDynamicProps()
 
         let vertexDescriptor = Renderer.makeVertexDescriptor()
         self.pipelineState = Renderer.makePipelineState(device: self.device, pixelFormat: view.colorPixelFormat, depthFormat: view.depthStencilPixelFormat, vertexDescriptor: vertexDescriptor)
@@ -160,7 +190,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             activeLinkIndex: engineState.active_link_index,
             blocks: blocks,
             roadLinks: roadLinks,
-            interestPoints: interestPoints
+            interestPoints: interestPoints,
+            dynamicProps: dynamicProps
         )
         let actorVertices = isThirdPerson
             ? Self.makeActorVertices(
@@ -247,8 +278,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotFPS = latestFPS
         let snapshotCameraMode = Self.cameraModeLabel(engineState.camera.mode)
         let snapshotSurface = Self.surfaceLabel(engineState.surface_kind)
-        let snapshotLayout = "\(blocks.count) blocks / \(roadLinks.count) links / \(interestPoints.count) hooks"
-        let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks)
+        let snapshotLayout = "\(blocks.count) blocks / \(roadLinks.count) links / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic"
+        let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints)
         let snapshotBlock = Self.blockSummary(state: engineState, blocks: blocks)
         let snapshotNearestHook = Self.nearestInterestPointSummary(for: actorPosition, interestPoints: interestPoints, blocks: blocks)
 
@@ -353,7 +384,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 origin: SIMD3<Float>(block.origin.x, block.origin.y, block.origin.z),
                 kind: block.kind,
                 variant: block.variant,
-                activationRadius: block.activation_radius
+                activationRadius: block.activation_radius,
+                district: block.district,
+                tagMask: block.tag_mask
             )
         }
     }
@@ -407,21 +440,33 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private static func makeAmbientVertices(elapsedTime: Float, actorPosition: SIMD3<Float>, activeBlockIndex: UInt32, activeLinkIndex: UInt32, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint]) -> [Vertex] {
-        let signalPhase = elapsedTime.truncatingRemainder(dividingBy: 8.0)
-        let signalColor: SIMD4<Float>
-
-        switch signalPhase {
-        case 0 ..< 3.0:
-            signalColor = SIMD4<Float>(0.22, 0.88, 0.31, 1.0)
-        case 3.0 ..< 4.2:
-            signalColor = SIMD4<Float>(0.93, 0.74, 0.16, 1.0)
-        default:
-            signalColor = SIMD4<Float>(0.88, 0.22, 0.18, 1.0)
+    private static func loadDynamicProps() -> [SceneDynamicProp] {
+        let propCount = Int(mdtb_engine_dynamic_prop_count())
+        guard propCount > 0 else {
+            return []
         }
 
-        let signYaw = sin(elapsedTime * 1.35) * 0.24
-        let pennantBase = elapsedTime * 2.8
+        let propBuffer = UnsafeMutablePointer<MDTBDynamicProp>.allocate(capacity: propCount)
+        defer {
+            propBuffer.deallocate()
+        }
+
+        mdtb_engine_copy_dynamic_props(propBuffer, propCount)
+
+        return (0 ..< propCount).map { index in
+            let prop = propBuffer[index]
+            return SceneDynamicProp(
+                position: SIMD3<Float>(prop.position.x, prop.position.y, prop.position.z),
+                halfExtents: SIMD3<Float>(prop.half_extents.x, prop.half_extents.y, prop.half_extents.z),
+                color: SIMD4<Float>(prop.color.x, prop.color.y, prop.color.z, prop.color.w),
+                phaseOffset: prop.phase_offset,
+                kind: prop.kind,
+                blockIndex: prop.block_index
+            )
+        }
+    }
+
+    private static func makeAmbientVertices(elapsedTime: Float, actorPosition: SIMD3<Float>, activeBlockIndex: UInt32, activeLinkIndex: UInt32, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], dynamicProps: [SceneDynamicProp]) -> [Vertex] {
         let activeBlockIndices = Self.activeBlockIndices(
             for: actorPosition,
             activeBlockIndex: activeBlockIndex,
@@ -430,92 +475,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             roadLinks: roadLinks
         )
         var vertices: [Vertex] = []
-        vertices.reserveCapacity((blocks.count * 16 + interestPoints.count * 8) * 36)
+        vertices.reserveCapacity((dynamicProps.count + interestPoints.count * 2 + roadLinks.count * 3) * 36)
 
-        for (index, block) in blocks.enumerated() where activeBlockIndices.contains(index) {
-            for xSign in [-1.0 as Float, 1.0] {
-                for zSign in [-1.0 as Float, 1.0] {
-                    vertices.append(
-                        contentsOf: makeWorldBoxVertices(
-                            center: SIMD3<Float>(8.9 * xSign, 2.42, block.origin.z + (9.35 * zSign)),
-                            halfExtents: SIMD3<Float>(0.14, 0.14, 0.14),
-                            yaw: 0.0,
-                            color: signalColor
-                        )
-                    )
-                }
-            }
-
-            switch block.kind {
-            case UInt32(MDTBBlockKindResidential):
-                let busLight = 0.82 + (sin((elapsedTime * 2.2) + block.origin.z * 0.04) * 0.08)
-                let windowGlow = 0.74 + (sin((elapsedTime * 1.7) + 0.6) * 0.06)
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(11.2, 2.08, block.origin.z - 16.2),
-                        halfExtents: SIMD3<Float>(0.30, 0.32, 0.05),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(busLight, busLight, 0.92, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(-41.6, 2.46, block.origin.z + 15.0),
-                        halfExtents: SIMD3<Float>(0.88, 0.10, 0.10),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(0.92, 0.80, 0.34, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(38.4, 2.16 + (sin((elapsedTime * 1.8) + 1.1) * 0.06), block.origin.z + 33.8),
-                        halfExtents: SIMD3<Float>(0.92, 0.10, 0.08),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(windowGlow, windowGlow, 0.86, 1.0)
-                    )
-                )
-            default:
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(-37.15, 2.06, block.origin.z - 13.35),
-                        halfExtents: SIMD3<Float>(0.84, 0.42, 0.08),
-                        yaw: signYaw,
-                        color: SIMD4<Float>(0.90, 0.74, 0.22, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(-44.9, 2.62 + (sin(pennantBase + 0.2) * 0.05), block.origin.z - 11.8),
-                        halfExtents: SIMD3<Float>(0.28, 0.03, 0.12),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(0.86, 0.36, 0.19, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(-42.8, 2.60 + (sin(pennantBase + 0.8) * 0.05), block.origin.z - 11.85),
-                        halfExtents: SIMD3<Float>(0.28, 0.03, 0.12),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(0.90, 0.80, 0.28, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(-40.7, 2.63 + (sin(pennantBase + 1.4) * 0.05), block.origin.z - 11.8),
-                        halfExtents: SIMD3<Float>(0.28, 0.03, 0.12),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(0.27, 0.54, 0.71, 1.0)
-                    )
-                )
-                vertices.append(
-                    contentsOf: makeWorldBoxVertices(
-                        center: SIMD3<Float>(10.1, 2.18 + (sin((elapsedTime * 1.8) + 1.1) * 0.06), block.origin.z + 34.0),
-                        halfExtents: SIMD3<Float>(0.58, 0.18, 0.06),
-                        yaw: 0.0,
-                        color: SIMD4<Float>(0.88, 0.91, 0.95, 1.0)
-                    )
-                )
-            }
+        for dynamicProp in dynamicProps where activeBlockIndices.contains(Int(dynamicProp.blockIndex)) {
+            vertices.append(contentsOf: makeDynamicPropVertices(dynamicProp, elapsedTime: elapsedTime))
         }
 
         if activeLinkIndex < roadLinks.count {
@@ -545,27 +508,30 @@ final class Renderer: NSObject, MTKViewDelegate {
                 pointColor = SIMD4<Float>(0.91, 0.67, 0.24, 1.0)
                 halfExtents = SIMD3<Float>(0.18, 0.12, 0.18)
             case UInt32(MDTBInterestPointPedestrianSpawn):
-                let phase = (elapsedTime * 1.9) + Float(pointIndex) * 0.7
-                let offset = SIMD3<Float>(sin(phase) * 0.85, 0.0, cos(phase) * 0.42)
-                let heading = atan2(offset.x, max(offset.z, -0.01))
-                vertices.append(
-                    contentsOf: makePedestrianPlaceholderVertices(
-                        position: point.position + offset,
-                        heading: heading,
-                        elapsedTime: elapsedTime + Float(pointIndex) * 0.2,
-                        tint: SIMD4<Float>(0.26, 0.58, 0.73, 1.0)
+                if let block = blockIndex < blocks.count ? blocks[blockIndex] : nil,
+                   let sample = pedestrianSample(for: point, pointIndex: pointIndex, block: block, elapsedTime: elapsedTime) {
+                    vertices.append(
+                        contentsOf: makePedestrianPlaceholderVertices(
+                            position: sample.position,
+                            heading: sample.heading,
+                            elapsedTime: elapsedTime + Float(pointIndex) * 0.2,
+                            tint: sample.tint
+                        )
                     )
-                )
+                }
                 continue
             case UInt32(MDTBInterestPointVehicleSpawn):
-                vertices.append(
-                    contentsOf: makeVehiclePlaceholderVertices(
-                        position: point.position,
-                        yaw: vehicleYaw(for: point, blocks: blocks),
-                        elapsedTime: elapsedTime + Float(pointIndex) * 0.35,
-                        tint: SIMD4<Float>(0.80, 0.52, 0.23, 1.0)
+                if let block = blockIndex < blocks.count ? blocks[blockIndex] : nil,
+                   let sample = vehicleSample(for: point, pointIndex: pointIndex, block: block, elapsedTime: elapsedTime) {
+                    vertices.append(
+                        contentsOf: makeVehiclePlaceholderVertices(
+                            position: sample.position,
+                            yaw: sample.yaw,
+                            elapsedTime: elapsedTime + Float(pointIndex) * 0.35,
+                            tint: sample.tint
+                        )
                     )
-                )
+                }
                 continue
             default:
                 continue
@@ -583,6 +549,142 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         return vertices
+    }
+
+    private static func makeDynamicPropVertices(_ dynamicProp: SceneDynamicProp, elapsedTime: Float) -> [Vertex] {
+        var center = dynamicProp.position
+        var color = dynamicProp.color
+        var yaw: Float = 0.0
+
+        switch dynamicProp.kind {
+        case UInt32(MDTBDynamicPropSignalLamp):
+            let signalPhase = (elapsedTime + dynamicProp.phaseOffset).truncatingRemainder(dividingBy: 8.0)
+            switch signalPhase {
+            case 0 ..< 3.0:
+                color = SIMD4<Float>(0.22, 0.88, 0.31, 1.0)
+            case 3.0 ..< 4.2:
+                color = SIMD4<Float>(0.93, 0.74, 0.16, 1.0)
+            default:
+                color = SIMD4<Float>(0.88, 0.22, 0.18, 1.0)
+            }
+        case UInt32(MDTBDynamicPropSwingSign):
+            yaw = sin((elapsedTime * 1.35) + dynamicProp.phaseOffset) * 0.24
+        case UInt32(MDTBDynamicPropPennant):
+            center.y += sin((elapsedTime * 2.8) + dynamicProp.phaseOffset) * 0.05
+        case UInt32(MDTBDynamicPropWindowGlow):
+            center.y += sin((elapsedTime * 1.8) + dynamicProp.phaseOffset) * 0.06
+            color = animatedColor(dynamicProp.color, intensity: 0.82 + (sin((elapsedTime * 1.6) + dynamicProp.phaseOffset) * 0.10))
+        case UInt32(MDTBDynamicPropTransitGlow):
+            color = animatedColor(dynamicProp.color, intensity: 0.88 + (sin((elapsedTime * 2.2) + dynamicProp.phaseOffset) * 0.10))
+        case UInt32(MDTBDynamicPropNeon):
+            color = animatedColor(dynamicProp.color, intensity: 0.90 + (sin((elapsedTime * 3.0) + dynamicProp.phaseOffset) * 0.12))
+        default:
+            break
+        }
+
+        return makeWorldBoxVertices(center: center, halfExtents: dynamicProp.halfExtents, yaw: yaw, color: color)
+    }
+
+    private static func pedestrianSample(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, elapsedTime: Float) -> PedestrianSample? {
+        let districtTempo: Float
+        let activeShare: Float
+
+        switch block.district {
+        case UInt32(MDTBDistrictMarketSpur):
+            districtTempo = 1.15
+            activeShare = 0.76
+        case UInt32(MDTBDistrictMapleHeights):
+            districtTempo = 0.86
+            activeShare = 0.54
+        default:
+            districtTempo = 1.0
+            activeShare = 0.66
+        }
+
+        let cycleLength: Float = 8.5 + (Float(pointIndex % 3) * 1.35)
+        let seed = (Float(pointIndex) * 1.37) + (Float(block.variant) * 0.61)
+        let cycle = ((elapsedTime * districtTempo) + seed).truncatingRemainder(dividingBy: cycleLength)
+        let activeWindow = cycleLength * activeShare
+        guard cycle < activeWindow else {
+            return nil
+        }
+
+        let progress = cycle / max(activeWindow, 0.01)
+        let loop = (progress * (.pi * 2.0)) + seed
+        let radiusX: Float = (block.tagMask & UInt32(MDTBBlockTagRetail)) != 0 ? 1.05 : 0.78
+        let radiusZ: Float = (block.tagMask & UInt32(MDTBBlockTagResidential)) != 0 ? 0.72 : 0.48
+        let offset = SIMD3<Float>(
+            sin(loop) * radiusX,
+            0.0,
+            sin((loop * 0.5) + 0.3) * cos(loop) * radiusZ
+        )
+        let tangent = SIMD3<Float>(
+            cos(loop) * radiusX,
+            0.0,
+            ((cos((loop * 0.5) + 0.3) * 0.5 * cos(loop)) - (sin((loop * 0.5) + 0.3) * sin(loop))) * radiusZ
+        )
+
+        return PedestrianSample(
+            position: point.position + offset,
+            heading: atan2(tangent.x, -tangent.z),
+            tint: pedestrianTint(for: block)
+        )
+    }
+
+    private static func vehicleSample(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, elapsedTime: Float) -> VehicleSample? {
+        let pace: Float = (block.tagMask & UInt32(MDTBBlockTagRetail)) != 0 ? 1.0 : 0.82
+        let activeShare: Float = block.district == UInt32(MDTBDistrictMapleHeights) ? 0.42 : 0.60
+        let cycleLength: Float = 11.5 + Float(pointIndex % 2) * 2.4
+        let seed = (Float(pointIndex) * 0.83) + (Float(block.variant) * 0.47)
+        let cycle = ((elapsedTime * pace) + seed).truncatingRemainder(dividingBy: cycleLength)
+        let activeWindow = cycleLength * activeShare
+        guard cycle < activeWindow else {
+            return nil
+        }
+
+        let progress = smoothstep(cycle / max(activeWindow, 0.01))
+        let yaw = vehicleYaw(for: point, block: block)
+        let forward = SIMD3<Float>(sin(yaw), 0.0, -cos(yaw))
+        let travelSpan: Float = (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 7.5 : 5.5
+        let laneOffset = forward * ((progress - 0.5) * travelSpan)
+
+        return VehicleSample(
+            position: point.position + laneOffset,
+            yaw: yaw,
+            tint: vehicleTint(for: block)
+        )
+    }
+
+    private static func pedestrianTint(for block: SceneBlock) -> SIMD4<Float> {
+        switch block.district {
+        case UInt32(MDTBDistrictMarketSpur):
+            return SIMD4<Float>(0.31, 0.62, 0.78, 1.0)
+        case UInt32(MDTBDistrictMapleHeights):
+            return SIMD4<Float>(0.44, 0.60, 0.34, 1.0)
+        default:
+            return SIMD4<Float>(0.82, 0.44, 0.24, 1.0)
+        }
+    }
+
+    private static func vehicleTint(for block: SceneBlock) -> SIMD4<Float> {
+        switch block.district {
+        case UInt32(MDTBDistrictMarketSpur):
+            return SIMD4<Float>(0.83, 0.54, 0.22, 1.0)
+        case UInt32(MDTBDistrictMapleHeights):
+            return SIMD4<Float>(0.34, 0.52, 0.70, 1.0)
+        default:
+            return SIMD4<Float>(0.72, 0.42, 0.26, 1.0)
+        }
+    }
+
+    private static func animatedColor(_ base: SIMD4<Float>, intensity: Float) -> SIMD4<Float> {
+        let clampedIntensity = max(0.25, intensity)
+        return SIMD4<Float>(
+            min(base.x * clampedIntensity, 1.0),
+            min(base.y * clampedIntensity, 1.0),
+            min(base.z * clampedIntensity, 1.0),
+            base.w
+        )
     }
 
     private static func makePedestrianPlaceholderVertices(position: SIMD3<Float>, heading: Float, elapsedTime: Float, tint: SIMD4<Float>) -> [Vertex] {
@@ -787,10 +889,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         return indices
     }
 
-    private static func activitySummary(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink]) -> String {
+    private static func activitySummary(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint]) -> String {
         let blockLabel = blockName(for: state.active_block_index, blocks: blocks)
         let linkLabel = linkSummary(for: state.active_link_index, roadLinks: roadLinks, blocks: blocks)
-        return "\(blockLabel) / \(state.nearby_block_count) nearby / \(state.active_pedestrian_spawn_count) ped / \(state.active_vehicle_spawn_count) veh / \(linkLabel)"
+        let population = populationActivity(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints)
+        return "\(blockLabel) / \(state.nearby_block_count) nearby / \(population.livePedestrians) live ped / \(population.liveVehicles) live veh / \(linkLabel)"
     }
 
     private static func blockSummary(state: MDTBEngineState, blocks: [SceneBlock]) -> String {
@@ -799,7 +902,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let block = blocks[Int(state.active_block_index)]
-        return "\(blockKindLabel(block.kind)) v\(block.variant) / r \(formatScalar(block.activationRadius)) / z \(formatScalar(block.origin.z))"
+        return "\(blockKindLabel(block.kind)) / \(districtLabel(block.district)) / \(tagLabel(block.tagMask)) / r \(formatScalar(block.activationRadius))"
     }
 
     private static func nearestInterestPointSummary(for position: SIMD3<Float>, interestPoints: [SceneInterestPoint], blocks: [SceneBlock]) -> String {
@@ -818,6 +921,51 @@ final class Renderer: NSObject, MTKViewDelegate {
         let dx = lhs.x - rhs.x
         let dz = lhs.z - rhs.z
         return (dx * dx) + (dz * dz)
+    }
+
+    private static func populationActivity(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint]) -> PopulationActivity {
+        guard !interestPoints.isEmpty else {
+            return PopulationActivity(livePedestrians: 0, liveVehicles: 0)
+        }
+
+        let actorPosition = SIMD3<Float>(
+            state.actor_position.x,
+            state.actor_position.y,
+            state.actor_position.z
+        )
+        let activeBlockIndices = activeBlockIndices(
+            for: actorPosition,
+            activeBlockIndex: state.active_block_index,
+            activeLinkIndex: state.active_link_index,
+            blocks: blocks,
+            roadLinks: roadLinks
+        )
+
+        var pedestrians = 0
+        var vehicles = 0
+
+        for (pointIndex, point) in interestPoints.enumerated() {
+            let blockIndex = Int(point.blockIndex)
+            guard blockIndex < blocks.count, activeBlockIndices.contains(blockIndex) else {
+                continue
+            }
+
+            let block = blocks[blockIndex]
+            switch point.kind {
+            case UInt32(MDTBInterestPointPedestrianSpawn):
+                if pedestrianSample(for: point, pointIndex: pointIndex, block: block, elapsedTime: state.elapsed_time) != nil {
+                    pedestrians += 1
+                }
+            case UInt32(MDTBInterestPointVehicleSpawn):
+                if vehicleSample(for: point, pointIndex: pointIndex, block: block, elapsedTime: state.elapsed_time) != nil {
+                    vehicles += 1
+                }
+            default:
+                break
+            }
+        }
+
+        return PopulationActivity(livePedestrians: pedestrians, liveVehicles: vehicles)
     }
 
     private static func formatScalar(_ value: Float) -> String {
@@ -842,23 +990,52 @@ final class Renderer: NSObject, MTKViewDelegate {
         return "\(axis) \(blockName(for: link.fromBlockIndex, blocks: blocks))->\(blockName(for: link.toBlockIndex, blocks: blocks))"
     }
 
-    private static func vehicleYaw(for point: SceneInterestPoint, blocks: [SceneBlock]) -> Float {
-        let blockOriginZ: Float
-        if point.blockIndex < blocks.count {
-            blockOriginZ = blocks[Int(point.blockIndex)].origin.z
-        } else {
-            blockOriginZ = point.position.z
-        }
-
+    private static func vehicleYaw(for point: SceneInterestPoint, block: SceneBlock) -> Float {
         if abs(point.position.x) <= 18.0 {
             return .pi * 0.5
         }
 
-        if abs(point.position.z - blockOriginZ) <= 18.0 {
+        if abs(point.position.z - block.origin.z) <= 18.0 {
             return 0.0
         }
 
         return point.position.x >= 0.0 ? 0.0 : .pi
+    }
+
+    private static func districtLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBDistrictMapleHeights):
+            return "maple-heights"
+        case UInt32(MDTBDistrictMarketSpur):
+            return "market-spur"
+        default:
+            return "south-hub"
+        }
+    }
+
+    private static func tagLabel(_ value: UInt32) -> String {
+        var labels: [String] = []
+
+        if (value & UInt32(MDTBBlockTagRetail)) != 0 {
+            labels.append("retail")
+        }
+        if (value & UInt32(MDTBBlockTagTransit)) != 0 {
+            labels.append("transit")
+        }
+        if (value & UInt32(MDTBBlockTagLandmark)) != 0 {
+            labels.append("landmark")
+        }
+        if (value & UInt32(MDTBBlockTagCourt)) != 0 {
+            labels.append("court")
+        }
+        if (value & UInt32(MDTBBlockTagResidential)) != 0 {
+            labels.append("res")
+        }
+        if (value & UInt32(MDTBBlockTagSpur)) != 0 {
+            labels.append("spur")
+        }
+
+        return labels.isEmpty ? "untagged" : labels.joined(separator: "+")
     }
 
     private static func blockKindLabel(_ value: UInt32) -> String {
@@ -909,5 +1086,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         default:
             return "unknown"
         }
+    }
+
+    private static func smoothstep(_ value: Float) -> Float {
+        let clamped = max(0.0, min(value, 1.0))
+        return clamped * clamped * (3.0 - (2.0 * clamped))
     }
 }

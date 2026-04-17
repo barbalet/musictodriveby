@@ -9,6 +9,7 @@ enum {
     MDTBMaxBlocks = 16,
     MDTBMaxRoadLinks = 32,
     MDTBMaxInterestPoints = 128,
+    MDTBMaxDynamicProps = 192,
 };
 
 typedef struct {
@@ -26,13 +27,15 @@ static MDTBRoadLink g_road_links[MDTBMaxRoadLinks];
 static size_t g_road_link_count = 0u;
 static MDTBInterestPoint g_interest_points[MDTBMaxInterestPoints];
 static size_t g_interest_point_count = 0u;
+static MDTBDynamicProp g_dynamic_props[MDTBMaxDynamicProps];
+static size_t g_dynamic_prop_count = 0u;
 static int g_scene_initialized = 0;
 
 static const float kPi = 3.1415926535f;
 static const float kRoadHalfWidth = 5.8f;
 static const float kCurbOuter = 6.35f;
 static const float kSidewalkOuter = 12.0f;
-static const float kPlayableHalfWidth = 104.0f;
+static const float kPlayableHalfWidth = 168.0f;
 static const float kPlayableHalfLength = 132.0f;
 static const float kRoadHeight = 0.02f;
 static const float kSidewalkHeight = 0.22f;
@@ -44,16 +47,28 @@ static const float kCrosswalkOffset = 7.25f;
 static const float kLinkActivationHalfWidth = 14.0f;
 
 static const MDTBBlockDescriptor kBlockLayout[] = {
-    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 54.0f},
-    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 54.0f},
+    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt},
+    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 56.0f, MDTBDistrictMapleHeights, MDTBBlockTagResidential | MDTBBlockTagTransit},
+    {{96.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 2u, 58.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur},
 };
 
 static const MDTBRoadLink kRoadLayout[] = {
     {0u, 1u, {0.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
+    {0u, 2u, {48.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest},
 };
 
 static size_t scene_layout_count(void) {
     return sizeof(kBlockLayout) / sizeof(kBlockLayout[0]);
+}
+
+static int layout_has_prior_z(size_t layout_index) {
+    for (size_t index = 0u; index < layout_index; ++index) {
+        if (fabsf(kBlockLayout[index].origin.z - kBlockLayout[layout_index].origin.z) <= 0.01f) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static MDTBFloat3 make_float3(float x, float y, float z) {
@@ -199,6 +214,20 @@ static void push_interest_point(MDTBFloat3 position, float radius, uint32_t kind
     g_interest_points[g_interest_point_count].kind = kind;
     g_interest_points[g_interest_point_count].block_index = block_index;
     g_interest_point_count += 1u;
+}
+
+static void push_dynamic_prop(MDTBFloat3 position, MDTBFloat3 half_extents, MDTBFloat4 color, float phase_offset, uint32_t kind, uint32_t block_index) {
+    if (g_dynamic_prop_count >= MDTBMaxDynamicProps) {
+        return;
+    }
+
+    g_dynamic_props[g_dynamic_prop_count].position = position;
+    g_dynamic_props[g_dynamic_prop_count].half_extents = half_extents;
+    g_dynamic_props[g_dynamic_prop_count].color = color;
+    g_dynamic_props[g_dynamic_prop_count].phase_offset = phase_offset;
+    g_dynamic_props[g_dynamic_prop_count].kind = kind;
+    g_dynamic_props[g_dynamic_prop_count].block_index = block_index;
+    g_dynamic_prop_count += 1u;
 }
 
 static int block_is_active_at_position(uint32_t block_index, MDTBFloat3 position) {
@@ -716,6 +745,10 @@ static void build_world_surfaces(void) {
     for (size_t index = 0u; index < scene_layout_count(); ++index) {
         const float z_origin = kBlockLayout[index].origin.z;
 
+        if (layout_has_prior_z(index)) {
+            continue;
+        }
+
         push_scene_box(make_box(
             make_float3(0.0f, kRoadHeight * 0.5f, z_origin),
             make_float3(kPlayableHalfWidth + 4.0f, kRoadHeight * 0.5f, kRoadHalfWidth),
@@ -736,14 +769,20 @@ static void build_world_surfaces(void) {
             ));
         }
 
+    }
+
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const float x_origin = kBlockLayout[index].origin.x;
+        const float z_origin = kBlockLayout[index].origin.z;
+
         push_scene_box(make_box(
-            make_float3(-35.0f, kSidewalkHeight * 0.5f, z_origin),
+            make_float3(x_origin - 35.0f, kSidewalkHeight * 0.5f, z_origin),
             make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
             lot_color
         ));
 
         push_scene_box(make_box(
-            make_float3(35.0f, kSidewalkHeight * 0.5f, z_origin),
+            make_float3(x_origin + 35.0f, kSidewalkHeight * 0.5f, z_origin),
             make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
             lot_color
         ));
@@ -776,6 +815,10 @@ static void build_road_markings(void) {
     }
 
     for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+        if (layout_has_prior_z(block_index)) {
+            continue;
+        }
+
         const float z_origin = kBlockLayout[block_index].origin.z;
 
         for (int segment = -4; segment <= 4; ++segment) {
@@ -839,8 +882,19 @@ static void build_side_buildings(const MDTBBlockDescriptor *block, int x_sign) {
         {0.56f, 0.53f, 0.40f, 1.0f},
         {0.49f, 0.46f, 0.56f, 1.0f},
     };
+    static const MDTBFloat4 mixed_use_palette[4] = {
+        {0.64f, 0.50f, 0.31f, 1.0f},
+        {0.40f, 0.47f, 0.62f, 1.0f},
+        {0.52f, 0.34f, 0.42f, 1.0f},
+        {0.45f, 0.58f, 0.53f, 1.0f},
+    };
+    const MDTBFloat4 *palette = residential_palette;
 
-    const MDTBFloat4 *palette = block->kind == MDTBBlockKindHub ? hub_palette : residential_palette;
+    if (block->kind == MDTBBlockKindHub) {
+        palette = hub_palette;
+    } else if (block->kind == MDTBBlockKindMixedUse) {
+        palette = mixed_use_palette;
+    }
 
     for (int row = 0; row < 2; ++row) {
         for (int column = 0; column < 2; ++column) {
@@ -850,10 +904,14 @@ static void build_side_buildings(const MDTBBlockDescriptor *block, int x_sign) {
             const float half_x = 2.6f + ((column == 0) ? 0.5f : 0.0f);
             const float half_y = block->kind == MDTBBlockKindHub
                 ? (3.0f + ((row == 0) ? 0.9f : 0.25f) + ((column == 1) ? 0.35f : 0.0f))
-                : (2.1f + ((row == 1) ? 0.35f : 0.0f));
+                : (block->kind == MDTBBlockKindMixedUse
+                    ? (2.55f + ((row == 0) ? 0.45f : 0.18f) + ((column == 1) ? 0.22f : 0.0f))
+                    : (2.1f + ((row == 1) ? 0.35f : 0.0f)));
             const float half_z = block->kind == MDTBBlockKindHub
                 ? (3.2f + ((column == 0) ? 0.8f : 0.3f))
-                : (3.6f + ((column == 0) ? 0.6f : 0.2f));
+                : (block->kind == MDTBBlockKindMixedUse
+                    ? (3.1f + ((column == 0) ? 0.7f : 0.35f))
+                    : (3.6f + ((column == 0) ? 0.6f : 0.2f)));
 
             push_building(
                 make_float3(center_x, kSidewalkHeight + half_y, center_z),
@@ -922,6 +980,95 @@ static void build_intersection_props(float z_origin) {
     push_bollard(7.4f, z_origin + 11.9f, 0.92f);
 }
 
+static void build_intersection_dynamic_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
+        for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
+            push_dynamic_prop(
+                offset_point(block->origin, 8.9f * (float)x_sign, 2.42f, 9.35f * (float)z_sign),
+                make_float3(0.14f, 0.14f, 0.14f),
+                make_float4(0.24f, 0.82f, 0.34f, 1.0f),
+                ((float)(x_sign + 2 + (z_sign > 0 ? 1 : 0)) * 0.45f),
+                MDTBDynamicPropSignalLamp,
+                block_index
+            );
+        }
+    }
+}
+
+static void build_hub_dynamic_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_intersection_dynamic_props(block, block_index);
+
+    push_dynamic_prop(
+        offset_point(block->origin, -37.15f, 2.06f, -13.35f),
+        make_float3(0.84f, 0.42f, 0.08f),
+        make_float4(0.90f, 0.74f, 0.22f, 1.0f),
+        0.0f,
+        MDTBDynamicPropSwingSign,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -44.9f, 2.62f, -11.8f),
+        make_float3(0.28f, 0.03f, 0.12f),
+        make_float4(0.86f, 0.36f, 0.19f, 1.0f),
+        0.2f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -42.8f, 2.60f, -11.85f),
+        make_float3(0.28f, 0.03f, 0.12f),
+        make_float4(0.90f, 0.80f, 0.28f, 1.0f),
+        0.8f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -40.7f, 2.63f, -11.8f),
+        make_float3(0.28f, 0.03f, 0.12f),
+        make_float4(0.27f, 0.54f, 0.71f, 1.0f),
+        1.4f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 10.1f, 2.18f, 34.0f),
+        make_float3(0.58f, 0.18f, 0.06f),
+        make_float4(0.88f, 0.91f, 0.95f, 1.0f),
+        1.1f,
+        MDTBDynamicPropWindowGlow,
+        block_index
+    );
+}
+
+static void build_residential_dynamic_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_intersection_dynamic_props(block, block_index);
+
+    push_dynamic_prop(
+        offset_point(block->origin, 11.2f, 2.08f, -16.2f),
+        make_float3(0.30f, 0.32f, 0.05f),
+        make_float4(0.82f, 0.82f, 0.92f, 1.0f),
+        0.4f,
+        MDTBDynamicPropTransitGlow,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -41.6f, 2.46f, 15.0f),
+        make_float3(0.88f, 0.10f, 0.10f),
+        make_float4(0.92f, 0.80f, 0.34f, 1.0f),
+        0.9f,
+        MDTBDynamicPropWindowGlow,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 38.4f, 2.16f, 33.8f),
+        make_float3(0.92f, 0.10f, 0.08f),
+        make_float4(0.76f, 0.76f, 0.86f, 1.0f),
+        1.7f,
+        MDTBDynamicPropWindowGlow,
+        block_index
+    );
+}
+
 static void build_hub_frontage(const MDTBBlockDescriptor *block) {
     const float z_origin = block->origin.z;
 
@@ -964,11 +1111,124 @@ static void build_hub_frontage(const MDTBBlockDescriptor *block) {
     push_prop(make_float3(10.1f, 2.34f, z_origin + 34.0f), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
 }
 
+static void build_mixed_use_frontage(const MDTBBlockDescriptor *block) {
+    const float x_origin = block->origin.x;
+    const float z_origin = block->origin.z;
+
+    push_store_awning_x(x_origin - 19.5f, z_origin - 13.4f, 3.8f, 1.0f);
+    push_store_awning_x(x_origin + 11.5f, z_origin - 13.2f, 4.8f, 1.0f);
+    push_store_awning_x(x_origin + 31.0f, z_origin + 13.4f, 3.4f, -1.0f);
+    push_bus_shelter(x_origin - 21.8f, z_origin - 16.0f);
+    push_newsstand(x_origin - 6.2f, z_origin - 10.7f, 1);
+    push_newsstand(x_origin + 25.6f, z_origin + 10.8f, 1);
+    push_trash_bin(x_origin - 25.2f, z_origin + 10.8f);
+    push_trash_bin(x_origin + 8.6f, z_origin - 10.8f);
+    push_bench(x_origin + 19.6f, z_origin - 10.3f);
+    push_bench(x_origin - 11.8f, z_origin + 10.3f);
+    push_planter(x_origin - 32.0f, z_origin - 12.2f, 0.60f);
+    push_planter(x_origin + 36.2f, z_origin + 12.0f, 0.58f);
+    push_prop(make_float3(x_origin + 6.2f, kSidewalkHeight + 2.15f, z_origin - 13.0f), make_float3(2.2f, 0.16f, 0.20f), make_float4(0.92f, 0.63f, 0.22f, 1.0f), 0);
+    push_prop(make_float3(x_origin + 33.8f, kSidewalkHeight + 2.2f, z_origin + 13.2f), make_float3(1.9f, 0.16f, 0.20f), make_float4(0.28f, 0.66f, 0.84f, 1.0f), 0);
+    push_prop(make_float3(x_origin - 33.6f, 1.28f, z_origin + 13.0f), make_float3(0.12f, 1.28f, 1.08f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 34.3f, 2.34f, z_origin + 13.0f), make_float3(1.06f, 0.12f, 1.24f), make_float4(0.74f, 0.79f, 0.82f, 1.0f), 0);
+
+    push_low_fence_run_x(z_origin - 46.2f, x_origin + 25.0f, x_origin + 48.0f);
+    push_low_fence_run_z(x_origin + 48.0f, z_origin - 46.2f, z_origin - 27.8f);
+    push_low_fence_run_x(z_origin + 45.8f, x_origin - 49.0f, x_origin - 28.0f);
+    push_low_fence_run_z(x_origin - 49.0f, z_origin + 28.4f, z_origin + 45.8f);
+}
+
+static void build_mixed_use_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_side_buildings(block, -1);
+    build_side_buildings(block, 1);
+    build_mixed_use_frontage(block);
+
+    push_corner_store_landmark(block->origin.x + 39.0f, block->origin.z - 34.8f);
+    push_billboard(block->origin.x + 46.0f, block->origin.z + 16.0f, 4.9f, 1.25f, 1, make_float4(0.22f, 0.54f, 0.72f, 1.0f));
+    push_billboard(block->origin.x - 28.0f, block->origin.z + 34.0f, 5.3f, 1.35f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
+    push_parked_car(block->origin.x - 38.0f, block->origin.z + 34.4f, 1.15f, 2.15f, make_float4(0.27f, 0.43f, 0.61f, 1.0f));
+    push_parked_car(block->origin.x + 35.4f, block->origin.z - 35.6f, 1.18f, 2.25f, make_float4(0.63f, 0.37f, 0.22f, 1.0f));
+
+    push_interest_point(make_float3(block->origin.x, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
+    push_interest_point(make_float3(block->origin.x - 10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(block->origin.x + 14.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.5f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(block->origin.x + 31.0f, kSidewalkHeight, block->origin.z + 13.4f), 7.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(block->origin.x + 39.0f, kSidewalkHeight, block->origin.z - 34.8f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(block->origin.x - 12.0f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    push_interest_point(make_float3(block->origin.x + 18.0f, kSidewalkHeight, block->origin.z - 2.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+
+    push_dynamic_prop(
+        offset_point(block->origin, -21.8f, 2.08f, -16.0f),
+        make_float3(0.32f, 0.30f, 0.05f),
+        make_float4(0.84f, 0.84f, 0.94f, 1.0f),
+        0.6f,
+        MDTBDynamicPropTransitGlow,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 6.2f, 2.15f, -13.0f),
+        make_float3(1.08f, 0.18f, 0.08f),
+        make_float4(0.92f, 0.63f, 0.22f, 1.0f),
+        0.3f,
+        MDTBDynamicPropNeon,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 33.8f, 2.20f, 13.2f),
+        make_float3(0.98f, 0.18f, 0.08f),
+        make_float4(0.28f, 0.66f, 0.84f, 1.0f),
+        1.2f,
+        MDTBDynamicPropNeon,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -33.6f, 2.34f, 13.0f),
+        make_float3(0.76f, 0.12f, 0.08f),
+        make_float4(0.74f, 0.79f, 0.82f, 1.0f),
+        1.8f,
+        MDTBDynamicPropWindowGlow,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 39.9f, 2.04f, -30.9f),
+        make_float3(0.88f, 0.34f, 0.08f),
+        make_float4(0.91f, 0.72f, 0.24f, 1.0f),
+        0.0f,
+        MDTBDynamicPropSwingSign,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 27.0f, 2.58f, 11.8f),
+        make_float3(0.26f, 0.03f, 0.12f),
+        make_float4(0.86f, 0.38f, 0.21f, 1.0f),
+        0.2f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 29.2f, 2.62f, 11.8f),
+        make_float3(0.26f, 0.03f, 0.12f),
+        make_float4(0.92f, 0.82f, 0.26f, 1.0f),
+        0.8f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, 31.4f, 2.60f, 11.8f),
+        make_float3(0.26f, 0.03f, 0.12f),
+        make_float4(0.27f, 0.56f, 0.74f, 1.0f),
+        1.4f,
+        MDTBDynamicPropPennant,
+        block_index
+    );
+}
+
 static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
     build_intersection_props(block->origin.z);
     build_hub_frontage(block);
+    build_hub_dynamic_props(block, block_index);
 
     push_corner_store_landmark(-42.0f, block->origin.z - 17.2f);
     push_billboard(-23.5f, block->origin.z - 45.5f, 5.4f, 1.45f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
@@ -1019,6 +1279,7 @@ static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t b
     build_side_buildings(block, 1);
     build_intersection_props(block->origin.z);
     build_residential_frontage(block);
+    build_residential_dynamic_props(block, block_index);
 
     push_billboard(-24.0f, block->origin.z - 42.0f, 4.8f, 1.25f, 0, make_float4(0.36f, 0.63f, 0.29f, 1.0f));
     push_billboard(46.0f, block->origin.z + 18.5f, 4.6f, 1.25f, 1, make_float4(0.86f, 0.55f, 0.21f, 1.0f));
@@ -1039,6 +1300,7 @@ static void build_scene(void) {
     g_block_count = 0u;
     g_road_link_count = 0u;
     g_interest_point_count = 0u;
+    g_dynamic_prop_count = 0u;
 
     build_world_surfaces();
     build_road_markings();
@@ -1054,6 +1316,9 @@ static void build_scene(void) {
         switch (block.kind) {
             case MDTBBlockKindResidential:
                 build_residential_block(&block, (uint32_t)index);
+                break;
+            case MDTBBlockKindMixedUse:
+                build_mixed_use_block(&block, (uint32_t)index);
                 break;
             case MDTBBlockKindHub:
             default:
@@ -1448,4 +1713,19 @@ void mdtb_engine_copy_interest_points(MDTBInterestPoint *points, size_t count) {
 
     const size_t copy_count = count < g_interest_point_count ? count : g_interest_point_count;
     memcpy(points, g_interest_points, copy_count * sizeof(MDTBInterestPoint));
+}
+
+size_t mdtb_engine_dynamic_prop_count(void) {
+    ensure_scene_initialized();
+    return g_dynamic_prop_count;
+}
+
+void mdtb_engine_copy_dynamic_props(MDTBDynamicProp *props, size_t count) {
+    ensure_scene_initialized();
+    if (props == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_dynamic_prop_count ? count : g_dynamic_prop_count;
+    memcpy(props, g_dynamic_props, copy_count * sizeof(MDTBDynamicProp));
 }
