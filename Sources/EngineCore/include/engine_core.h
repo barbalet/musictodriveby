@@ -97,6 +97,15 @@ typedef struct {
 } MDTBPopulationProfile;
 
 typedef struct {
+    MDTBFloat3 position;
+    float radius;
+    uint32_t block_index;
+    uint32_t axis;
+    uint32_t reason;
+    float strength;
+} MDTBTrafficOccupancy;
+
+typedef struct {
     MDTBCamera camera;
     MDTBFloat3 actor_position;
     MDTBFloat3 actor_velocity;
@@ -114,6 +123,10 @@ typedef struct {
     uint32_t traversal_mode;
     uint32_t active_vehicle_anchor_index;
     uint32_t nearby_vehicle_anchor_index;
+    uint32_t secondary_vehicle_anchor_index;
+    uint32_t tertiary_vehicle_anchor_index;
+    uint32_t locked_vehicle_anchor_index;
+    uint32_t vehicle_selection_locked;
     uint32_t active_vehicle_kind;
     MDTBFloat3 active_vehicle_position;
     float active_vehicle_heading;
@@ -121,6 +134,8 @@ typedef struct {
     float active_vehicle_surface_grip;
     float active_vehicle_lane_error;
     float active_vehicle_collision_pulse;
+    float active_vehicle_recovery;
+    float active_vehicle_steer_visual;
 } MDTBEngineState;
 
 typedef struct {
@@ -142,6 +157,8 @@ enum {
     MDTBInputSprint = 1u << 8,
     MDTBInputToggleCamera = 1u << 9,
     MDTBInputUse = 1u << 10,
+    MDTBInputCycleHandoff = 1u << 11,
+    MDTBInputToggleHandoffLock = 1u << 12,
 };
 
 enum {
@@ -236,11 +253,20 @@ enum {
     MDTBVehicleKindSedan = 0,
     MDTBVehicleKindCoupe = 1,
     MDTBVehicleKindMoped = 2,
+    MDTBVehicleKindBicycle = 3,
+    MDTBVehicleKindMotorcycle = 4,
 };
 
 enum {
     MDTBVehicleParkingStateCurbside = 0,
     MDTBVehicleParkingStateService = 1,
+};
+
+enum {
+    MDTBTrafficOccupancyReasonStagedVehicle = 0,
+    MDTBTrafficOccupancyReasonPlayerVehicle = 1,
+    MDTBTrafficOccupancyReasonPedestrian = 2,
+    MDTBTrafficOccupancyReasonStopZone = 3,
 };
 
 void mdtb_engine_init(MDTBEngineState *state);
@@ -261,6 +287,8 @@ size_t mdtb_engine_dynamic_prop_count(void);
 void mdtb_engine_copy_dynamic_props(MDTBDynamicProp *props, size_t count);
 size_t mdtb_engine_population_profile_count(void);
 void mdtb_engine_copy_population_profiles(MDTBPopulationProfile *profiles, size_t count);
+size_t mdtb_engine_traffic_occupancy_count(void);
+void mdtb_engine_copy_traffic_occupancies(MDTBTrafficOccupancy *occupancies, size_t count);
 
 #ifdef __cplusplus
 }

@@ -77,6 +77,15 @@ private struct ScenePopulationProfile {
     var styleFlags: UInt32
 }
 
+private struct SceneTrafficOccupancy {
+    var position: SIMD3<Float>
+    var radius: Float
+    var blockIndex: UInt32
+    var axis: UInt32
+    var reason: UInt32
+    var strength: Float
+}
+
 private struct PopulationActivity {
     var livePedestrians: Int
     var liveVehicles: Int
@@ -93,6 +102,8 @@ private struct VehicleSample {
     var yaw: Float
     var tint: SIMD4<Float>
     var kind: UInt32
+    var yieldIntensity: Float
+    var hazardIntensity: Float
 }
 
 private struct RouteSample {
@@ -100,9 +111,15 @@ private struct RouteSample {
     var heading: Float
 }
 
+private struct AmbientFrame {
+    var vertices: [Vertex]
+    var trafficHazard: Float
+}
+
 @MainActor
 final class Renderer: NSObject, MTKViewDelegate {
     private static let dynamicVertexBudget = 256 * 36
+    private static let vehicleMountRadius: Float = 3.6
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -180,15 +197,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let frame = inputController.makeFrame(deltaTime: deltaTime)
         mdtb_engine_step(&engineState, frame)
         let vehicleAnchors = Self.loadVehicleAnchors()
+        let trafficOccupancies = Self.loadTrafficOccupancies()
 
         fpsWindowTime += Double(deltaTime)
         fpsWindowFrames += 1
-        if fpsWindowTime >= 0.25 {
-            latestFPS = Double(fpsWindowFrames) / fpsWindowTime
-            fpsWindowTime = 0
-            fpsWindowFrames = 0
-            publishDebugState(vehicleAnchors: vehicleAnchors)
-        }
 
         let actorPosition = SIMD3<Float>(
             engineState.actor_position.x,
@@ -230,10 +242,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             blocks: blocks,
             activeChunkIndices: activeChunkIndices
         )
-        let ambientVertices = Self.makeAmbientVertices(
+        let ambientFrame = Self.makeAmbientVertices(
             elapsedTime: engineState.elapsed_time,
             activeLinkIndex: engineState.active_link_index,
             visibleBlockIndices: visibleBlockIndices,
+            state: engineState,
+            trafficOccupancies: trafficOccupancies,
             blocks: blocks,
             roadLinks: roadLinks,
             interestPoints: interestPoints,
@@ -256,9 +270,16 @@ final class Renderer: NSObject, MTKViewDelegate {
                 elapsedTime: engineState.elapsed_time
             )
             : []
-        let drawVertices = staticVertices + ambientVertices + vehicleAnchorVertices + actorVertices
+        let drawVertices = staticVertices + ambientFrame.vertices + vehicleAnchorVertices + actorVertices
         let drawVertexCount = drawVertices.count
         latestVisibleStaticBoxCount = staticVertices.count / 36
+
+        if fpsWindowTime >= 0.25 {
+            latestFPS = Double(fpsWindowFrames) / fpsWindowTime
+            fpsWindowTime = 0
+            fpsWindowFrames = 0
+            publishDebugState(vehicleAnchors: vehicleAnchors, trafficOccupancies: trafficOccupancies, trafficHazard: ambientFrame.trafficHazard)
+        }
 
         if drawVertexCount > maxVertexCount {
             preconditionFailure("Vertex budget exceeded for current frame.")
@@ -313,7 +334,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
     }
 
-    private func publishDebugState(vehicleAnchors: [SceneVehicleAnchor]) {
+    private func publishDebugState(vehicleAnchors: [SceneVehicleAnchor], trafficOccupancies: [SceneTrafficOccupancy], trafficHazard: Float) {
         let actorPosition = SIMD3<Float>(
             engineState.actor_position.x,
             engineState.actor_position.y,
@@ -333,10 +354,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotFPS = latestFPS
         let snapshotCameraMode = Self.cameraModeLabel(engineState.camera.mode, traversalMode: engineState.traversal_mode)
         let snapshotSurface = Self.surfaceLabel(engineState.surface_kind)
-        let snapshotLayout = "\(blocks.count) blocks / \(Self.chunkCount(blocks)) chunks / \(roadLinks.count) links / \(vehicleAnchors.count) staged veh / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic / \(latestVisibleStaticBoxCount)/\(staticSceneBoxes.count) static"
-        let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles, vehicleAnchors: vehicleAnchors)
+        let snapshotLayout = "\(blocks.count) blocks / \(Self.chunkCount(blocks)) chunks / \(roadLinks.count) links / \(vehicleAnchors.count) staged veh / \(trafficOccupancies.count) occ / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic / \(latestVisibleStaticBoxCount)/\(staticSceneBoxes.count) static"
+        let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles, trafficOccupancies: trafficOccupancies, vehicleAnchors: vehicleAnchors)
         let snapshotVehicle = Self.vehicleStatusSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
         let snapshotInteraction = Self.interactionSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
+        let snapshotSelection = Self.handoffSelectionSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
+        let snapshotHazard = Self.trafficHazardSummary(state: engineState, trafficHazard: trafficHazard)
         let snapshotBlock = Self.blockSummary(state: engineState, blocks: blocks, populationProfiles: populationProfiles)
         let snapshotNearestHook = Self.nearestInterestPointSummary(for: actorPosition, interestPoints: interestPoints, blocks: blocks)
 
@@ -355,6 +378,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             activitySummary: snapshotActivity,
             vehicleStatus: snapshotVehicle,
             interactionSummary: snapshotInteraction,
+            selectionSummary: snapshotSelection,
+            hazardSummary: snapshotHazard,
             currentBlock: snapshotBlock,
             nearestHook: snapshotNearestHook
         )
@@ -584,6 +609,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    private static func loadTrafficOccupancies() -> [SceneTrafficOccupancy] {
+        let occupancyCount = Int(mdtb_engine_traffic_occupancy_count())
+        guard occupancyCount > 0 else {
+            return []
+        }
+
+        let occupancyBuffer = UnsafeMutablePointer<MDTBTrafficOccupancy>.allocate(capacity: occupancyCount)
+        defer {
+            occupancyBuffer.deallocate()
+        }
+
+        mdtb_engine_copy_traffic_occupancies(occupancyBuffer, occupancyCount)
+
+        return (0 ..< occupancyCount).map { index in
+            let occupancy = occupancyBuffer[index]
+            return SceneTrafficOccupancy(
+                position: SIMD3<Float>(occupancy.position.x, occupancy.position.y, occupancy.position.z),
+                radius: occupancy.radius,
+                blockIndex: occupancy.block_index,
+                axis: occupancy.axis,
+                reason: occupancy.reason,
+                strength: occupancy.strength
+            )
+        }
+    }
+
     private static func makeStaticSceneVertices(staticSceneBoxes: [SceneStaticBox], blocks: [SceneBlock], activeChunkIndices: Set<Int>) -> [Vertex] {
         var vertices: [Vertex] = []
         vertices.reserveCapacity(staticSceneBoxes.count * 36)
@@ -610,8 +661,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         return vertices
     }
 
-    private static func makeAmbientVertices(elapsedTime: Float, activeLinkIndex: UInt32, visibleBlockIndices: Set<Int>, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], dynamicProps: [SceneDynamicProp], populationProfiles: [ScenePopulationProfile]) -> [Vertex] {
+    private static func makeAmbientVertices(elapsedTime: Float, activeLinkIndex: UInt32, visibleBlockIndices: Set<Int>, state: MDTBEngineState, trafficOccupancies: [SceneTrafficOccupancy], blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], dynamicProps: [SceneDynamicProp], populationProfiles: [ScenePopulationProfile]) -> AmbientFrame {
         var vertices: [Vertex] = []
+        var trafficHazard: Float = 0.0
+        let playerPosition = currentPlayerPosition(state: state)
         vertices.reserveCapacity((dynamicProps.count + interestPoints.count * 2 + roadLinks.count * 3 + visibleBlockIndices.count * 8) * 36)
 
         for blockIndex in visibleBlockIndices.sorted() where blockIndex < blocks.count {
@@ -684,15 +737,20 @@ final class Renderer: NSObject, MTKViewDelegate {
                     profile: populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles),
                     blocks: blocks,
                     roadLinks: roadLinks,
+                    trafficOccupancies: trafficOccupancies,
+                    playerPosition: playerPosition,
+                    traversalMode: state.traversal_mode,
                     elapsedTime: elapsedTime
                 ) {
+                    trafficHazard = max(trafficHazard, sample.hazardIntensity)
                     vertices.append(
                         contentsOf: makeVehiclePlaceholderVertices(
                             position: sample.position,
                             yaw: sample.yaw,
                             elapsedTime: elapsedTime + Float(pointIndex) * 0.35,
                             tint: sample.tint,
-                            kind: sample.kind
+                            kind: sample.kind,
+                            yieldIntensity: sample.yieldIntensity
                         )
                     )
                 }
@@ -712,11 +770,24 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
         }
 
-        return vertices
+        if trafficHazard > 0.12 {
+            vertices.append(
+                contentsOf: makeTrafficHazardVertices(
+                    position: playerPosition,
+                    intensity: trafficHazard,
+                    traversalMode: state.traversal_mode,
+                    elapsedTime: elapsedTime
+                )
+            )
+        }
+
+        return AmbientFrame(vertices: vertices, trafficHazard: trafficHazard)
     }
 
     private static func makeVehicleAnchorVertices(vehicleAnchors: [SceneVehicleAnchor], visibleBlockIndices: Set<Int>, state: MDTBEngineState, elapsedTime: Float, blocks: [SceneBlock]) -> [Vertex] {
         var vertices: [Vertex] = []
+        let rankedIndices = rankedVehicleIndices(state: state, vehicleAnchors: vehicleAnchors)
+        let playerPosition = currentPlayerPosition(state: state)
 
         for (anchorIndex, anchor) in vehicleAnchors.enumerated() {
             let blockIndex = Int(anchor.blockIndex)
@@ -727,23 +798,32 @@ final class Renderer: NSObject, MTKViewDelegate {
             let block = blocks[safe: blockIndex]
             var tint = block.map(vehicleTint(for:)) ?? SIMD4<Float>(0.72, 0.42, 0.26, 1.0)
             let isActiveVehicle = state.traversal_mode == UInt32(MDTBTraversalModeVehicle) && state.active_vehicle_anchor_index == UInt32(anchorIndex)
-            let isNearbyVehicle = state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) && state.nearby_vehicle_anchor_index == UInt32(anchorIndex)
+            let isPreviewVehicle = state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) && state.nearby_vehicle_anchor_index == UInt32(anchorIndex)
+            let isLockedVehicle = state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) &&
+                state.vehicle_selection_locked != 0 &&
+                state.locked_vehicle_anchor_index == UInt32(anchorIndex)
+            let isMountReady = state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) && sqrt(distanceSquared(playerPosition, anchor.position)) <= Self.vehicleMountRadius
+            let rank = rankedIndices.firstIndex(of: anchorIndex)
 
             if isActiveVehicle {
                 tint = animatedColor(tint, intensity: 1.18)
-            } else if isNearbyVehicle {
+            } else if isLockedVehicle {
+                tint = animatedColor(tint, intensity: 1.12)
+            } else if isPreviewVehicle {
                 tint = animatedColor(tint, intensity: 1.06)
             } else {
                 tint = animatedColor(tint, intensity: 0.88)
             }
 
+            let emphasis: Float = isActiveVehicle ? 1.0 : (isLockedVehicle ? 0.92 : (isPreviewVehicle ? 0.86 : (rank != nil ? 0.62 : 0.36)))
             vertices.append(
                 contentsOf: makeVehiclePlaceholderVertices(
                     position: anchor.position,
                     yaw: anchor.yaw,
                     elapsedTime: elapsedTime + Float(anchorIndex) * 0.4,
                     tint: tint,
-                    kind: anchor.kind
+                    kind: anchor.kind,
+                    yieldIntensity: 0.0
                 )
             )
 
@@ -752,14 +832,29 @@ final class Renderer: NSObject, MTKViewDelegate {
                     anchor: anchor,
                     elapsedTime: elapsedTime,
                     isActive: isActiveVehicle,
-                    isNearby: isNearbyVehicle
+                    isNearby: isPreviewVehicle
                 )
             )
 
-            if isActiveVehicle || isNearbyVehicle {
+            vertices.append(
+                contentsOf: makeVehicleStagingMarkerVertices(
+                    anchor: anchor,
+                    elapsedTime: elapsedTime,
+                    emphasis: emphasis,
+                    rank: rank,
+                    isSelected: isPreviewVehicle,
+                    isLocked: isLockedVehicle,
+                    isMountReady: isMountReady
+                )
+            )
+
+            if isActiveVehicle || isPreviewVehicle || isLockedVehicle {
+                let beaconBase = vehicleSignalColor(for: anchor.kind)
                 let beaconColor = isActiveVehicle
-                    ? SIMD4<Float>(0.24, 0.84, 0.98, 1.0)
-                    : SIMD4<Float>(0.98, 0.82, 0.24, 1.0)
+                    ? animatedColor(beaconBase, intensity: 1.16)
+                    : (isLockedVehicle
+                        ? animatedColor(SIMD4<Float>(0.95, 0.91, 0.72, 1.0), intensity: isMountReady ? 1.02 : 0.92)
+                        : animatedColor(beaconBase, intensity: isMountReady ? 1.02 : 0.86))
                 let bob = sin((elapsedTime * 3.2) + Float(anchorIndex) * 0.35) * 0.08
                 vertices.append(
                     contentsOf: makeWorldBoxVertices(
@@ -770,6 +865,65 @@ final class Renderer: NSObject, MTKViewDelegate {
                     )
                 )
             }
+        }
+
+        return vertices
+    }
+
+    private static func makeVehicleStagingMarkerVertices(anchor: SceneVehicleAnchor, elapsedTime: Float, emphasis: Float, rank: Int?, isSelected: Bool, isLocked: Bool, isMountReady: Bool) -> [Vertex] {
+        let signalColor = animatedColor(vehicleSignalColor(for: anchor.kind), intensity: (isLocked ? 0.72 : 0.58) + emphasis * 0.64)
+        let stemHeight: Float = anchor.kind == UInt32(MDTBVehicleKindBicycle) ? 0.52 : 0.72
+        let topWidth: Float = anchor.kind == UInt32(MDTBVehicleKindBicycle) ? 0.16 : 0.22
+        let bob = sin((elapsedTime * 2.1) + anchor.position.x * 0.02 + anchor.position.z * 0.03) * 0.04
+        let rankBars = rank.map { max(1, 3 - $0) } ?? 0
+        let readyLift: Float = isMountReady ? 0.12 : 0.0
+        let stemColor = animatedColor(signalColor, intensity: isSelected ? 0.96 : (isLocked ? 1.02 : 0.82))
+        var vertices =
+            makeWorldBoxVertices(
+                center: SIMD3<Float>(anchor.position.x, anchor.position.y + 0.34 + stemHeight * 0.5 + bob + readyLift, anchor.position.z),
+                halfExtents: SIMD3<Float>(0.04, stemHeight * 0.5, 0.04),
+                yaw: 0.0,
+                color: stemColor
+            ) +
+            makeWorldBoxVertices(
+                center: SIMD3<Float>(anchor.position.x, anchor.position.y + 0.40 + stemHeight + bob + readyLift, anchor.position.z),
+                halfExtents: SIMD3<Float>(topWidth + (isSelected ? 0.04 : 0.0), 0.05, topWidth + (isSelected ? 0.04 : 0.0)),
+                yaw: elapsedTime * 0.24,
+                color: signalColor
+            )
+
+        if rankBars > 0 {
+            for barIndex in 0 ..< rankBars {
+                let offset = (Float(barIndex) - Float(rankBars - 1) * 0.5) * 0.24
+                vertices.append(
+                    contentsOf: makeWorldBoxVertices(
+                        center: SIMD3<Float>(anchor.position.x + offset, anchor.position.y + 0.62 + stemHeight + bob + readyLift, anchor.position.z),
+                        halfExtents: SIMD3<Float>(0.08, 0.03, 0.08),
+                        yaw: elapsedTime * 0.18,
+                        color: animatedColor(signalColor, intensity: isSelected ? 1.06 : 0.88)
+                    )
+                )
+            }
+        }
+
+        if isLocked {
+            let lockColor = animatedColor(SIMD4<Float>(0.95, 0.91, 0.72, 1.0), intensity: 0.92 + emphasis * 0.18)
+            vertices.append(
+                contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(anchor.position.x, anchor.position.y + 0.76 + stemHeight + bob + readyLift, anchor.position.z),
+                    halfExtents: SIMD3<Float>(topWidth + 0.12, 0.03, 0.05),
+                    yaw: elapsedTime * 0.14,
+                    color: lockColor
+                )
+            )
+            vertices.append(
+                contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(anchor.position.x, anchor.position.y + 0.76 + stemHeight + bob + readyLift, anchor.position.z),
+                    halfExtents: SIMD3<Float>(0.05, 0.03, topWidth + 0.12),
+                    yaw: elapsedTime * 0.14,
+                    color: lockColor
+                )
+            )
         }
 
         return vertices
@@ -901,7 +1055,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
-    private static func vehicleSample(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, profile: ScenePopulationProfile, blocks: [SceneBlock], roadLinks: [SceneRoadLink], elapsedTime: Float) -> VehicleSample? {
+    private static func vehicleSample(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, profile: ScenePopulationProfile, blocks: [SceneBlock], roadLinks: [SceneRoadLink], trafficOccupancies: [SceneTrafficOccupancy], playerPosition: SIMD3<Float>, traversalMode: UInt32, elapsedTime: Float) -> VehicleSample? {
         let pace = 0.74 + (profile.vehicleDensity * 0.34)
         let trafficBoost: Float = (profile.styleFlags & UInt32(MDTBPopulationStyleThroughTraffic)) != 0 ? 0.08 : 0.0
         let activeShare = min(0.84, 0.26 + (profile.vehicleDensity * 0.40) + trafficBoost)
@@ -915,18 +1069,98 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let progress = smoothstep(cycle / max(activeWindow, 0.01))
         let routePoints = vehicleRoutePoints(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks)
-        let routeSample = sampleRoute(points: routePoints, progress: progress)
         let vehicleKind = trafficVehicleKind(for: pointIndex, block: block, profile: profile)
-        let laneMagnitude: Float = vehicleKind == UInt32(MDTBVehicleKindMoped) ? 1.28 : (vehicleKind == UInt32(MDTBVehicleKindCoupe) ? 1.60 : 1.72)
-        let laneRight = SIMD3<Float>(cos(routeSample.heading), 0.0, sin(routeSample.heading))
-        let laneOffset = laneRight * trafficLaneOffset(forHeading: routeSample.heading, laneMagnitude: laneMagnitude)
+        let laneMagnitude = trafficLaneMagnitude(for: vehicleKind)
+        guard let adjustedSample = trafficAdjustedSample(
+            routePoints: routePoints,
+            baseProgress: progress,
+            laneMagnitude: laneMagnitude,
+            vehicleKind: vehicleKind,
+            trafficOccupancies: trafficOccupancies
+        ) else {
+            return nil
+        }
+
+        let samplePosition = SIMD3<Float>(adjustedSample.position.x, point.position.y, adjustedSample.position.z)
 
         return VehicleSample(
-            position: SIMD3<Float>(routeSample.position.x + laneOffset.x, point.position.y, routeSample.position.z + laneOffset.z),
-            yaw: routeSample.heading,
+            position: samplePosition,
+            yaw: adjustedSample.heading,
             tint: vehicleTint(for: block),
-            kind: vehicleKind
+            kind: vehicleKind,
+            yieldIntensity: adjustedSample.yieldIntensity,
+            hazardIntensity: trafficHazardIntensity(
+                samplePosition: samplePosition,
+                playerPosition: playerPosition,
+                traversalMode: traversalMode
+            )
         )
+    }
+
+    private static func trafficAdjustedSample(routePoints: [SIMD3<Float>], baseProgress: Float, laneMagnitude: Float, vehicleKind: UInt32, trafficOccupancies: [SceneTrafficOccupancy]) -> (position: SIMD3<Float>, heading: Float, yieldIntensity: Float)? {
+        var progress = baseProgress
+        let clearance = trafficOccupancyRadius(for: vehicleKind)
+        var yieldIntensity: Float = 0.0
+
+        for _ in 0 ..< 4 {
+            let routeSample = sampleRoute(points: routePoints, progress: progress)
+            let travelAxis = roadAxis(for: routeSample.heading)
+            let laneRight = SIMD3<Float>(cos(routeSample.heading), 0.0, sin(routeSample.heading))
+            let laneOffset = laneRight * trafficLaneOffset(forHeading: routeSample.heading, laneMagnitude: laneMagnitude)
+            let position = SIMD3<Float>(routeSample.position.x + laneOffset.x, routeSample.position.y, routeSample.position.z + laneOffset.z)
+            let occupancyPressure = trafficOccupancies.compactMap { occupancy -> (distance: Float, pressure: Float, isStopZone: Bool)? in
+                let blockerDistance = sqrt(distanceSquared(position, occupancy.position))
+                let axisAligned = occupancy.axis == travelAxis
+                let isStopZone = occupancy.reason == UInt32(MDTBTrafficOccupancyReasonStopZone) && axisAligned
+                let softRadius =
+                    clearance +
+                    occupancy.radius +
+                    (isStopZone ? 2.1 : 1.2) +
+                    occupancy.strength * (isStopZone ? 2.4 : (axisAligned ? 1.8 : 1.1))
+                guard blockerDistance < softRadius else {
+                    return nil
+                }
+
+                var pressure = (1.0 - max(0.0, min((blockerDistance - clearance) / max(softRadius - clearance, 0.01), 1.0))) * occupancy.strength
+                if isStopZone {
+                    pressure *= 1.22
+                } else if !axisAligned {
+                    pressure *= 0.86
+                }
+
+                return (distance: blockerDistance, pressure: pressure, isStopZone: isStopZone)
+            }.max(by: { lhs, rhs in
+                lhs.pressure < rhs.pressure
+            })
+
+            guard let occupancyPressure else {
+                return (position, routeSample.heading, yieldIntensity)
+            }
+
+            let blockerDistance = occupancyPressure.distance
+            let pressure = occupancyPressure.pressure
+            yieldIntensity = max(yieldIntensity, occupancyPressure.isStopZone ? min(1.0, pressure + 0.18) : pressure)
+
+            if occupancyPressure.isStopZone {
+                if blockerDistance <= clearance + 0.45 && progress <= 0.08 {
+                    return nil
+                }
+
+                progress = max(progress - (0.14 + pressure * 0.30), 0.0)
+            } else {
+                if blockerDistance <= clearance && progress <= 0.02 {
+                    return nil
+                }
+
+                progress = max(progress - (0.08 + pressure * 0.18), 0.0)
+            }
+        }
+
+        let routeSample = sampleRoute(points: routePoints, progress: progress)
+        let laneRight = SIMD3<Float>(cos(routeSample.heading), 0.0, sin(routeSample.heading))
+        let laneOffset = laneRight * trafficLaneOffset(forHeading: routeSample.heading, laneMagnitude: laneMagnitude)
+        let position = SIMD3<Float>(routeSample.position.x + laneOffset.x, routeSample.position.y, routeSample.position.z + laneOffset.z)
+        return (position, routeSample.heading, yieldIntensity)
     }
 
     private static func pedestrianRoutePoints(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, profile: ScenePopulationProfile, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint]) -> [SIMD3<Float>] {
@@ -1088,18 +1322,52 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func trafficVehicleKind(for pointIndex: Int, block: SceneBlock, profile: ScenePopulationProfile) -> UInt32 {
         if block.frontageTemplate == UInt32(MDTBFrontageTemplateTransitMarket) {
-            return pointIndex % 3 == 0 ? UInt32(MDTBVehicleKindMoped) : UInt32(MDTBVehicleKindCoupe)
+            return pointIndex % 4 == 0 ? UInt32(MDTBVehicleKindMotorcycle) : (pointIndex % 2 == 0 ? UInt32(MDTBVehicleKindMoped) : UInt32(MDTBVehicleKindCoupe))
         }
 
         if block.frontageTemplate == UInt32(MDTBFrontageTemplateResidentialCourt) {
-            return pointIndex % 2 == 0 ? UInt32(MDTBVehicleKindCoupe) : UInt32(MDTBVehicleKindSedan)
+            return pointIndex % 3 == 0 ? UInt32(MDTBVehicleKindBicycle) : (pointIndex % 2 == 0 ? UInt32(MDTBVehicleKindCoupe) : UInt32(MDTBVehicleKindSedan))
         }
 
-        if (profile.styleFlags & UInt32(MDTBPopulationStyleThroughTraffic)) != 0, pointIndex % 4 == 0 {
-            return UInt32(MDTBVehicleKindCoupe)
+        if (profile.styleFlags & UInt32(MDTBPopulationStyleThroughTraffic)) != 0 {
+            return pointIndex % 5 == 0 ? UInt32(MDTBVehicleKindMotorcycle) : (pointIndex % 2 == 0 ? UInt32(MDTBVehicleKindCoupe) : UInt32(MDTBVehicleKindSedan))
         }
 
         return UInt32(MDTBVehicleKindSedan)
+    }
+
+    private static func trafficLaneMagnitude(for kind: UInt32) -> Float {
+        switch kind {
+        case UInt32(MDTBVehicleKindBicycle):
+            return 1.12
+        case UInt32(MDTBVehicleKindMoped):
+            return 1.28
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return 1.46
+        case UInt32(MDTBVehicleKindCoupe):
+            return 1.60
+        default:
+            return 1.72
+        }
+    }
+
+    private static func trafficOccupancyRadius(for kind: UInt32) -> Float {
+        switch kind {
+        case UInt32(MDTBVehicleKindBicycle):
+            return 2.1
+        case UInt32(MDTBVehicleKindMoped):
+            return 2.4
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return 2.8
+        case UInt32(MDTBVehicleKindCoupe):
+            return 3.1
+        default:
+            return 3.4
+        }
+    }
+
+    private static func roadAxis(for heading: Float) -> UInt32 {
+        abs(cos(heading)) >= abs(sin(heading)) ? UInt32(MDTBRoadAxisNorthSouth) : UInt32(MDTBRoadAxisEastWest)
     }
 
     private static func trafficLaneOffset(forHeading heading: Float, laneMagnitude: Float) -> Float {
@@ -1133,13 +1401,26 @@ final class Renderer: NSObject, MTKViewDelegate {
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.10, 0.22, -stride), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.14, 0.17, 0.21, 1.0))
     }
 
-    private static func makeVehiclePlaceholderVertices(position: SIMD3<Float>, yaw: Float, elapsedTime: Float, tint: SIMD4<Float>, kind: UInt32) -> [Vertex] {
+    private static func makeVehiclePlaceholderVertices(position: SIMD3<Float>, yaw: Float, elapsedTime: Float, tint: SIMD4<Float>, kind: UInt32, yieldIntensity: Float) -> [Vertex] {
         let lightPulse = 0.74 + (sin(elapsedTime * 3.6) * 0.14)
         let glassColor = SIMD4<Float>(0.70, 0.78, 0.84, 1.0)
         let trimColor = SIMD4<Float>(0.14, 0.16, 0.18, 1.0)
         let wheelColor = SIMD4<Float>(0.10, 0.11, 0.12, 1.0)
+        let brakeGlow = 0.22 + yieldIntensity * 0.72
+        let tailLightColor = SIMD4<Float>(0.62 + brakeGlow * 0.32, 0.10 + brakeGlow * 0.10, 0.10 + brakeGlow * 0.08, 1.0)
 
         switch kind {
+        case UInt32(MDTBVehicleKindBicycle):
+            return
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.62, position.z - 0.08), halfExtents: SIMD3<Float>(0.04, 0.14, 0.48), yaw: yaw, color: tint) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.78, position.z - 0.38), halfExtents: SIMD3<Float>(0.24, 0.03, 0.03), yaw: yaw, color: trimColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.70, position.z + 0.08), halfExtents: SIMD3<Float>(0.18, 0.03, 0.03), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z + 0.10), halfExtents: SIMD3<Float>(0.04, 0.05, 0.08), yaw: yaw, color: trimColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z - 0.54), halfExtents: SIMD3<Float>(0.22, 0.03, 0.03), yaw: yaw, color: trimColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z + 0.76), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z - 0.88), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.72, position.z + 0.96), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.84, 1.0)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.64, position.z - 1.00), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: tailLightColor)
         case UInt32(MDTBVehicleKindCoupe):
             return
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.32, position.z), halfExtents: SIMD3<Float>(1.02, 0.32, 1.84), yaw: yaw, color: tint) +
@@ -1150,7 +1431,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.40, position.y + 0.24, position.z - 1.48), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.40, position.y + 0.24, position.z - 1.48), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.36, position.y + 0.42, position.z + 1.76), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.36, position.y + 0.42, position.z + 1.76), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0))
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.36, position.y + 0.42, position.z + 1.76), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.34, position.y + 0.40, position.z - 1.78), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: tailLightColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.34, position.y + 0.40, position.z - 1.78), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: tailLightColor)
         case UInt32(MDTBVehicleKindMoped):
             return
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.26, position.z + 0.18), halfExtents: SIMD3<Float>(0.18, 0.20, 0.84), yaw: yaw, color: tint) +
@@ -1159,15 +1442,55 @@ final class Renderer: NSObject, MTKViewDelegate {
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.76, position.z + 0.10), halfExtents: SIMD3<Float>(0.20, 0.04, 0.20), yaw: yaw, color: trimColor) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z + 1.02), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z - 1.00), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.54, position.z + 1.18), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0))
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.54, position.z + 1.18), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.48, position.z - 1.12), halfExtents: SIMD3<Float>(0.06, 0.06, 0.03), yaw: yaw, color: tailLightColor)
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.30, position.z + 0.08), halfExtents: SIMD3<Float>(0.22, 0.22, 0.96), yaw: yaw, color: tint) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.68, position.z - 0.12), halfExtents: SIMD3<Float>(0.12, 0.12, 0.48), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z - 0.56), halfExtents: SIMD3<Float>(0.46, 0.04, 0.04), yaw: yaw, color: trimColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.82, position.z + 0.12), halfExtents: SIMD3<Float>(0.22, 0.05, 0.22), yaw: yaw, color: trimColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.42, position.z + 1.14), halfExtents: SIMD3<Float>(0.18, 0.18, 0.18), yaw: yaw, color: wheelColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.42, position.z - 1.08), halfExtents: SIMD3<Float>(0.18, 0.18, 0.18), yaw: yaw, color: wheelColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.62, position.z + 1.34), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.58, position.z - 1.20), halfExtents: SIMD3<Float>(0.07, 0.07, 0.03), yaw: yaw, color: tailLightColor)
         default:
             return
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.36, position.z), halfExtents: SIMD3<Float>(1.18, 0.36, 2.08), yaw: yaw, color: tint) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.74, position.z - 0.08), halfExtents: SIMD3<Float>(0.72, 0.26, 1.08), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.68, position.z + 0.88), halfExtents: SIMD3<Float>(0.62, 0.18, 0.08), yaw: yaw, color: glassColor) +
                 makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.46, position.y + 0.44, position.z + 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.46, position.y + 0.44, position.z + 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0))
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.46, position.y + 0.44, position.z + 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.44, position.y + 0.42, position.z - 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: tailLightColor) +
+                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.44, position.y + 0.42, position.z - 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: tailLightColor)
         }
+    }
+
+    private static func makeTrafficHazardVertices(position: SIMD3<Float>, intensity: Float, traversalMode: UInt32, elapsedTime: Float) -> [Vertex] {
+        let clamped = max(0.0, min(intensity, 1.0))
+        let pulse = 0.68 + sin(elapsedTime * 7.2) * 0.16
+        let radius: Float = traversalMode == UInt32(MDTBTraversalModeVehicle) ? 1.48 : 0.82
+        let height: Float = traversalMode == UInt32(MDTBTraversalModeVehicle) ? 0.36 : 0.24
+        let color = SIMD4<Float>(0.98, 0.26 + pulse * 0.12, 0.18, 1.0)
+        var vertices: [Vertex] = []
+
+        for angle in stride(from: Float(0.0), to: Float.pi * 2.0, by: Float.pi / 2.0) {
+            let center = SIMD3<Float>(
+                position.x + cos(angle) * (radius + clamped * 0.26),
+                position.y + height + clamped * 0.18,
+                position.z + sin(angle) * (radius + clamped * 0.26)
+            )
+            vertices.append(
+                contentsOf: makeWorldBoxVertices(
+                    center: center,
+                    halfExtents: SIMD3<Float>(0.10 + clamped * 0.04, 0.04, 0.22 + clamped * 0.08),
+                    yaw: angle + elapsedTime * 0.18,
+                    color: animatedColor(color, intensity: 0.72 + clamped * 0.42)
+                )
+            )
+        }
+
+        return vertices
     }
 
     private static func makeRoadLinkPulseVertices(link: SceneRoadLink, blocks: [SceneBlock], elapsedTime: Float) -> [Vertex] {
@@ -1414,15 +1737,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         Set(blocks.map { Int($0.chunkIndex) }).count
     }
 
-    private static func activitySummary(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile], vehicleAnchors: [SceneVehicleAnchor]) -> String {
+    private static func activitySummary(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile], trafficOccupancies: [SceneTrafficOccupancy], vehicleAnchors: [SceneVehicleAnchor]) -> String {
         let blockLabel = blockName(for: state.active_block_index, blocks: blocks)
         let linkLabel = linkSummary(for: state.active_link_index, roadLinks: roadLinks, blocks: blocks)
-        let population = populationActivity(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles)
+        let population = populationActivity(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles, trafficOccupancies: trafficOccupancies)
         let chunkLabelValue = activeChunkLabel(state: state, blocks: blocks)
         let visibleBlocks = visibleBlockCount(state: state, blocks: blocks, roadLinks: roadLinks)
         let hotspots = hotspotCount(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints)
         let stagedVehicles = stagedVehicleCount(state: state, blocks: blocks, roadLinks: roadLinks, vehicleAnchors: vehicleAnchors)
-        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) visible / \(hotspots) hot / \(stagedVehicles) staged / \(population.livePedestrians) live ped / \(population.liveVehicles) live veh / \(linkLabel)"
+        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) visible / \(hotspots) hot / \(stagedVehicles) staged / \(trafficOccupancies.count) occ / \(population.livePedestrians) live ped / \(population.liveVehicles) live veh / \(linkLabel)"
     }
 
     private static func blockSummary(state: MDTBEngineState, blocks: [SceneBlock], populationProfiles: [ScenePopulationProfile]) -> String {
@@ -1448,13 +1771,48 @@ final class Renderer: NSObject, MTKViewDelegate {
         return "\(interestPointLabel(point.kind)) \(formatScalar(distance))m / r \(formatScalar(point.radius)) / \(blockLabel)"
     }
 
+    private static func currentPlayerPosition(state: MDTBEngineState) -> SIMD3<Float> {
+        if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
+            return SIMD3<Float>(state.active_vehicle_position.x, state.active_vehicle_position.y, state.active_vehicle_position.z)
+        }
+
+        return SIMD3<Float>(state.actor_position.x, state.actor_position.y, state.actor_position.z)
+    }
+
+    private static func candidateDistance(state: MDTBEngineState, anchor: SceneVehicleAnchor) -> Float {
+        sqrt(distanceSquared(currentPlayerPosition(state: state), anchor.position))
+    }
+
+    private static func rankedVehicleIndices(state: MDTBEngineState, vehicleAnchors: [SceneVehicleAnchor]) -> [Int] {
+        [state.nearby_vehicle_anchor_index, state.secondary_vehicle_anchor_index, state.tertiary_vehicle_anchor_index].reduce(into: [Int]()) { indices, rawIndex in
+            guard rawIndex < vehicleAnchors.count else {
+                return
+            }
+
+            let index = Int(rawIndex)
+            if !indices.contains(index) {
+                indices.append(index)
+            }
+        }
+    }
+
+    private static func trafficHazardIntensity(samplePosition: SIMD3<Float>, playerPosition: SIMD3<Float>, traversalMode: UInt32) -> Float {
+        let hazardRadius: Float = traversalMode == UInt32(MDTBTraversalModeVehicle) ? 7.5 : 5.8
+        let distance = sqrt(distanceSquared(samplePosition, playerPosition))
+        guard distance < hazardRadius else {
+            return 0.0
+        }
+
+        return 1.0 - max(0.0, min(distance / hazardRadius, 1.0))
+    }
+
     private static func distanceSquared(_ lhs: SIMD3<Float>, _ rhs: SIMD3<Float>) -> Float {
         let dx = lhs.x - rhs.x
         let dz = lhs.z - rhs.z
         return (dx * dx) + (dz * dz)
     }
 
-    private static func populationActivity(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile]) -> PopulationActivity {
+    private static func populationActivity(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile], trafficOccupancies: [SceneTrafficOccupancy]) -> PopulationActivity {
         guard !interestPoints.isEmpty else {
             return PopulationActivity(livePedestrians: 0, liveVehicles: 0)
         }
@@ -1473,6 +1831,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
         let activeChunks = activeChunkIndices(activeBlockIndices: activeBlockIndices, blocks: blocks)
         let visibleBlocks = visibleBlockIndices(activeChunkIndices: activeChunks, blocks: blocks)
+        let playerPosition = currentPlayerPosition(state: state)
 
         var pedestrians = 0
         var vehicles = 0
@@ -1491,7 +1850,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     pedestrians += 1
                 }
             case UInt32(MDTBInterestPointVehicleSpawn):
-                if vehicleSample(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, elapsedTime: state.elapsed_time) != nil {
+                if vehicleSample(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, trafficOccupancies: trafficOccupancies, playerPosition: playerPosition, traversalMode: state.traversal_mode, elapsedTime: state.elapsed_time) != nil {
                     vehicles += 1
                 }
             default:
@@ -1574,7 +1933,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             let surfaceGrip = formatScalar(state.active_vehicle_surface_grip)
             let laneError = formatScalar(state.active_vehicle_lane_error)
             let bump = formatScalar(state.active_vehicle_collision_pulse)
-            return "\(vehicleLabel) active / \(blockLabel) / \(formatScalar(state.active_vehicle_speed)) m/s / grip \(surfaceGrip) / lane \(laneError) / bump \(bump)"
+            let recovery = formatScalar(state.active_vehicle_recovery)
+            let steer = formatScalar(state.active_vehicle_steer_visual)
+            return "\(vehicleLabel) active / \(blockLabel) / \(formatScalar(state.active_vehicle_speed)) m/s / grip \(surfaceGrip) / lane \(laneError) / bump \(bump) / recover \(recovery) / lean \(steer)"
         }
 
         guard state.nearby_vehicle_anchor_index < vehicleAnchors.count else {
@@ -1586,15 +1947,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             SIMD3<Float>(state.actor_position.x, state.actor_position.y, state.actor_position.z),
             anchor.position
         ))
-        return "\(vehicleKindLabel(anchor.kind)) nearby / \(formatScalar(distance))m / \(parkingStateLabel(anchor.parkingState)) / \(blockName(for: anchor.blockIndex, blocks: blocks))"
+        return "\(vehicleKindLabel(anchor.kind)) staged / \(formatScalar(distance))m / \(parkingStateLabel(anchor.parkingState)) / \(blockName(for: anchor.blockIndex, blocks: blocks)) / \(vehicleActionLabel(anchor.kind))"
     }
 
     private static func interactionSummary(state: MDTBEngineState, vehicleAnchors: [SceneVehicleAnchor], blocks: [SceneBlock]) -> String {
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
             if abs(state.active_vehicle_speed) <= 1.4 {
-                return "press F to exit \(vehicleKindLabel(state.active_vehicle_kind))"
+                return "press F to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
             }
-            return "slow down to exit \(vehicleKindLabel(state.active_vehicle_kind))"
+            return "slow down to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
         }
 
         guard state.nearby_vehicle_anchor_index < vehicleAnchors.count else {
@@ -1602,8 +1963,66 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let anchor = vehicleAnchors[Int(state.nearby_vehicle_anchor_index)]
-        let action = anchor.kind == UInt32(MDTBVehicleKindMoped) ? "ride" : "drive"
-        return "press F to \(action) \(vehicleKindLabel(anchor.kind)) at \(parkingStateLabel(anchor.parkingState)) \(blockName(for: anchor.blockIndex, blocks: blocks))"
+        let distance = candidateDistance(state: state, anchor: anchor)
+        let ranked = rankedVehicleIndices(state: state, vehicleAnchors: vehicleAnchors)
+        let nextChoice = ranked.dropFirst().first.flatMap { nextIndex -> String? in
+            guard nextIndex < vehicleAnchors.count else {
+                return nil
+            }
+
+            let nextAnchor = vehicleAnchors[nextIndex]
+            return " / next \(vehicleKindLabel(nextAnchor.kind)) \(formatScalar(candidateDistance(state: state, anchor: nextAnchor)))m"
+        } ?? ""
+        let lockHint = state.vehicle_selection_locked != 0 ? "G unlock" : "G lock"
+        let selectionControls = ranked.count > 1 ? " / R cycle / \(lockHint)" : " / \(lockHint)"
+
+        if distance <= Self.vehicleMountRadius {
+            return "press F to \(vehicleActionLabel(anchor.kind)) \(vehicleKindLabel(anchor.kind)) from \(parkingStateLabel(anchor.parkingState)) \(blockName(for: anchor.blockIndex, blocks: blocks))\(nextChoice)\(selectionControls)"
+        }
+
+        return "approach \(vehicleKindLabel(anchor.kind)) \(formatScalar(distance))m to \(vehicleActionLabel(anchor.kind))\(nextChoice)\(selectionControls)"
+    }
+
+    private static func handoffSelectionSummary(state: MDTBEngineState, vehicleAnchors: [SceneVehicleAnchor], blocks: [SceneBlock]) -> String {
+        let ranked = rankedVehicleIndices(state: state, vehicleAnchors: vehicleAnchors)
+        guard !ranked.isEmpty else {
+            return state.traversal_mode == UInt32(MDTBTraversalModeVehicle) ? "active vehicle locked" : "none in preview radius"
+        }
+
+        let lockedIndex = state.vehicle_selection_locked != 0 && state.locked_vehicle_anchor_index < vehicleAnchors.count
+            ? Int(state.locked_vehicle_anchor_index)
+            : nil
+        let summary = ranked.enumerated().map { rank, index in
+            let anchor = vehicleAnchors[index]
+            let distance = formatScalar(candidateDistance(state: state, anchor: anchor))
+            let tags = [
+                index == Int(state.nearby_vehicle_anchor_index) ? "selected" : nil,
+                lockedIndex == index ? "locked" : nil,
+            ].compactMap { $0 }
+            let tagSummary = tags.isEmpty ? "" : " [" + tags.joined(separator: ",") + "]"
+            return "\(rank + 1) \(vehicleKindLabel(anchor.kind)) \(distance)m \(parkingStateLabel(anchor.parkingState))\(tagSummary)"
+        }.joined(separator: " / ")
+        return "\(lockedIndex == nil ? "free" : "locked") / \(summary)"
+    }
+
+    private static func trafficHazardSummary(state: MDTBEngineState, trafficHazard: Float) -> String {
+        if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
+            if trafficHazard >= 0.7 {
+                return "near-miss pressure high \(formatScalar(trafficHazard))"
+            }
+            if trafficHazard >= 0.35 {
+                return "watch traffic \(formatScalar(trafficHazard))"
+            }
+            return "lane pressure calm \(formatScalar(trafficHazard))"
+        }
+
+        if trafficHazard >= 0.7 {
+            return "crossing hazard high \(formatScalar(trafficHazard))"
+        }
+        if trafficHazard >= 0.35 {
+            return "watch the road \(formatScalar(trafficHazard))"
+        }
+        return "traffic calm \(formatScalar(trafficHazard))"
     }
 
     private static func styleLabel(_ value: UInt32) -> String {
@@ -1713,14 +2132,53 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func vehicleKindLabel(_ value: UInt32) -> String {
         switch value {
+        case UInt32(MDTBVehicleKindBicycle):
+            return "bicycle"
         case UInt32(MDTBVehicleKindCoupe):
             return "coupe"
         case UInt32(MDTBVehicleKindMoped):
             return "moped"
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return "motorcycle"
         case UInt32(MDTBVehicleKindSedan):
             return "sedan"
         default:
             return "vehicle"
+        }
+    }
+
+    private static func vehicleActionLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBVehicleKindBicycle):
+            return "pedal"
+        case UInt32(MDTBVehicleKindMoped), UInt32(MDTBVehicleKindMotorcycle):
+            return "ride"
+        default:
+            return "drive"
+        }
+    }
+
+    private static func vehicleExitLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBVehicleKindBicycle), UInt32(MDTBVehicleKindMoped), UInt32(MDTBVehicleKindMotorcycle):
+            return "dismount"
+        default:
+            return "exit"
+        }
+    }
+
+    private static func vehicleSignalColor(for kind: UInt32) -> SIMD4<Float> {
+        switch kind {
+        case UInt32(MDTBVehicleKindBicycle):
+            return SIMD4<Float>(0.36, 0.86, 0.52, 1.0)
+        case UInt32(MDTBVehicleKindCoupe):
+            return SIMD4<Float>(0.40, 0.74, 0.98, 1.0)
+        case UInt32(MDTBVehicleKindMoped):
+            return SIMD4<Float>(0.96, 0.78, 0.28, 1.0)
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return SIMD4<Float>(0.98, 0.42, 0.28, 1.0)
+        default:
+            return SIMD4<Float>(0.72, 0.84, 0.96, 1.0)
         }
     }
 

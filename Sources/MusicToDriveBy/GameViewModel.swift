@@ -13,7 +13,9 @@ final class GameViewModel: ObservableObject {
     Q / E or ← / →: turn
     ↑ / ↓: look
     Shift: sprint
-    F: enter or exit the staged vehicle when prompted
+    F: enter or exit the selected staged vehicle when prompted
+    R: cycle staged vehicle candidates
+    G: lock or unlock the current handoff candidate
     C or Tab: toggle first / third person
     Click in the game view: capture mouse look
     Esc: release mouse look
@@ -22,7 +24,7 @@ final class GameViewModel: ObservableObject {
     Click the game view if keyboard focus is lost
     """
 
-    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, interactionSummary: String, currentBlock: String, nearestHook: String) {
+    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, interactionSummary: String, selectionSummary: String, hazardSummary: String, currentBlock: String, nearestHook: String) {
         debugSummary = """
         camera: \(cameraMode)
         mouse look: \(mouseLook)
@@ -31,6 +33,8 @@ final class GameViewModel: ObservableObject {
         activity: \(activitySummary)
         vehicle: \(vehicleStatus)
         prompt: \(interactionSummary)
+        handoff: \(selectionSummary)
+        hazard: \(hazardSummary)
         block: \(currentBlock)
         nearest hook: \(nearestHook)
         actor: \(Self.format(actorPosition.x)) \(Self.format(actorPosition.y)) \(Self.format(actorPosition.z))

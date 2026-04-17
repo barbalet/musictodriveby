@@ -24,6 +24,16 @@ final class InputController {
                 transientButtons |= UInt32(MDTBInputUse)
                 return
             }
+
+            if keyCode == 15 {
+                transientButtons |= UInt32(MDTBInputCycleHandoff)
+                return
+            }
+
+            if keyCode == 5 {
+                transientButtons |= UInt32(MDTBInputToggleHandoffLock)
+                return
+            }
         }
 
         setKey(keyCode, isPressed: true)
