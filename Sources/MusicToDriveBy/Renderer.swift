@@ -88,13 +88,16 @@ private struct SceneTrafficOccupancy {
 
 private struct PopulationActivity {
     var livePedestrians: Int
+    var reactingPedestrians: Int
     var liveVehicles: Int
+    var yieldingVehicles: Int
 }
 
 private struct PedestrianSample {
     var position: SIMD3<Float>
     var heading: Float
     var tint: SIMD4<Float>
+    var reactionIntensity: Float
 }
 
 private struct VehicleSample {
@@ -373,6 +376,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotHazard = Self.trafficHazardSummary(state: engineState, trafficHazard: trafficHazard)
         let snapshotBlock = Self.blockSummary(state: engineState, blocks: blocks, populationProfiles: populationProfiles)
         let snapshotNearestHook = Self.nearestInterestPointSummary(for: actorPosition, interestPoints: interestPoints, blocks: blocks)
+        let snapshotHUD = Self.combatHUDModel(state: engineState, interactionSummary: snapshotInteraction, trafficHazard: trafficHazard)
 
         viewModel?.update(
             actorPosition: actorPosition,
@@ -393,7 +397,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             selectionSummary: snapshotSelection,
             hazardSummary: snapshotHazard,
             currentBlock: snapshotBlock,
-            nearestHook: snapshotNearestHook
+            nearestHook: snapshotNearestHook,
+            combatHUD: snapshotHUD
         )
     }
 
@@ -724,6 +729,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 if let sample = pedestrianSample(
                     for: point,
                     pointIndex: pointIndex,
+                    state: state,
                     block: block,
                     profile: populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles),
                     blocks: blocks,
@@ -735,10 +741,24 @@ final class Renderer: NSObject, MTKViewDelegate {
                         contentsOf: makePedestrianPlaceholderVertices(
                             position: sample.position,
                             heading: sample.heading,
-                            elapsedTime: elapsedTime + Float(pointIndex) * 0.2,
+                            elapsedTime: elapsedTime + Float(pointIndex) * 0.2 + sample.reactionIntensity * 0.24,
                             tint: sample.tint
                         )
                     )
+                    if sample.reactionIntensity > 0.08 {
+                        vertices.append(
+                            contentsOf: makeWorldBoxVertices(
+                                center: SIMD3<Float>(sample.position.x, sample.position.y + 0.04, sample.position.z),
+                                halfExtents: SIMD3<Float>(
+                                    0.28 + sample.reactionIntensity * 0.18,
+                                    0.02,
+                                    0.28 + sample.reactionIntensity * 0.18
+                                ),
+                                yaw: 0.0,
+                                color: SIMD4<Float>(1.0, 0.58, 0.24, 0.16 + sample.reactionIntensity * 0.16)
+                            )
+                        )
+                    }
                 }
                 continue
             case UInt32(MDTBInterestPointVehicleSpawn):
@@ -1042,10 +1062,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         return vertices
     }
 
-    private static func pedestrianSample(for point: SceneInterestPoint, pointIndex: Int, block: SceneBlock, profile: ScenePopulationProfile, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], elapsedTime: Float) -> PedestrianSample? {
+    private static func pedestrianSample(for point: SceneInterestPoint, pointIndex: Int, state: MDTBEngineState, block: SceneBlock, profile: ScenePopulationProfile, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], elapsedTime: Float) -> PedestrianSample? {
         let districtTempo = 0.76 + (profile.ambientEnergy * 0.46)
         let activityBoost: Float = (profile.styleFlags & UInt32(MDTBPopulationStyleRetailClustered)) != 0 ? 0.06 : 0.0
-        let activeShare = min(0.88, 0.38 + (profile.pedestrianDensity * 0.42) + activityBoost)
+        let incidentPosition = SIMD3<Float>(state.street_incident_position.x, state.street_incident_position.y, state.street_incident_position.z)
+        let pointReaction = incidentReactionIntensity(position: point.position, state: state)
+        let activeShare = min(0.88, 0.38 + (profile.pedestrianDensity * 0.42) + activityBoost) * (1.0 - pointReaction * 0.26)
         let cycleLength: Float = 8.5 + (Float(pointIndex % 3) * 1.35)
         let seed = (Float(pointIndex) * 1.37) + (Float(block.variant) * 0.61)
         let cycle = ((elapsedTime * districtTempo) + seed).truncatingRemainder(dividingBy: cycleLength)
@@ -1059,11 +1081,37 @@ final class Renderer: NSObject, MTKViewDelegate {
         let routeSample = sampleRoute(points: routePoints, progress: progress)
         let shoulder = SIMD3<Float>(cos(routeSample.heading), 0.0, sin(routeSample.heading))
         let sidewalkBias: Float = (pointIndex % 2 == 0) ? 0.78 : -0.78
+        let basePosition = SIMD3<Float>(routeSample.position.x + (shoulder.x * sidewalkBias), point.position.y, routeSample.position.z + (shoulder.z * sidewalkBias))
+        let reactionIntensity = min(max(pointReaction, 0.0), 1.0)
+        let reactionTint = pedestrianTint(for: block)
+        let awayVector = SIMD3<Float>(basePosition.x - incidentPosition.x, 0.0, basePosition.z - incidentPosition.z)
+        let awayLengthSquared = max((awayVector.x * awayVector.x) + (awayVector.z * awayVector.z), 0.0001)
+        let awayScale = reactionIntensity > 0.0 ? (1.0 / sqrt(awayLengthSquared)) : 0.0
+        let awayDirection = SIMD3<Float>(awayVector.x * awayScale, 0.0, awayVector.z * awayScale)
+        let reactionPosition = reactionIntensity > 0.08
+            ? SIMD3<Float>(
+                basePosition.x + awayDirection.x * (0.72 + reactionIntensity * 1.60),
+                point.position.y,
+                basePosition.z + awayDirection.z * (0.72 + reactionIntensity * 1.60)
+            )
+            : basePosition
+        let heading = reactionIntensity > 0.08
+            ? atan2(awayDirection.x, -awayDirection.z)
+            : routeSample.heading
+        let tint = reactionIntensity > 0.0
+            ? SIMD4<Float>(
+                min(reactionTint.x * (0.86 + reactionIntensity * 0.44), 1.0),
+                min((reactionTint.y * (0.74 + reactionIntensity * 0.18)) + reactionIntensity * 0.24, 1.0),
+                min((reactionTint.z * (0.66 - reactionIntensity * 0.10)) + reactionIntensity * 0.12, 1.0),
+                1.0
+            )
+            : reactionTint
 
         return PedestrianSample(
-            position: SIMD3<Float>(routeSample.position.x + (shoulder.x * sidewalkBias), point.position.y, routeSample.position.z + (shoulder.z * sidewalkBias)),
-            heading: routeSample.heading,
-            tint: pedestrianTint(for: block)
+            position: reactionPosition,
+            heading: heading,
+            tint: tint,
+            reactionIntensity: reactionIntensity
         )
     }
 
@@ -1120,15 +1168,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             let laneRight = SIMD3<Float>(cos(routeSample.heading), 0.0, sin(routeSample.heading))
             let laneOffset = laneRight * trafficLaneOffset(forHeading: routeSample.heading, laneMagnitude: laneMagnitude)
             let position = SIMD3<Float>(routeSample.position.x + laneOffset.x, routeSample.position.y, routeSample.position.z + laneOffset.z)
-            let occupancyPressure = trafficOccupancies.compactMap { occupancy -> (distance: Float, pressure: Float, isStopZone: Bool)? in
+            let occupancyPressure = trafficOccupancies.compactMap { occupancy -> (distance: Float, pressure: Float, isStopZone: Bool, isIncident: Bool)? in
                 let blockerDistance = sqrt(distanceSquared(position, occupancy.position))
                 let axisAligned = occupancy.axis == travelAxis
                 let isStopZone = occupancy.reason == UInt32(MDTBTrafficOccupancyReasonStopZone) && axisAligned
+                let isIncident = occupancy.reason == UInt32(MDTBTrafficOccupancyReasonIncident)
                 let softRadius =
                     clearance +
                     occupancy.radius +
-                    (isStopZone ? 2.1 : 1.2) +
-                    occupancy.strength * (isStopZone ? 2.4 : (axisAligned ? 1.8 : 1.1))
+                    (isStopZone ? 2.1 : (isIncident ? 1.7 : 1.2)) +
+                    occupancy.strength * (isStopZone ? 2.4 : (isIncident ? (axisAligned ? 2.2 : 1.5) : (axisAligned ? 1.8 : 1.1)))
                 guard blockerDistance < softRadius else {
                     return nil
                 }
@@ -1136,11 +1185,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 var pressure = (1.0 - max(0.0, min((blockerDistance - clearance) / max(softRadius - clearance, 0.01), 1.0))) * occupancy.strength
                 if isStopZone {
                     pressure *= 1.22
+                } else if isIncident && axisAligned {
+                    pressure *= 1.10
                 } else if !axisAligned {
-                    pressure *= 0.86
+                    pressure *= isIncident ? 0.92 : 0.86
                 }
 
-                return (distance: blockerDistance, pressure: pressure, isStopZone: isStopZone)
+                return (distance: blockerDistance, pressure: pressure, isStopZone: isStopZone, isIncident: isIncident)
             }.max(by: { lhs, rhs in
                 lhs.pressure < rhs.pressure
             })
@@ -1151,7 +1202,12 @@ final class Renderer: NSObject, MTKViewDelegate {
 
             let blockerDistance = occupancyPressure.distance
             let pressure = occupancyPressure.pressure
-            yieldIntensity = max(yieldIntensity, occupancyPressure.isStopZone ? min(1.0, pressure + 0.18) : pressure)
+            yieldIntensity = max(
+                yieldIntensity,
+                occupancyPressure.isStopZone
+                    ? min(1.0, pressure + 0.18)
+                    : (occupancyPressure.isIncident ? min(1.0, pressure + 0.10) : pressure)
+            )
 
             if occupancyPressure.isStopZone {
                 if blockerDistance <= clearance + 0.45 && progress <= 0.08 {
@@ -1160,11 +1216,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
                 progress = max(progress - (0.14 + pressure * 0.30), 0.0)
             } else {
-                if blockerDistance <= clearance && progress <= 0.02 {
+                if blockerDistance <= clearance + (occupancyPressure.isIncident ? 0.25 : 0.0) && progress <= 0.02 {
                     return nil
                 }
 
-                progress = max(progress - (0.08 + pressure * 0.18), 0.0)
+                progress = max(
+                    progress - ((occupancyPressure.isIncident ? 0.10 : 0.08) + pressure * (occupancyPressure.isIncident ? 0.28 : 0.18)),
+                    0.0
+                )
             }
         }
 
@@ -1554,6 +1613,32 @@ final class Renderer: NSObject, MTKViewDelegate {
             state.combat_hostile_position.y,
             state.combat_hostile_position.z
         )
+        let witnessPosition = SIMD3<Float>(
+            state.witness_position.x,
+            state.witness_position.y,
+            state.witness_position.z
+        )
+        let bystanderPosition = SIMD3<Float>(
+            state.bystander_position.x,
+            state.bystander_position.y,
+            state.bystander_position.z
+        )
+        let searchPosition = SIMD3<Float>(
+            state.combat_hostile_search_position.x,
+            state.combat_hostile_search_position.y,
+            state.combat_hostile_search_position.z
+        )
+        let incidentPosition = SIMD3<Float>(
+            state.street_incident_position.x,
+            state.street_incident_position.y,
+            state.street_incident_position.z
+        )
+        let playerPosition = currentPlayerPosition(state: state)
+        let playerFocus = SIMD3<Float>(
+            playerPosition.x,
+            state.actor_ground_height + 1.02,
+            playerPosition.z
+        )
         let shotFrom = SIMD3<Float>(
             state.firearm_last_shot_from.x,
             state.firearm_last_shot_from.y,
@@ -1564,19 +1649,48 @@ final class Renderer: NSObject, MTKViewDelegate {
             state.firearm_last_shot_to.y,
             state.firearm_last_shot_to.z
         )
+        let hostileShotFrom = SIMD3<Float>(
+            state.combat_hostile_last_shot_from.x,
+            state.combat_hostile_last_shot_from.y,
+            state.combat_hostile_last_shot_from.z
+        )
+        let hostileShotTo = SIMD3<Float>(
+            state.combat_hostile_last_shot_to.x,
+            state.combat_hostile_last_shot_to.y,
+            state.combat_hostile_last_shot_to.z
+        )
         let dummyReaction = min(max(state.combat_target_reaction, 0.0), 1.4)
         let hostileReaction = min(max(state.combat_hostile_reaction, 0.0), 1.5)
         let dummyHealthRatio = max(0.0, min(state.combat_target_health / 100.0, 1.0))
         let hostileHealthRatio = max(0.0, min(state.combat_hostile_health / 84.0, 1.0))
+        let playerHealthRatio = max(0.0, min(state.player_health / 100.0, 1.0))
         let dummyInRange = state.combat_target_in_range != 0
         let hostileInRange = state.combat_hostile_in_range != 0
         let dummyDowned = state.combat_target_health <= 0.0 && state.combat_target_reset_timer > 0.0
         let hostileDowned = state.combat_hostile_health <= 0.0 && state.combat_hostile_reset_timer > 0.0
         let hostileAlert = min(max(state.combat_hostile_alert, 0.0), 1.0)
+        let witnessAlert = min(max(state.witness_alert, 0.0), 1.0)
+        let bystanderAlert = min(max(state.bystander_alert, 0.0), 1.0)
+        let streetIncidentLevel = min(max(state.street_incident_level, 0.0), 1.0)
+        let playerInCover = state.combat_player_in_cover != 0
+        let focusOccluded = state.combat_focus_occluded != 0
+        let playerDamagePulse = min(max(state.player_damage_pulse, 0.0), 1.0)
+        let playerResetPulse = min(max(state.player_reset_timer / 1.55, 0.0), 1.0)
+        let hostileAttackCharge = state.combat_hostile_attack_windup > 0.0
+            ? 1.0 - min(max(state.combat_hostile_attack_windup / 0.42, 0.0), 1.0)
+            : 0.0
         let focusKind = state.combat_focus_target_kind
         let hitKind = state.combat_last_hit_target_kind
+        let witnessState = state.witness_state
+        let bystanderState = state.bystander_state
         let pickupPulse = 0.78 + (sin(elapsedTime * 5.4) * 0.18)
         let shotPulse = min(max(state.firearm_last_shot_timer / 0.10, 0.0), 1.0)
+        let hostileShotPulse = min(max(state.combat_hostile_last_shot_timer / 0.14, 0.0), 1.0)
+        let searchCharge = min(max(state.combat_hostile_search_timer / 2.2, 0.0), 1.0)
+        let searchPulse = 0.78 + (sin(elapsedTime * 6.6) * 0.18)
+        let searchActive = state.combat_hostile_search_timer > 0.0
+        let streetIncidentActive = state.street_incident_timer > 0.0 && streetIncidentLevel > 0.04
+        let incidentPulse = 0.76 + (sin(elapsedTime * 4.8) * 0.16)
         let pipePickupColor = SIMD4<Float>(0.77, 0.72, 0.66, 1.0)
         let pipePickupHalo = SIMD4<Float>(0.94, 0.80, 0.30, 0.42)
         let pistolBodyColor = SIMD4<Float>(0.19, 0.21, 0.24, 1.0)
@@ -1596,8 +1710,77 @@ final class Renderer: NSObject, MTKViewDelegate {
             1.0
         )
         let hostileAccentColor = SIMD4<Float>(1.0, 0.40 + hostileAlert * 0.36, 0.18 + hostileReaction * 0.18, 1.0)
+        let streetIncidentColor = SIMD4<Float>(
+            0.96,
+            0.42 + streetIncidentLevel * 0.20,
+            0.18 + streetIncidentLevel * 0.12,
+            0.24 + streetIncidentLevel * 0.20
+        )
+        let witnessBodyColor: SIMD4<Float>
+        let witnessAccentColor: SIMD4<Float>
+        let witnessRingColor: SIMD4<Float>
+        let bystanderBodyColor: SIMD4<Float>
+        let bystanderAccentColor: SIMD4<Float>
+        let bystanderRingColor: SIMD4<Float>
+
+        switch witnessState {
+        case UInt32(MDTBWitnessStateInvestigate):
+            witnessBodyColor = SIMD4<Float>(0.64, 0.52 + witnessAlert * 0.10, 0.28, 1.0)
+            witnessAccentColor = SIMD4<Float>(1.0, 0.78, 0.28, 1.0)
+            witnessRingColor = SIMD4<Float>(0.96, 0.74, 0.28, 0.28 + witnessAlert * 0.18)
+        case UInt32(MDTBWitnessStateFlee):
+            witnessBodyColor = SIMD4<Float>(0.76, 0.28 + witnessAlert * 0.08, 0.24, 1.0)
+            witnessAccentColor = SIMD4<Float>(1.0, 0.54, 0.24, 1.0)
+            witnessRingColor = SIMD4<Float>(1.0, 0.40, 0.24, 0.32 + witnessAlert * 0.22)
+        case UInt32(MDTBWitnessStateCooldown):
+            witnessBodyColor = SIMD4<Float>(0.28, 0.50 + witnessAlert * 0.08, 0.46, 1.0)
+            witnessAccentColor = SIMD4<Float>(0.60, 0.88, 0.80, 1.0)
+            witnessRingColor = SIMD4<Float>(0.34, 0.74, 0.68, 0.24 + witnessAlert * 0.14)
+        default:
+            witnessBodyColor = SIMD4<Float>(0.38, 0.52, 0.62, 1.0)
+            witnessAccentColor = SIMD4<Float>(0.74, 0.86, 0.94, 1.0)
+            witnessRingColor = SIMD4<Float>(0.36, 0.62, 0.84, 0.20 + witnessAlert * 0.12)
+        }
+
+        switch bystanderState {
+        case UInt32(MDTBWitnessStateInvestigate):
+            bystanderBodyColor = SIMD4<Float>(0.56, 0.46 + bystanderAlert * 0.10, 0.64, 1.0)
+            bystanderAccentColor = SIMD4<Float>(0.96, 0.74, 1.0, 1.0)
+            bystanderRingColor = SIMD4<Float>(0.84, 0.58, 1.0, 0.24 + bystanderAlert * 0.16)
+        case UInt32(MDTBWitnessStateFlee):
+            bystanderBodyColor = SIMD4<Float>(0.84, 0.34 + bystanderAlert * 0.08, 0.46, 1.0)
+            bystanderAccentColor = SIMD4<Float>(1.0, 0.58, 0.78, 1.0)
+            bystanderRingColor = SIMD4<Float>(1.0, 0.44, 0.62, 0.30 + bystanderAlert * 0.20)
+        case UInt32(MDTBWitnessStateCooldown):
+            bystanderBodyColor = SIMD4<Float>(0.34, 0.48, 0.60 + bystanderAlert * 0.08, 1.0)
+            bystanderAccentColor = SIMD4<Float>(0.72, 0.82, 1.0, 1.0)
+            bystanderRingColor = SIMD4<Float>(0.44, 0.66, 0.96, 0.22 + bystanderAlert * 0.12)
+        default:
+            bystanderBodyColor = SIMD4<Float>(0.46, 0.50, 0.62, 1.0)
+            bystanderAccentColor = SIMD4<Float>(0.84, 0.88, 1.0, 1.0)
+            bystanderRingColor = SIMD4<Float>(0.50, 0.64, 0.92, 0.18 + bystanderAlert * 0.10)
+        }
+        let playerRingColor = playerResetPulse > 0.0
+            ? SIMD4<Float>(0.52, 0.90, 0.54, 0.60 + playerResetPulse * 0.18)
+            : (playerInCover
+                ? SIMD4<Float>(0.30, 0.78, 0.94, 0.46)
+                : SIMD4<Float>(0.98, 0.48 + playerHealthRatio * 0.22, 0.24, 0.44 + (1.0 - playerHealthRatio) * 0.20))
+        let hostileAnchorPositions = [
+            SIMD3<Float>(-13.8, 0.22, 52.0),
+            SIMD3<Float>(-1.9, 0.22, 55.0),
+            SIMD3<Float>(9.4, 0.22, 49.7),
+            SIMD3<Float>(5.4, 0.22, 56.6),
+        ]
+        let hostileAnchorIndex = min(max(Int(state.combat_hostile_anchor_index), 0), hostileAnchorPositions.count - 1)
+        let hostileAnchor = hostileAnchorPositions[hostileAnchorIndex]
+        let hostileReacquirePulse = min(max(state.combat_hostile_reacquire_timer / 1.10, 0.0), 1.0)
+        let hostileAnchorTravel = min(max(sqrt(distanceSquared(hostileAnchor, hostilePosition)) / 6.0, 0.0), 1.0)
         let hostileHeading = state.combat_hostile_heading
+        let witnessHeading = state.witness_heading
+        let bystanderHeading = state.bystander_heading
         let hostileRight = SIMD3<Float>(cos(hostileHeading), 0.0, sin(hostileHeading))
+        let witnessRight = SIMD3<Float>(cos(witnessHeading), 0.0, sin(witnessHeading))
+        let bystanderRight = SIMD3<Float>(cos(bystanderHeading), 0.0, sin(bystanderHeading))
         let hitFlashActive = (state.melee_attack_connected != 0 && state.melee_attack_phase == UInt32(MDTBMeleeAttackStrike))
             || (state.firearm_last_shot_hit != 0 && state.firearm_last_shot_timer > 0.0)
 
@@ -1653,6 +1836,169 @@ final class Renderer: NSObject, MTKViewDelegate {
                 halfExtents: SIMD3<Float>(0.14 + scale * pulse, 0.12 + scale * 0.4, 0.14 + scale * pulse),
                 yaw: elapsedTime * 1.1,
                 color: color
+            ))
+        }
+
+        if state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(playerPosition.x, playerPosition.y + 0.05, playerPosition.z),
+                halfExtents: SIMD3<Float>(0.42 + (playerInCover ? 0.12 : 0.0), 0.03, 0.42 + (playerInCover ? 0.12 : 0.0)),
+                yaw: 0.0,
+                color: playerRingColor
+            ))
+
+            appendHealthBar(
+                center: SIMD3<Float>(playerPosition.x, playerPosition.y + 2.38, playerPosition.z),
+                ratio: playerHealthRatio,
+                color: playerInCover
+                    ? SIMD4<Float>(0.40, 0.82, 1.0, 0.94)
+                    : SIMD4<Float>(1.0, 0.54 + playerHealthRatio * 0.20, 0.24, 0.94)
+            )
+
+            if playerDamagePulse > 0.0 {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: playerFocus,
+                    halfExtents: SIMD3<Float>(0.12 + playerDamagePulse * 0.14, 0.14 + playerDamagePulse * 0.18, 0.12 + playerDamagePulse * 0.14),
+                    yaw: elapsedTime * 1.2,
+                    color: SIMD4<Float>(1.0, 0.26, 0.20, 0.42 + playerDamagePulse * 0.28)
+                ))
+            }
+        }
+
+        if state.combat_hostile_health > 0.0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(hostileAnchor.x, hostileAnchor.y + 0.04, hostileAnchor.z),
+                halfExtents: SIMD3<Float>(0.42 + hostileReacquirePulse * 0.12, 0.02, 0.42 + hostileReacquirePulse * 0.12),
+                yaw: 0.0,
+                color: SIMD4<Float>(0.92, 0.30 + hostileReacquirePulse * 0.28, 0.18, 0.26 + hostileReacquirePulse * 0.22)
+            ))
+
+            if hostileAnchorTravel > 0.08 {
+                let routeMidpoint = hostilePosition + ((hostileAnchor - hostilePosition) * 0.5)
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(routeMidpoint.x, routeMidpoint.y + 0.06, routeMidpoint.z),
+                    halfExtents: SIMD3<Float>(0.14 + hostileAnchorTravel * 0.08, 0.02, 0.42 + hostileAnchorTravel * 0.24),
+                    yaw: atan2f(hostileAnchor.x - hostilePosition.x, hostileAnchor.z - hostilePosition.z),
+                    color: SIMD4<Float>(0.96, 0.44, 0.22, 0.20 + hostileAnchorTravel * 0.20)
+                ))
+            }
+        }
+
+        if searchActive {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(searchPosition.x, searchPosition.y + 0.03, searchPosition.z),
+                halfExtents: SIMD3<Float>(0.42 + searchCharge * 0.18 + searchPulse * 0.08, 0.02, 0.42 + searchCharge * 0.18 + searchPulse * 0.08),
+                yaw: 0.0,
+                color: SIMD4<Float>(0.42, 0.86, 1.0, 0.24 + searchCharge * 0.22)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(searchPosition.x, searchPosition.y + 1.08, searchPosition.z),
+                halfExtents: SIMD3<Float>(0.10 + searchCharge * 0.06, 0.34 + searchCharge * 0.12, 0.10 + searchCharge * 0.06),
+                yaw: elapsedTime * 1.6,
+                color: animatedColor(SIMD4<Float>(0.66, 0.94, 1.0, 0.56), intensity: searchPulse)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(searchPosition.x, searchPosition.y + 2.04, searchPosition.z),
+                halfExtents: SIMD3<Float>(0.14 + searchCharge * 0.10, 0.05, 0.14 + searchCharge * 0.10),
+                yaw: elapsedTime * 2.2,
+                color: animatedColor(SIMD4<Float>(0.76, 0.98, 1.0, 0.68), intensity: 0.92 + searchCharge * 0.18)
+            ))
+        }
+
+        if streetIncidentActive {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(incidentPosition.x, incidentPosition.y + 0.03, incidentPosition.z),
+                halfExtents: SIMD3<Float>(0.64 + streetIncidentLevel * 0.34, 0.02, 0.64 + streetIncidentLevel * 0.34),
+                yaw: 0.0,
+                color: animatedColor(streetIncidentColor, intensity: incidentPulse)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(incidentPosition.x, incidentPosition.y + 1.36, incidentPosition.z),
+                halfExtents: SIMD3<Float>(0.11 + streetIncidentLevel * 0.08, 0.44 + streetIncidentLevel * 0.18, 0.11 + streetIncidentLevel * 0.08),
+                yaw: elapsedTime * 1.3,
+                color: animatedColor(SIMD4<Float>(1.0, 0.66, 0.26, 0.58), intensity: 0.88 + streetIncidentLevel * 0.20)
+            ))
+
+            if distanceSquared(incidentPosition, witnessPosition) > 2.0 {
+                let streetRouteMidpoint = incidentPosition + ((witnessPosition - incidentPosition) * 0.5)
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(streetRouteMidpoint.x, streetRouteMidpoint.y + 0.05, streetRouteMidpoint.z),
+                    halfExtents: SIMD3<Float>(0.12 + streetIncidentLevel * 0.06, 0.02, 0.52 + streetIncidentLevel * 0.20),
+                    yaw: atan2f(witnessPosition.x - incidentPosition.x, witnessPosition.z - incidentPosition.z),
+                    color: SIMD4<Float>(0.96, 0.60, 0.22, 0.16 + streetIncidentLevel * 0.12)
+                ))
+            }
+        }
+
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: SIMD3<Float>(witnessPosition.x, witnessPosition.y + 0.05, witnessPosition.z),
+            halfExtents: SIMD3<Float>(0.34 + witnessAlert * 0.14, 0.02, 0.34 + witnessAlert * 0.14),
+            yaw: 0.0,
+            color: witnessRingColor
+        ))
+        vertices.append(contentsOf: makePedestrianPlaceholderVertices(
+            position: witnessPosition,
+            heading: witnessHeading,
+            elapsedTime: elapsedTime + Float(witnessState) * 0.18 + witnessAlert * 0.24,
+            tint: witnessBodyColor
+        ))
+        vertices.append(contentsOf: makeActorPartVertices(
+            position: witnessPosition,
+            localCenter: SIMD3<Float>(0.0, 0.96, -0.16),
+            halfExtents: SIMD3<Float>(0.15, 0.16, 0.05),
+            bodyYaw: witnessHeading,
+            partYaw: witnessHeading,
+            color: witnessAccentColor
+        ))
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: witnessPosition + (witnessRight * 0.26) + SIMD3<Float>(0.0, 0.92, 0.0),
+            halfExtents: SIMD3<Float>(0.08, 0.06, 0.06),
+            yaw: witnessHeading,
+            color: animatedColor(witnessAccentColor, intensity: 0.84 + witnessAlert * 0.22)
+        ))
+
+        if witnessAlert > 0.06 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(witnessPosition.x, witnessPosition.y + 2.16, witnessPosition.z),
+                halfExtents: SIMD3<Float>(0.12 + witnessAlert * 0.08, 0.05, 0.12 + witnessAlert * 0.08),
+                yaw: elapsedTime * 1.9,
+                color: animatedColor(witnessAccentColor, intensity: 0.92 + witnessAlert * 0.24)
+            ))
+        }
+
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: SIMD3<Float>(bystanderPosition.x, bystanderPosition.y + 0.05, bystanderPosition.z),
+            halfExtents: SIMD3<Float>(0.30 + bystanderAlert * 0.14, 0.02, 0.30 + bystanderAlert * 0.14),
+            yaw: 0.0,
+            color: bystanderRingColor
+        ))
+        vertices.append(contentsOf: makePedestrianPlaceholderVertices(
+            position: bystanderPosition,
+            heading: bystanderHeading,
+            elapsedTime: elapsedTime + 0.45 + Float(bystanderState) * 0.22 + bystanderAlert * 0.28,
+            tint: bystanderBodyColor
+        ))
+        vertices.append(contentsOf: makeActorPartVertices(
+            position: bystanderPosition,
+            localCenter: SIMD3<Float>(0.0, 0.98, -0.14),
+            halfExtents: SIMD3<Float>(0.14, 0.16, 0.05),
+            bodyYaw: bystanderHeading,
+            partYaw: bystanderHeading,
+            color: bystanderAccentColor
+        ))
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: bystanderPosition + (bystanderRight * 0.24) + SIMD3<Float>(0.0, 0.90, 0.0),
+            halfExtents: SIMD3<Float>(0.08, 0.06, 0.06),
+            yaw: bystanderHeading,
+            color: animatedColor(bystanderAccentColor, intensity: 0.84 + bystanderAlert * 0.22)
+        ))
+
+        if bystanderAlert > 0.06 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(bystanderPosition.x, bystanderPosition.y + 2.08, bystanderPosition.z),
+                halfExtents: SIMD3<Float>(0.12 + bystanderAlert * 0.08, 0.05, 0.12 + bystanderAlert * 0.08),
+                yaw: elapsedTime * 1.7,
+                color: animatedColor(bystanderAccentColor, intensity: 0.90 + bystanderAlert * 0.22)
             ))
         }
 
@@ -1751,7 +2097,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             appendFocusMarker(
                 position: dummyPosition,
                 alignment: state.combat_focus_alignment,
-                baseColor: SIMD4<Float>(0.92, 0.68, 0.26, 1.0)
+                baseColor: focusOccluded
+                    ? SIMD4<Float>(0.62, 0.70, 0.76, 1.0)
+                    : SIMD4<Float>(0.92, 0.68, 0.26, 1.0)
             )
         }
 
@@ -1820,7 +2168,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             appendFocusMarker(
                 position: hostilePosition,
                 alignment: state.combat_focus_alignment,
-                baseColor: SIMD4<Float>(1.0, 0.34 + hostileAlert * 0.24, 0.18, 1.0)
+                baseColor: focusOccluded
+                    ? SIMD4<Float>(0.62, 0.74, 0.82, 1.0)
+                    : SIMD4<Float>(1.0, 0.34 + hostileAlert * 0.24, 0.18, 1.0)
             )
         }
 
@@ -1845,7 +2195,35 @@ final class Renderer: NSObject, MTKViewDelegate {
                 yaw: 0.0,
                 color: state.firearm_last_shot_hit != 0
                     ? SIMD4<Float>(1.0, 0.58, 0.26, 0.84)
-                    : SIMD4<Float>(0.92, 0.88, 0.68, 0.44)
+                    : (state.firearm_last_shot_blocked != 0
+                        ? SIMD4<Float>(0.54, 0.80, 0.92, 0.72)
+                        : SIMD4<Float>(0.92, 0.88, 0.68, 0.44))
+            ))
+        }
+
+        if state.combat_hostile_attack_windup > 0.0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostileShotFrom,
+                halfExtents: SIMD3<Float>(0.10 + hostileAttackCharge * 0.12, 0.10 + hostileAttackCharge * 0.12, 0.10 + hostileAttackCharge * 0.12),
+                yaw: elapsedTime * 2.2,
+                color: SIMD4<Float>(1.0, 0.42 + hostileAttackCharge * 0.24, 0.18, 0.52 + hostileAttackCharge * 0.24)
+            ))
+        }
+
+        if state.combat_hostile_last_shot_timer > 0.0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostileShotFrom,
+                halfExtents: SIMD3<Float>(0.10 + hostileShotPulse * 0.10, 0.10 + hostileShotPulse * 0.10, 0.10 + hostileShotPulse * 0.10),
+                yaw: 0.0,
+                color: SIMD4<Float>(1.0, 0.42, 0.20, 0.76)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostileShotTo,
+                halfExtents: SIMD3<Float>(0.10 + hostileShotPulse * 0.12, 0.10 + hostileShotPulse * 0.12, 0.10 + hostileShotPulse * 0.12),
+                yaw: 0.0,
+                color: state.combat_hostile_last_shot_hit != 0
+                    ? SIMD4<Float>(1.0, 0.28, 0.20, 0.84)
+                    : SIMD4<Float>(0.40, 0.84, 0.96, 0.76)
             ))
         }
 
@@ -2177,7 +2555,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let visibleBlocks = visibleBlockCount(state: state, blocks: blocks, roadLinks: roadLinks)
         let hotspots = hotspotCount(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints)
         let stagedVehicles = stagedVehicleCount(state: state, blocks: blocks, roadLinks: roadLinks, vehicleAnchors: vehicleAnchors)
-        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) visible / \(hotspots) hot / \(stagedVehicles) staged / \(trafficOccupancies.count) occ / \(population.livePedestrians) live ped / \(population.liveVehicles) live veh / \(linkLabel)"
+        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) visible / \(hotspots) hot / \(stagedVehicles) staged / \(trafficOccupancies.count) occ / \(population.livePedestrians) live ped / \(population.reactingPedestrians) reacting / \(population.liveVehicles) live veh / \(population.yieldingVehicles) easing / \(linkLabel)"
     }
 
     private static func blockSummary(state: MDTBEngineState, blocks: [SceneBlock], populationProfiles: [ScenePopulationProfile]) -> String {
@@ -2238,6 +2616,29 @@ final class Renderer: NSObject, MTKViewDelegate {
         return 1.0 - max(0.0, min(distance / hazardRadius, 1.0))
     }
 
+    private static func incidentReactionIntensity(position: SIMD3<Float>, state: MDTBEngineState) -> Float {
+        let incidentLevel = min(max(state.street_incident_level, 0.0), 1.0)
+        guard state.street_incident_timer > 0.0, incidentLevel > 0.08 else {
+            return 0.0
+        }
+
+        let incidentPosition = SIMD3<Float>(
+            state.street_incident_position.x,
+            state.street_incident_position.y,
+            state.street_incident_position.z
+        )
+        let reactionRadius: Float = 10.0 + incidentLevel * 24.0
+        let distance = sqrt(distanceSquared(position, incidentPosition))
+        guard distance < reactionRadius else {
+            return 0.0
+        }
+
+        let civilianBoost: Float =
+            (state.witness_state != UInt32(MDTBWitnessStateIdle) ? 0.10 : 0.0) +
+            (state.bystander_state != UInt32(MDTBWitnessStateIdle) ? 0.12 : 0.0)
+        return min(max((1.0 - (distance / reactionRadius)) * (incidentLevel + civilianBoost), 0.0), 1.0)
+    }
+
     private static func distanceSquared(_ lhs: SIMD3<Float>, _ rhs: SIMD3<Float>) -> Float {
         let dx = lhs.x - rhs.x
         let dz = lhs.z - rhs.z
@@ -2246,7 +2647,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func populationActivity(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile], trafficOccupancies: [SceneTrafficOccupancy]) -> PopulationActivity {
         guard !interestPoints.isEmpty else {
-            return PopulationActivity(livePedestrians: 0, liveVehicles: 0)
+            return PopulationActivity(livePedestrians: 0, reactingPedestrians: 0, liveVehicles: 0, yieldingVehicles: 0)
         }
 
         let actorPosition = SIMD3<Float>(
@@ -2266,7 +2667,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         let playerPosition = currentPlayerPosition(state: state)
 
         var pedestrians = 0
+        var reactingPedestrians = 0
         var vehicles = 0
+        var yieldingVehicles = 0
 
         for (pointIndex, point) in interestPoints.enumerated() {
             let blockIndex = Int(point.blockIndex)
@@ -2278,19 +2681,30 @@ final class Renderer: NSObject, MTKViewDelegate {
             let profile = populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles)
             switch point.kind {
             case UInt32(MDTBInterestPointPedestrianSpawn):
-                if pedestrianSample(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, elapsedTime: state.elapsed_time) != nil {
+                if let sample = pedestrianSample(for: point, pointIndex: pointIndex, state: state, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, elapsedTime: state.elapsed_time) {
                     pedestrians += 1
+                    if sample.reactionIntensity > 0.10 {
+                        reactingPedestrians += 1
+                    }
                 }
             case UInt32(MDTBInterestPointVehicleSpawn):
-                if vehicleSample(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, trafficOccupancies: trafficOccupancies, playerPosition: playerPosition, traversalMode: state.traversal_mode, elapsedTime: state.elapsed_time) != nil {
+                if let sample = vehicleSample(for: point, pointIndex: pointIndex, block: block, profile: profile, blocks: blocks, roadLinks: roadLinks, trafficOccupancies: trafficOccupancies, playerPosition: playerPosition, traversalMode: state.traversal_mode, elapsedTime: state.elapsed_time) {
                     vehicles += 1
+                    if sample.yieldIntensity > 0.35 {
+                        yieldingVehicles += 1
+                    }
                 }
             default:
                 break
             }
         }
 
-        return PopulationActivity(livePedestrians: pedestrians, liveVehicles: vehicles)
+        return PopulationActivity(
+            livePedestrians: pedestrians,
+            reactingPedestrians: reactingPedestrians,
+            liveVehicles: vehicles,
+            yieldingVehicles: yieldingVehicles
+        )
     }
 
     private static func formatScalar(_ value: Float) -> String {
@@ -2392,10 +2806,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         let pistolDistance = formatScalar(sqrt(distanceSquared(playerPosition, pistolPickupPosition)))
         let dummyDistance = formatScalar(sqrt(distanceSquared(playerPosition, dummyPosition)))
         let lookoutDistance = formatScalar(sqrt(distanceSquared(playerPosition, lookoutPosition)))
+        let playerSummary = playerStatusSummary(state: state)
         let dummySummary = dummyStatusSummary(state: state, targetDistance: dummyDistance)
         let lookoutSummary = lookoutStatusSummary(state: state, targetDistance: lookoutDistance)
         let focusSummary = combatFocusSummary(state: state)
-        let laneSummary = [focusSummary, dummySummary, lookoutSummary].compactMap { $0 }.joined(separator: " / ")
+        let systemicSummary = systemicPressureSummary(state: state)
+        let laneSummary = [playerSummary, focusSummary, dummySummary, lookoutSummary, systemicSummary].compactMap { $0 }.joined(separator: " / ")
         let pistolSummary = pistolAmmoSummary(state: state)
 
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
@@ -2422,7 +2838,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             let firearmState = state.firearm_reloading != 0
                 ? "reload \(formatScalar(state.firearm_reload_timer))s"
                 : (state.firearm_last_shot_timer > 0.0
-                    ? (state.firearm_last_shot_hit != 0 ? "fired hit" : "fired")
+                    ? (state.firearm_last_shot_hit != 0
+                        ? "fired hit"
+                        : (state.firearm_last_shot_blocked != 0 ? "fired cover" : "fired"))
                     : "ready")
             return "slot 2 pistol / \(pistolSummary) / \(firearmState) / \(laneSummary)"
         default:
@@ -2526,6 +2944,162 @@ final class Renderer: NSObject, MTKViewDelegate {
         return "traffic calm \(formatScalar(trafficHazard))"
     }
 
+    private static func combatHUDModel(state: MDTBEngineState, interactionSummary: String, trafficHazard: Float) -> CombatHUDModel {
+        let healthRatio = Double(max(0.0, min(state.player_health / 100.0, 1.0)))
+        let anchorLabel = lookoutAnchorLabel(state.combat_hostile_anchor_index)
+        let focusLabel = combatTargetLabel(state.combat_focus_target_kind)
+        let isVehicleMode = state.traversal_mode == UInt32(MDTBTraversalModeVehicle)
+        let isResetting = state.player_reset_timer > 0.0
+        let streetIncidentActive = state.street_incident_timer > 0.0 && state.street_incident_level > 0.08
+        let searchActive = state.combat_hostile_search_timer > 0.0
+        let isCritical = isResetting || state.player_health <= 35.0 || (state.combat_hostile_attack_windup > 0.0 && state.combat_player_in_cover == 0)
+        let systemStatus = systemicHUDStatus(state: state, trafficHazard: trafficHazard)
+
+        let title: String
+        let subtitle: String
+        let healthDetail: String
+        let weaponTitle: String
+        let weaponDetail: String
+        let encounterTitle: String
+        let encounterDetail: String
+        let systemTitle = systemStatus.title
+        let systemDetail = systemStatus.detail
+
+        if isResetting {
+            title = "Lane Reset"
+            subtitle = "Regroup before stepping back into the pocket"
+            healthDetail = "Encounter recenter \(formatScalar(state.player_reset_timer))s"
+            encounterTitle = "Lookout reset"
+            encounterDetail = "Green window in \(formatScalar(state.player_reset_timer))s"
+        } else if isVehicleMode {
+            title = searchActive ? "Vehicle Escape" : "Vehicle Reset"
+            subtitle = searchActive
+                ? (streetIncidentActive
+                    ? "The lane spilled into the street while the lookout checks your exit"
+                    : "The lookout is searching your exit point while you stay mobile")
+                : (state.combat_hostile_reacquire_timer > 0.0
+                    ? "Lookout is cooling off while you stay mobile"
+                    : "Weapons are stowed while you drive")
+            healthDetail = state.player_health < 100.0 ? "Pulled back / \(formatScalar(state.player_health))hp" : "Pulled back from the lane"
+            encounterTitle = "Lookout holding \(anchorLabel)"
+            if searchActive {
+                let reacquireTail = state.combat_hostile_reacquire_timer > 0.0
+                    ? " / reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s after you step out"
+                    : ""
+                encounterDetail = "Search \(formatScalar(state.combat_hostile_search_timer))s\(reacquireTail)"
+            } else {
+                encounterDetail = state.combat_hostile_reacquire_timer > 0.0
+                    ? "Reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s after you step out"
+                    : "Exit near cover to re-engage"
+            }
+        } else if state.combat_hostile_attack_windup > 0.0 {
+            title = "Incoming Fire"
+            subtitle = "Break the angle from \(anchorLabel) or fire first"
+            healthDetail = state.combat_player_in_cover != 0 ? "Cover is still holding" : "Open lane / move now"
+            encounterTitle = "Lookout \(anchorLabel)"
+            encounterDetail = "Firing in \(formatScalar(state.combat_hostile_attack_windup))s"
+        } else if searchActive {
+            title = state.combat_player_in_cover != 0 ? "Search Window" : "Hostile Searching"
+            subtitle = state.witness_state == UInt32(MDTBWitnessStateFlee) || streetIncidentActive
+                ? "You broke the angle, but the street is still reacting around the lane"
+                : "The lookout is checking your last seen position instead of firing blind"
+            healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                ? "Recovery window \(formatScalar(state.player_recovery_delay))s"
+                : (state.combat_player_in_cover != 0 ? "Cover bought a short window" : "Stay mobile and re-enter on your terms")
+            encounterTitle = "Lookout \(anchorLabel)"
+            encounterDetail = "Search \(formatScalar(state.combat_hostile_search_timer))s around last seen position"
+        } else if state.combat_player_in_cover != 0 {
+            title = "Cover Holding"
+            subtitle = state.combat_hostile_reacquire_timer > 0.0
+                ? "The lookout is shifting off \(anchorLabel)"
+                : "Use the pocket to reload or swing the lane"
+            healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                ? "Recovery in \(formatScalar(state.player_recovery_delay))s"
+                : "Cover holding"
+            encounterTitle = "Lookout \(anchorLabel)"
+            encounterDetail = state.combat_hostile_reacquire_timer > 0.0
+                ? "Reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s"
+                : "Pressure broken on this angle"
+        } else {
+            title = state.player_health <= 45.0 ? "Under Pressure" : "Combat Lane Live"
+            subtitle = state.combat_hostile_reacquire_timer > 0.0
+                ? "The lookout is sliding to a new firing angle"
+                : "Move between cover so the lane does not flatten out"
+            if state.player_health < 100.0 && state.player_recovery_delay > 0.0 {
+                healthDetail = "Recovery in \(formatScalar(state.player_recovery_delay))s"
+            } else if state.player_health < 100.0 {
+                healthDetail = "Recovering"
+            } else {
+                healthDetail = "Open lane"
+            }
+            encounterTitle = "Lookout \(anchorLabel)"
+            if state.combat_hostile_last_shot_timer > 0.0 {
+                encounterDetail = state.combat_hostile_last_shot_hit != 0 ? "Last burst landed" : "Last burst splashed cover"
+            } else if state.combat_hostile_reacquire_timer > 0.0 {
+                encounterDetail = "Reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s"
+            } else if state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) {
+                encounterDetail = "Focus \(focusLabel) \(formatScalar(state.combat_focus_distance))m"
+            } else {
+                encounterDetail = "Search the lane and take the better angle"
+            }
+        }
+
+        switch state.equipped_weapon_kind {
+        case UInt32(MDTBEquippedWeaponLeadPipe):
+            weaponTitle = "Lead Pipe"
+            weaponDetail = state.melee_attack_phase == UInt32(MDTBMeleeAttackIdle)
+                ? "Close distance / slot 1 ready"
+                : "\(attackPhaseLabel(state.melee_attack_phase)) \(formatScalar(state.melee_attack_timer))s"
+        case UInt32(MDTBEquippedWeaponPistol):
+            weaponTitle = isVehicleMode ? "Pistol Stowed" : "Pistol"
+            if state.firearm_reloading != 0 {
+                weaponDetail = "Reload \(formatScalar(state.firearm_reload_timer))s / \(pistolAmmoSummary(state: state))"
+            } else {
+                weaponDetail = pistolAmmoSummary(state: state)
+            }
+        default:
+            weaponTitle = "Unarmed"
+            if state.melee_weapon_owned != 0 || state.firearm_owned != 0 {
+                weaponDetail = "Press 1 or 2 to equip"
+            } else {
+                weaponDetail = "Press T near the lane pickups"
+            }
+        }
+
+        return CombatHUDModel(
+            title: title,
+            subtitle: subtitle,
+            healthRatio: healthRatio,
+            healthText: "\(formatScalar(state.player_health)) hp",
+            healthDetail: healthDetail,
+            weaponTitle: weaponTitle,
+            weaponDetail: weaponDetail,
+            encounterTitle: encounterTitle,
+            encounterDetail: encounterDetail,
+            systemTitle: systemTitle,
+            systemDetail: systemDetail,
+            promptText: interactionSummary,
+            isCritical: isCritical,
+            isVehicleMode: isVehicleMode,
+            isResetting: isResetting
+        )
+    }
+
+    private static func lookoutAnchorLabel(_ value: UInt32) -> String {
+        switch value {
+        case 0:
+            return "west stack"
+        case 1:
+            return "center slit"
+        case 2:
+            return "east swing"
+        case 3:
+            return "backline"
+        default:
+            return "lane"
+        }
+    }
+
     private static func combatInteractionPrompt(state: MDTBEngineState) -> String? {
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
             guard state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponNone) else {
@@ -2535,6 +3109,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                 return "pistol stowed while driving"
             }
             return "\(equippedWeaponLabel(state.equipped_weapon_kind)) stowed while driving"
+        }
+
+        if state.player_reset_timer > 0.0 {
+            return "encounter reset \(formatScalar(state.player_reset_timer))s / regroup before re-engaging"
         }
 
         if let pickupPrompt = pickupPrompt(state: state) {
@@ -2556,6 +3134,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             case UInt32(MDTBMeleeAttackRecovery):
                 return "lead pipe recover \(formatScalar(state.melee_attack_timer))s\(switchHint)"
             default:
+                if state.combat_hostile_attack_windup > 0.0 {
+                    return "lookout firing \(formatScalar(state.combat_hostile_attack_windup))s / use cover before closing\(switchHint)"
+                }
                 if state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) {
                     if (state.combat_focus_target_kind == UInt32(MDTBCombatTargetDummy) && state.combat_target_in_range != 0)
                         || (state.combat_focus_target_kind == UInt32(MDTBCombatTargetLookout) && state.combat_hostile_in_range != 0) {
@@ -2578,11 +3159,20 @@ final class Renderer: NSObject, MTKViewDelegate {
                 }
                 return "pistol empty\(switchHint)"
             }
+            if state.combat_hostile_attack_windup > 0.0 {
+                return "lookout firing \(formatScalar(state.combat_hostile_attack_windup))s / break line of sight or fire first\(switchHint)"
+            }
             if state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) {
+                if state.combat_focus_occluded != 0 {
+                    return "cover blocks the \(focusLabel) / step clear and fire / Y reload\(switchHint)"
+                }
                 if state.combat_focus_alignment >= 0.90 {
                     return "Space or click to fire at the \(focusLabel) / Y reload\(switchHint)"
                 }
                 return "steady the sights on the \(focusLabel) / Space or click to fire / Y reload\(switchHint)"
+            }
+            if state.combat_player_in_cover != 0 {
+                return "cover is holding / step out, fire, then tuck back in / Y reload\(switchHint)"
             }
             return "line up either target / Space or click to fire / Y reload\(switchHint)"
         default:
@@ -2643,7 +3233,27 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) else {
             return nil
         }
-        return "focus \(combatTargetLabel(state.combat_focus_target_kind)) \(formatScalar(state.combat_focus_distance))m aim \(formatScalar(state.combat_focus_alignment))"
+        let occlusion = state.combat_focus_occluded != 0 ? " cover" : ""
+        return "focus \(combatTargetLabel(state.combat_focus_target_kind)) \(formatScalar(state.combat_focus_distance))m aim \(formatScalar(state.combat_focus_alignment))\(occlusion)"
+    }
+
+    private static func playerStatusSummary(state: MDTBEngineState) -> String {
+        if state.player_reset_timer > 0.0 {
+            return "player reset \(formatScalar(state.player_reset_timer))s"
+        }
+
+        var parts = ["player \(formatScalar(state.player_health))hp"]
+        parts.append(state.combat_player_in_cover != 0 ? "cover" : "open")
+
+        if state.player_health <= 40.0 {
+            parts.append("low")
+        }
+
+        if state.player_damage_pulse >= 0.28 {
+            parts.append("hit")
+        }
+
+        return parts.joined(separator: " ")
     }
 
     private static func targetStatusSummary(label: String, distance: String, inRange: Bool, health: Float, resetTimer: Float, alert: Float? = nil) -> String {
@@ -2675,7 +3285,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private static func lookoutStatusSummary(state: MDTBEngineState, targetDistance: String) -> String {
-        targetStatusSummary(
+        var summary = targetStatusSummary(
             label: "lookout",
             distance: targetDistance,
             inRange: state.combat_hostile_in_range != 0,
@@ -2683,6 +3293,185 @@ final class Renderer: NSObject, MTKViewDelegate {
             resetTimer: state.combat_hostile_reset_timer,
             alert: state.combat_hostile_alert
         )
+        summary += " @\(lookoutAnchorLabel(state.combat_hostile_anchor_index))"
+
+        if state.combat_hostile_search_timer > 0.0 {
+            summary += " search \(formatScalar(state.combat_hostile_search_timer))s"
+        }
+
+        if state.combat_hostile_attack_windup > 0.0 {
+            summary += " fire \(formatScalar(state.combat_hostile_attack_windup))s"
+        } else if state.combat_hostile_reacquire_timer > 0.0 {
+            summary += " reacq \(formatScalar(state.combat_hostile_reacquire_timer))s"
+        } else if state.combat_hostile_last_shot_timer > 0.0 {
+            summary += state.combat_hostile_last_shot_hit != 0 ? " shot" : " shot cover"
+        }
+
+        return summary
+    }
+
+    private static func witnessStateLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBWitnessStateInvestigate):
+            return "investigate"
+        case UInt32(MDTBWitnessStateFlee):
+            return "flee"
+        case UInt32(MDTBWitnessStateCooldown):
+            return "cooldown"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func witnessStatusSummary(state: MDTBEngineState) -> String {
+        var parts = ["witness \(witnessStateLabel(state.witness_state))"]
+
+        if state.witness_state != UInt32(MDTBWitnessStateIdle) && state.witness_state_timer > 0.0 {
+            parts.append("\(formatScalar(state.witness_state_timer))s")
+        }
+
+        if state.witness_alert > 0.05 {
+            parts.append("a\(formatScalar(state.witness_alert))")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private static func bystanderStatusSummary(state: MDTBEngineState) -> String {
+        var parts = ["bystander \(witnessStateLabel(state.bystander_state))"]
+
+        if state.bystander_state != UInt32(MDTBWitnessStateIdle) && state.bystander_state_timer > 0.0 {
+            parts.append("\(formatScalar(state.bystander_state_timer))s")
+        }
+
+        if state.bystander_alert > 0.05 {
+            parts.append("a\(formatScalar(state.bystander_alert))")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private static func civilianResponseSourceCount(state: MDTBEngineState) -> Int {
+        var count = 0
+
+        if state.witness_state != UInt32(MDTBWitnessStateIdle) || state.witness_alert > 0.05 || state.witness_state_timer > 0.0 {
+            count += 1
+        }
+        if state.bystander_state != UInt32(MDTBWitnessStateIdle) || state.bystander_alert > 0.05 || state.bystander_state_timer > 0.0 {
+            count += 1
+        }
+
+        return count
+    }
+
+    private static func systemicPressureSummary(state: MDTBEngineState) -> String {
+        var parts: [String] = []
+
+        if state.witness_state != UInt32(MDTBWitnessStateIdle) || state.witness_alert > 0.05 || state.witness_state_timer > 0.0 {
+            parts.append(witnessStatusSummary(state: state))
+        }
+
+        if state.bystander_state != UInt32(MDTBWitnessStateIdle) || state.bystander_alert > 0.05 || state.bystander_state_timer > 0.0 {
+            parts.append(bystanderStatusSummary(state: state))
+        }
+
+        if state.combat_hostile_search_timer > 0.0 {
+            parts.append("search \(formatScalar(state.combat_hostile_search_timer))s")
+        }
+
+        if state.street_incident_timer > 0.0 && state.street_incident_level > 0.05 {
+            parts.append("incident \(formatScalar(state.street_incident_level)) \(formatScalar(state.street_incident_timer))s")
+        }
+
+        if parts.isEmpty {
+            return "street calm"
+        }
+
+        return "street " + parts.joined(separator: " / ")
+    }
+
+    private static func systemicHUDStatus(state: MDTBEngineState, trafficHazard: Float) -> (title: String, detail: String) {
+        let searchActive = state.combat_hostile_search_timer > 0.0
+        let searchTimer = formatScalar(state.combat_hostile_search_timer)
+        let witnessTimer = formatScalar(state.witness_state_timer)
+        let incidentActive = state.street_incident_timer > 0.0 && state.street_incident_level > 0.08
+        let incidentTimer = formatScalar(state.street_incident_timer)
+        let bystanderTimer = formatScalar(state.bystander_state_timer)
+        let civilianSources = civilianResponseSourceCount(state: state)
+
+        if civilianSources >= 2 && incidentActive {
+            return (
+                state.street_incident_level >= 0.72 ? "Crowd peeling back" : "Street crowd moving",
+                searchActive
+                    ? "Two civilians are reacting while the lookout searches \(searchTimer)s"
+                    : "Multiple civilians are clearing the block \(incidentTimer)s"
+            )
+        }
+
+        if incidentActive && state.street_incident_level >= 0.72 {
+            return (
+                "Street incident live",
+                searchActive
+                    ? "Traffic is backing off the lane / lookout search \(searchTimer)s"
+                    : "The block is still reacting \(incidentTimer)s after the exchange"
+            )
+        }
+
+        switch state.witness_state {
+        case UInt32(MDTBWitnessStateInvestigate):
+            return (
+                "Witness investigating",
+                searchActive
+                    ? "A bystander stepped toward the lane / lookout search \(searchTimer)s"
+                    : "A bystander stepped toward the lane to check the noise"
+            )
+        case UInt32(MDTBWitnessStateFlee):
+            return (
+                "Witness fleeing",
+                searchActive
+                    ? "The lane spilled into the street / lookout search \(searchTimer)s"
+                    : "Gunfire pushed a bystander out of the pocket"
+            )
+        case UInt32(MDTBWitnessStateCooldown):
+            return (
+                searchActive ? "Search active" : "Street cooling",
+                searchActive
+                    ? "Lookout checking the last seen spot / witness cooling \(witnessTimer)s"
+                    : (incidentActive
+                        ? "Traffic is still giving the block space \(incidentTimer)s"
+                        : "The witness is backing off \(witnessTimer)s")
+            )
+        default:
+            if state.bystander_state == UInt32(MDTBWitnessStateInvestigate) {
+                return (
+                    "Corner bystander watching",
+                    searchActive
+                        ? "A second civilian is edging closer while the lookout searches \(searchTimer)s"
+                        : "Another civilian is testing the edge of the incident"
+                )
+            }
+            if state.bystander_state == UInt32(MDTBWitnessStateFlee) {
+                return (
+                    "Crowd spreading",
+                    searchActive
+                        ? "The second bystander is fleeing while search stays live \(searchTimer)s"
+                        : "Another civilian is running clear of the block"
+                )
+            }
+            if state.bystander_state == UInt32(MDTBWitnessStateCooldown) {
+                return ("Street cooling", "The second bystander is settling \(bystanderTimer)s")
+            }
+            if searchActive {
+                return ("Search active", "Lookout checking your last seen position \(searchTimer)s")
+            }
+            if incidentActive {
+                return ("Street holding", "Traffic is still easing around the lane \(incidentTimer)s")
+            }
+            if trafficHazard >= 0.55 {
+                return ("Traffic close", "Crossing pressure is still high near the block")
+            }
+            return ("Street calm", "No witness reaction outside the lane")
+        }
     }
 
     private static func weaponSwitchHint(state: MDTBEngineState) -> String {

@@ -73,6 +73,16 @@ static MDTBFloat3 normalize_flat(MDTBFloat3 value);
 static MDTBFloat3 vehicle_forward_flat(float heading);
 static MDTBFloat3 vehicle_right_flat(float heading);
 static MDTBFloat3 actor_focus_position(const MDTBEngineState *state);
+static MDTBFloat3 player_cover_position(const MDTBEngineState *state);
+static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state);
+static MDTBFloat3 lookout_anchor_position(uint32_t anchor_index);
+static void start_hostile_search(MDTBEngineState *state, MDTBFloat3 position, float duration);
+static void trigger_street_incident(MDTBEngineState *state, MDTBFloat3 position, float level, float duration);
+static MDTBFloat3 witness_target_position(uint32_t witness_state);
+static MDTBFloat3 bystander_target_position(uint32_t bystander_state);
+static int segment_hits_world_cover(MDTBFloat3 start, MDTBFloat3 end, float padding, MDTBFloat3 *impact_out);
+static int position_overlaps_collision(MDTBFloat3 position, float radius);
+static void reset_combat_encounter(MDTBEngineState *state);
 static void refresh_combat_proximity(MDTBEngineState *state);
 static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack, int wants_reload);
 
@@ -111,6 +121,16 @@ static const float kLookoutMaxHealth = 84.0f;
 static const float kLookoutRespawnDelay = 2.2f;
 static const float kLookoutAlertDistance = 8.2f;
 static const float kLookoutAimBias = 0.06f;
+static const float kLookoutAttackRange = 16.0f;
+static const float kLookoutAttackCooldown = 1.55f;
+static const float kLookoutAttackBlockedCooldown = 1.95f;
+static const float kLookoutAttackWindupDuration = 0.42f;
+static const float kLookoutShotFlashDuration = 0.14f;
+static const float kLookoutShotDamage = 18.0f;
+static const float kLookoutRepositionRetargetDelay = 1.15f;
+static const float kLookoutReacquireDuration = 0.72f;
+static const float kLookoutVehicleReacquireDuration = 1.10f;
+static const float kLookoutSearchDuration = 2.2f;
 static const uint32_t kPistolClipCapacity = 6u;
 static const uint32_t kPistolInitialReserveAmmo = 18u;
 static const float kPistolPickupRadius = 1.45f;
@@ -119,6 +139,38 @@ static const float kPistolAimDot = 0.90f;
 static const float kPistolShotCooldown = 0.24f;
 static const float kPistolReloadDuration = 1.15f;
 static const float kPistolShotFlashDuration = 0.10f;
+static const float kPlayerMaxHealth = 100.0f;
+static const float kPlayerRecoveryDelay = 1.85f;
+static const float kPlayerRecoveryRate = 14.0f;
+static const float kPlayerResetGraceDuration = 1.55f;
+static const MDTBFloat3 kCombatLaneResetPosition = {-4.0f, kSidewalkHeight, 46.4f};
+static const MDTBFloat3 kWitnessBasePosition = {-19.2f, kSidewalkHeight, 44.2f};
+static const MDTBFloat3 kWitnessInvestigatePosition = {-15.0f, kSidewalkHeight, 48.5f};
+static const MDTBFloat3 kWitnessFleePosition = {-28.4f, kSidewalkHeight, 43.4f};
+static const float kWitnessNoticeRadius = 22.0f;
+static const float kWitnessPanicRadius = 12.5f;
+static const float kWitnessInvestigateDuration = 2.8f;
+static const float kWitnessFleeDuration = 4.2f;
+static const float kWitnessCooldownDuration = 5.0f;
+static const MDTBFloat3 kBystanderBasePosition = {18.8f, kSidewalkHeight, 45.8f};
+static const MDTBFloat3 kBystanderInvestigatePosition = {12.6f, kSidewalkHeight, 49.2f};
+static const MDTBFloat3 kBystanderFleePosition = {28.6f, kSidewalkHeight, 39.8f};
+static const float kBystanderNoticeRadius = 30.0f;
+static const float kBystanderPanicRadius = 22.0f;
+static const float kBystanderInvestigateDuration = 3.2f;
+static const float kBystanderFleeDuration = 4.8f;
+static const float kBystanderCooldownDuration = 5.8f;
+static const float kStreetIncidentNoticeDuration = 2.4f;
+static const float kStreetIncidentSearchDuration = 3.6f;
+static const float kStreetIncidentFleeDuration = 5.8f;
+static const float kStreetIncidentSettleDuration = 2.1f;
+static const float kLookoutSearchSettleDuration = 0.84f;
+static const MDTBFloat3 kLookoutPressureAnchors[] = {
+    {-13.8f, kSidewalkHeight, 52.0f},
+    {-1.9f, kSidewalkHeight, 55.0f},
+    {9.4f, kSidewalkHeight, 49.7f},
+    {5.4f, kSidewalkHeight, 56.6f},
+};
 
 static const MDTBBlockDescriptor kBlockLayout[] = {
     {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateCivicRetail, MDTBWorldChunkWestGrid},
@@ -423,6 +475,33 @@ static uint32_t nearest_block_index_for_position(MDTBFloat3 position) {
     return best_index;
 }
 
+static uint32_t nearest_road_axis_for_position(MDTBFloat3 position) {
+    uint32_t best_axis = MDTBRoadAxisNorthSouth;
+    float best_distance_squared = 1000000.0f;
+
+    for (size_t index = 0u; index < g_road_link_count; ++index) {
+        const MDTBRoadLink *link = &g_road_links[index];
+        float link_distance_squared;
+
+        if (link->from_block_index >= g_block_count || link->to_block_index >= g_block_count) {
+            continue;
+        }
+
+        link_distance_squared = point_to_segment_distance_squared_xz(
+            position,
+            g_blocks[link->from_block_index].origin,
+            g_blocks[link->to_block_index].origin
+        );
+
+        if (link_distance_squared < best_distance_squared) {
+            best_distance_squared = link_distance_squared;
+            best_axis = link->axis;
+        }
+    }
+
+    return best_axis;
+}
+
 static const MDTBVehicleTuning *vehicle_tuning_for_kind(uint32_t kind) {
     static const MDTBVehicleTuning kSedanTuning = {
         16.5f, 5.4f, 3.1f, 7.2f, 3.4f, 1.80f, 1.18f, 1.72f,
@@ -577,6 +656,230 @@ static MDTBFloat3 combat_target_aim_position_for_kind(const MDTBEngineState *sta
     return position;
 }
 
+static MDTBFloat3 combat_target_shot_position_for_kind(const MDTBEngineState *state, uint32_t target_kind) {
+    MDTBFloat3 position = combat_target_position_for_kind(state, target_kind);
+
+    switch (target_kind) {
+        case MDTBCombatTargetDummy:
+            position.y += 1.02f;
+            break;
+        case MDTBCombatTargetLookout:
+            position.y += 1.10f;
+            break;
+        default:
+            break;
+    }
+
+    return position;
+}
+
+static MDTBFloat3 hostile_shot_origin(const MDTBEngineState *state) {
+    MDTBFloat3 origin = combat_target_shot_position_for_kind(state, MDTBCombatTargetLookout);
+    const MDTBFloat3 muzzle_right = make_float3(cosf(state->combat_hostile_heading), 0.0f, sinf(state->combat_hostile_heading));
+
+    origin.x += muzzle_right.x * 0.22f;
+    origin.z += muzzle_right.z * 0.22f;
+    origin.y += 0.08f;
+    return origin;
+}
+
+static MDTBFloat3 player_cover_position(const MDTBEngineState *state) {
+    MDTBFloat3 position = current_player_position(state);
+
+    if (state != NULL && state->traversal_mode == MDTBTraversalModeOnFoot) {
+        position.y = state->actor_ground_height + 1.02f;
+    }
+
+    return position;
+}
+
+static int segment_intersects_box(MDTBFloat3 start, MDTBFloat3 end, const MDTBBox *box, float padding, float *hit_t_out) {
+    const MDTBFloat3 direction = make_float3(end.x - start.x, end.y - start.y, end.z - start.z);
+    float t_min = 0.0f;
+    float t_max = 1.0f;
+
+    if (box == NULL) {
+        return 0;
+    }
+
+    const float start_values[3] = {start.x, start.y, start.z};
+    const float direction_values[3] = {direction.x, direction.y, direction.z};
+    const float center_values[3] = {box->center.x, box->center.y, box->center.z};
+    const float extent_values[3] = {box->half_extents.x + padding, box->half_extents.y + padding, box->half_extents.z + padding};
+
+    for (size_t axis = 0u; axis < 3u; ++axis) {
+        const float minimum = center_values[axis] - extent_values[axis];
+        const float maximum = center_values[axis] + extent_values[axis];
+
+        if (fabsf(direction_values[axis]) <= 0.0001f) {
+            if (start_values[axis] < minimum || start_values[axis] > maximum) {
+                return 0;
+            }
+            continue;
+        }
+
+        const float inverse = 1.0f / direction_values[axis];
+        float axis_t0 = (minimum - start_values[axis]) * inverse;
+        float axis_t1 = (maximum - start_values[axis]) * inverse;
+
+        if (axis_t0 > axis_t1) {
+            const float swap = axis_t0;
+            axis_t0 = axis_t1;
+            axis_t1 = swap;
+        }
+
+        t_min = fmaxf(t_min, axis_t0);
+        t_max = fminf(t_max, axis_t1);
+        if (t_min > t_max) {
+            return 0;
+        }
+    }
+
+    if (hit_t_out != NULL) {
+        *hit_t_out = t_min;
+    }
+
+    return 1;
+}
+
+static int segment_hits_world_cover(MDTBFloat3 start, MDTBFloat3 end, float padding, MDTBFloat3 *impact_out) {
+    float best_t = 1000.0f;
+    int found_hit = 0;
+
+    for (size_t index = 0u; index < g_collision_box_count; ++index) {
+        float hit_t = 0.0f;
+
+        if (!segment_intersects_box(start, end, &g_collision_boxes[index], padding, &hit_t)) {
+            continue;
+        }
+
+        if (hit_t < 0.0f || hit_t > 1.0f) {
+            continue;
+        }
+
+        if (!found_hit || hit_t < best_t) {
+            best_t = hit_t;
+            found_hit = 1;
+        }
+    }
+
+    if (found_hit && impact_out != NULL) {
+        impact_out->x = start.x + ((end.x - start.x) * best_t);
+        impact_out->y = start.y + ((end.y - start.y) * best_t);
+        impact_out->z = start.z + ((end.z - start.z) * best_t);
+    }
+
+    return found_hit;
+}
+
+static MDTBFloat3 lookout_anchor_position(uint32_t anchor_index) {
+    if (anchor_index >= (sizeof(kLookoutPressureAnchors) / sizeof(kLookoutPressureAnchors[0]))) {
+        return kLookoutBasePosition;
+    }
+
+    return kLookoutPressureAnchors[anchor_index];
+}
+
+static MDTBFloat3 witness_target_position(uint32_t witness_state) {
+    switch (witness_state) {
+        case MDTBWitnessStateInvestigate:
+            return kWitnessInvestigatePosition;
+        case MDTBWitnessStateFlee:
+        case MDTBWitnessStateCooldown:
+            return kWitnessFleePosition;
+        case MDTBWitnessStateIdle:
+        default:
+            return kWitnessBasePosition;
+    }
+}
+
+static MDTBFloat3 bystander_target_position(uint32_t bystander_state) {
+    switch (bystander_state) {
+        case MDTBWitnessStateInvestigate:
+            return kBystanderInvestigatePosition;
+        case MDTBWitnessStateFlee:
+        case MDTBWitnessStateCooldown:
+            return kBystanderFleePosition;
+        case MDTBWitnessStateIdle:
+        default:
+            return kBystanderBasePosition;
+    }
+}
+
+static void start_hostile_search(MDTBEngineState *state, MDTBFloat3 position, float duration) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->combat_hostile_search_position = position;
+    state->combat_hostile_search_timer = fmaxf(state->combat_hostile_search_timer, duration);
+    state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, 0.42f);
+    state->combat_hostile_attack_windup = 0.0f;
+}
+
+static void trigger_street_incident(MDTBEngineState *state, MDTBFloat3 position, float level, float duration) {
+    if (state == NULL) {
+        return;
+    }
+
+    position.y = kSidewalkHeight;
+    state->street_incident_position = position;
+    state->street_incident_level = fmaxf(state->street_incident_level, clampf(level, 0.0f, 1.0f));
+    state->street_incident_timer = fmaxf(state->street_incident_timer, duration);
+}
+
+static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state) {
+    const MDTBFloat3 player_position =
+        (state != NULL && state->combat_hostile_search_timer > 0.0f)
+        ? state->combat_hostile_search_position
+        : current_player_position(state);
+    const MDTBFloat3 player_cover =
+        (state != NULL && state->combat_hostile_search_timer > 0.0f)
+        ? make_float3(player_position.x, kSidewalkHeight + 1.02f, player_position.z)
+        : player_cover_position(state);
+    uint32_t best_anchor = 3u;
+    float best_score = -1000000.0f;
+
+    if (state == NULL) {
+        return 3u;
+    }
+
+    for (uint32_t index = 0u; index < (sizeof(kLookoutPressureAnchors) / sizeof(kLookoutPressureAnchors[0])); ++index) {
+        const MDTBFloat3 anchor = lookout_anchor_position(index);
+        const MDTBFloat3 anchor_shot_origin = make_float3(anchor.x, anchor.y + 1.18f, anchor.z);
+        const float player_distance = sqrtf(distance_squared_xz(anchor, player_position));
+        const float travel_distance = sqrtf(distance_squared_xz(anchor, state->combat_hostile_position));
+        const int clear_shot = segment_hits_world_cover(anchor_shot_origin, player_cover, 0.10f, NULL) == 0;
+        const int far_side = (player_position.x < -2.0f && anchor.x > 2.0f) || (player_position.x > 2.0f && anchor.x < -2.0f);
+        float score = clear_shot ? 4.8f : -0.9f;
+
+        if (position_overlaps_collision(anchor, 0.26f)) {
+            continue;
+        }
+
+        score += fminf(fabsf(anchor.x - player_position.x) * 0.06f, 1.1f);
+        score -= fabsf(anchor.z - player_position.z) * 0.04f;
+        score -= travel_distance * 0.12f;
+        score -= fabsf(player_distance - 9.0f) * 0.10f;
+        score += far_side ? 0.85f : 0.0f;
+
+        if (state->combat_player_in_cover != 0u && clear_shot) {
+            score += 0.8f;
+        }
+
+        if (index == state->combat_hostile_anchor_index) {
+            score += clear_shot ? 0.35f : -0.30f;
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best_anchor = index;
+        }
+    }
+
+    return best_anchor;
+}
+
 static float combat_target_distance_xz(const MDTBEngineState *state, uint32_t target_kind) {
     return distance_squared_xz(current_player_position(state), combat_target_position_for_kind(state, target_kind));
 }
@@ -610,6 +913,7 @@ static void update_combat_focus(MDTBEngineState *state) {
     float best_score = -1000000.0f;
     float best_distance = 0.0f;
     float best_alignment = 0.0f;
+    uint32_t best_occluded = 0u;
 
     if (state == NULL) {
         return;
@@ -618,6 +922,7 @@ static void update_combat_focus(MDTBEngineState *state) {
     state->combat_focus_target_kind = MDTBCombatTargetNone;
     state->combat_focus_distance = 0.0f;
     state->combat_focus_alignment = 0.0f;
+    state->combat_focus_occluded = 0u;
 
     if (state->traversal_mode != MDTBTraversalModeOnFoot) {
         return;
@@ -639,6 +944,7 @@ static void update_combat_focus(MDTBEngineState *state) {
             : ((forward.x * to_target.x) + (forward.y * to_target.y) + (forward.z * to_target.z)) / direction_length;
         const MDTBFloat3 to_target_flat = normalize_flat(make_float3(target.x - origin.x, 0.0f, target.z - origin.z));
         const float flat_alignment = dot_flat(forward_flat, to_target_flat);
+        const uint32_t occluded = segment_hits_world_cover(origin, combat_target_shot_position_for_kind(state, target_kind), 0.10f, NULL) ? 1u : 0u;
         float score;
 
         if (!combat_target_kind_is_active(state, target_kind)) {
@@ -656,6 +962,7 @@ static void update_combat_focus(MDTBEngineState *state) {
         score = alignment * 5.0f;
         score += flat_alignment * 1.6f;
         score -= distance * 0.10f;
+        score -= occluded != 0u ? 0.80f : 0.0f;
         if (target_kind == preferred_focus_target(state)) {
             score += 0.28f;
         }
@@ -665,12 +972,14 @@ static void update_combat_focus(MDTBEngineState *state) {
             best_kind = target_kind;
             best_distance = flat_distance;
             best_alignment = fmaxf(alignment, flat_alignment);
+            best_occluded = occluded;
         }
     }
 
     state->combat_focus_target_kind = best_kind;
     state->combat_focus_distance = best_kind == MDTBCombatTargetNone ? 0.0f : best_distance;
     state->combat_focus_alignment = best_kind == MDTBCombatTargetNone ? 0.0f : clampf(best_alignment, 0.0f, 1.0f);
+    state->combat_focus_occluded = best_kind == MDTBCombatTargetNone ? 0u : best_occluded;
 }
 
 static uint32_t select_melee_target(const MDTBEngineState *state) {
@@ -715,17 +1024,22 @@ static uint32_t select_melee_target(const MDTBEngineState *state) {
     return best_kind;
 }
 
-static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 origin, MDTBFloat3 *shot_end_out) {
+static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 origin, MDTBFloat3 *shot_end_out, int *shot_blocked_out) {
     MDTBFloat3 forward = view_forward(state->camera.yaw, state->camera.pitch);
     const float forward_length = sqrtf((forward.x * forward.x) + (forward.y * forward.y) + (forward.z * forward.z));
     MDTBFloat3 shot_end;
+    MDTBFloat3 cover_impact;
     MDTBFloat3 forward_flat;
     uint32_t target_kinds[2] = {MDTBCombatTargetDummy, MDTBCombatTargetLookout};
     uint32_t best_kind = MDTBCombatTargetNone;
     float best_score = 1000000.0f;
+    int default_path_blocked;
 
     if (shot_end_out != NULL) {
         *shot_end_out = origin;
+    }
+    if (shot_blocked_out != NULL) {
+        *shot_blocked_out = 0;
     }
 
     if (state == NULL || state->traversal_mode != MDTBTraversalModeOnFoot) {
@@ -753,9 +1067,14 @@ static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 o
         *shot_end_out = shot_end;
     }
 
+    default_path_blocked = segment_hits_world_cover(origin, shot_end, 0.10f, &cover_impact);
+    if (default_path_blocked && shot_end_out != NULL) {
+        *shot_end_out = cover_impact;
+    }
+
     for (size_t index = 0u; index < 2u; ++index) {
         const uint32_t target_kind = target_kinds[index];
-        const MDTBFloat3 target = combat_target_aim_position_for_kind(state, target_kind);
+        const MDTBFloat3 target = combat_target_shot_position_for_kind(state, target_kind);
         const MDTBFloat3 to_target_flat = normalize_flat(make_float3(target.x - origin.x, 0.0f, target.z - origin.z));
         const float flat_alignment = dot_flat(forward_flat, to_target_flat);
         const float impact_radius = target_kind == MDTBCombatTargetLookout ? 0.78f : 0.85f;
@@ -764,6 +1083,10 @@ static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 o
         float score;
 
         if (!combat_target_kind_is_active(state, target_kind)) {
+            continue;
+        }
+
+        if (segment_hits_world_cover(origin, target, 0.10f, NULL)) {
             continue;
         }
 
@@ -787,6 +1110,10 @@ static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 o
         }
     }
 
+    if (best_kind == MDTBCombatTargetNone && default_path_blocked && shot_blocked_out != NULL) {
+        *shot_blocked_out = 1;
+    }
+
     return best_kind;
 }
 
@@ -805,6 +1132,8 @@ static void refresh_combat_proximity(MDTBEngineState *state) {
     state->combat_focus_target_kind = MDTBCombatTargetNone;
     state->combat_focus_distance = 0.0f;
     state->combat_focus_alignment = 0.0f;
+    state->combat_focus_occluded = 0u;
+    state->combat_player_in_cover = 0u;
 
     if (state->traversal_mode != MDTBTraversalModeOnFoot) {
         return;
@@ -831,6 +1160,9 @@ static void refresh_combat_proximity(MDTBEngineState *state) {
     }
 
     update_combat_focus(state);
+    state->combat_player_in_cover =
+        combat_target_kind_is_active(state, MDTBCombatTargetLookout) &&
+        segment_hits_world_cover(hostile_shot_origin(state), player_cover_position(state), 0.10f, NULL) ? 1u : 0u;
 }
 
 static void clear_melee_attack(MDTBEngineState *state) {
@@ -852,6 +1184,18 @@ static void clear_firearm_last_shot(MDTBEngineState *state) {
     state->firearm_last_shot_to = make_float3(0.0f, 0.0f, 0.0f);
     state->firearm_last_shot_timer = 0.0f;
     state->firearm_last_shot_hit = 0u;
+    state->firearm_last_shot_blocked = 0u;
+}
+
+static void clear_hostile_last_shot(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->combat_hostile_last_shot_from = make_float3(0.0f, 0.0f, 0.0f);
+    state->combat_hostile_last_shot_to = make_float3(0.0f, 0.0f, 0.0f);
+    state->combat_hostile_last_shot_timer = 0.0f;
+    state->combat_hostile_last_shot_hit = 0u;
 }
 
 static void cancel_firearm_reload(MDTBEngineState *state) {
@@ -921,6 +1265,10 @@ static void apply_damage_to_target(MDTBEngineState *state, uint32_t target_kind,
                 state->combat_hostile_health > 0.0f ? live_reaction : down_reaction
             );
             state->combat_hostile_alert = state->combat_hostile_health > 0.0f ? 1.0f : 0.0f;
+            state->combat_hostile_attack_windup = 0.0f;
+            state->combat_hostile_attack_cooldown = fmaxf(state->combat_hostile_attack_cooldown, 0.48f);
+            state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, 0.32f);
+            state->combat_hostile_reposition_timer = 0.0f;
             if (state->combat_hostile_health <= 0.0f) {
                 state->combat_hostile_reset_timer = kLookoutRespawnDelay;
             }
@@ -930,6 +1278,68 @@ static void apply_damage_to_target(MDTBEngineState *state, uint32_t target_kind,
     }
 
     state->combat_last_hit_target_kind = target_kind;
+}
+
+static void reset_combat_encounter(MDTBEngineState *state) {
+    if (state == NULL || state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return;
+    }
+
+    state->actor_position = kCombatLaneResetPosition;
+    state->actor_ground_height = kCombatLaneResetPosition.y;
+    state->actor_velocity = make_float3(0.0f, 0.0f, 0.0f);
+    state->player_health = kPlayerMaxHealth;
+    state->player_recovery_delay = kPlayerRecoveryDelay;
+    state->player_damage_pulse = fmaxf(state->player_damage_pulse, 1.0f);
+    state->player_reset_timer = kPlayerResetGraceDuration;
+    state->combat_target_health = kPracticeDummyMaxHealth;
+    state->combat_target_reaction = 0.0f;
+    state->combat_target_reset_timer = 0.0f;
+    state->combat_hostile_health = kLookoutMaxHealth;
+    state->combat_hostile_reaction = 0.0f;
+    state->combat_hostile_reset_timer = 0.0f;
+    state->combat_hostile_alert = 0.0f;
+    state->combat_hostile_anchor_index = 3u;
+    state->combat_hostile_position = lookout_anchor_position(state->combat_hostile_anchor_index);
+    state->combat_hostile_heading = kPi;
+    state->combat_hostile_reposition_timer = 0.0f;
+    state->combat_hostile_reacquire_timer = kLookoutVehicleReacquireDuration;
+    state->combat_hostile_search_position = kCombatLaneResetPosition;
+    state->combat_hostile_search_timer = 0.0f;
+    state->combat_hostile_attack_cooldown = 0.45f;
+    state->combat_hostile_attack_windup = 0.0f;
+    state->witness_position = kWitnessFleePosition;
+    state->witness_heading = -0.30f;
+    state->witness_state = MDTBWitnessStateCooldown;
+    state->witness_alert = 1.0f;
+    state->witness_state_timer = kWitnessCooldownDuration;
+    state->bystander_position = kBystanderFleePosition;
+    state->bystander_heading = 0.82f;
+    state->bystander_state = MDTBWitnessStateCooldown;
+    state->bystander_alert = 0.84f;
+    state->bystander_state_timer = kBystanderCooldownDuration;
+    state->street_incident_position = kWitnessFleePosition;
+    state->street_incident_level = 0.48f;
+    state->street_incident_timer = kStreetIncidentSettleDuration;
+    clear_melee_attack(state);
+    cancel_firearm_reload(state);
+    clear_hostile_last_shot(state);
+}
+
+static void apply_damage_to_player(MDTBEngineState *state, float damage) {
+    if (state == NULL ||
+        state->traversal_mode != MDTBTraversalModeOnFoot ||
+        state->player_reset_timer > 0.0f) {
+        return;
+    }
+
+    state->player_health = fmaxf(0.0f, state->player_health - damage);
+    state->player_recovery_delay = kPlayerRecoveryDelay;
+    state->player_damage_pulse = fmaxf(state->player_damage_pulse, 1.0f);
+
+    if (state->player_health <= 0.0f) {
+        reset_combat_encounter(state);
+    }
 }
 
 static void pickup_nearest_weapon(MDTBEngineState *state) {
@@ -1011,6 +1421,7 @@ static void fire_pistol(MDTBEngineState *state) {
     MDTBFloat3 shot_origin;
     MDTBFloat3 shot_end;
     MDTBFloat3 muzzle_right;
+    int shot_blocked = 0;
     uint32_t hit_target_kind;
 
     if (state == NULL ||
@@ -1039,11 +1450,18 @@ static void fire_pistol(MDTBEngineState *state) {
     shot_origin.z += muzzle_right.z * 0.14f;
     shot_origin.y -= 0.04f;
 
-    hit_target_kind = select_firearm_target(state, shot_origin, &shot_end);
+    hit_target_kind = select_firearm_target(state, shot_origin, &shot_end, &shot_blocked);
     state->firearm_last_shot_from = shot_origin;
     state->firearm_last_shot_to = shot_end;
     state->firearm_last_shot_timer = kPistolShotFlashDuration;
     state->firearm_last_shot_hit = hit_target_kind != MDTBCombatTargetNone ? 1u : 0u;
+    state->firearm_last_shot_blocked = shot_blocked != 0 ? 1u : 0u;
+    trigger_street_incident(
+        state,
+        shot_end,
+        shot_blocked != 0 ? 0.58f : (hit_target_kind == MDTBCombatTargetLookout ? 0.80f : 0.70f),
+        kStreetIncidentNoticeDuration
+    );
 
     if (hit_target_kind != MDTBCombatTargetNone) {
         apply_damage_to_target(
@@ -1056,20 +1474,91 @@ static void fire_pistol(MDTBEngineState *state) {
     }
 }
 
+static void fire_lookout_shot(MDTBEngineState *state) {
+    MDTBFloat3 shot_origin;
+    MDTBFloat3 shot_target;
+    MDTBFloat3 shot_end;
+
+    if (state == NULL ||
+        state->traversal_mode != MDTBTraversalModeOnFoot ||
+        !combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+        return;
+    }
+
+    shot_origin = hostile_shot_origin(state);
+    shot_target = player_cover_position(state);
+
+    if (segment_hits_world_cover(shot_origin, shot_target, 0.10f, &shot_end)) {
+        state->combat_hostile_last_shot_hit = 0u;
+        state->combat_hostile_attack_cooldown = kLookoutAttackBlockedCooldown;
+        state->combat_hostile_reposition_timer = 0.0f;
+        start_hostile_search(state, shot_target, kLookoutSearchDuration * 0.72f);
+        trigger_street_incident(state, shot_end, 0.68f, kStreetIncidentSearchDuration);
+    } else {
+        shot_end = shot_target;
+        state->combat_hostile_last_shot_hit = 1u;
+        state->combat_hostile_attack_cooldown = kLookoutAttackCooldown;
+        state->combat_hostile_reposition_timer = kLookoutRepositionRetargetDelay;
+        apply_damage_to_player(state, kLookoutShotDamage);
+        trigger_street_incident(state, shot_end, 0.84f, kStreetIncidentSearchDuration);
+    }
+
+    state->combat_hostile_last_shot_from = shot_origin;
+    state->combat_hostile_last_shot_to = shot_end;
+    state->combat_hostile_last_shot_timer = kLookoutShotFlashDuration;
+    state->combat_hostile_attack_windup = 0.0f;
+    state->combat_hostile_alert = 1.0f;
+    state->combat_hostile_reacquire_timer = 0.28f;
+}
+
 static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack, int wants_reload) {
+    const float previous_search_timer = state != NULL ? state->combat_hostile_search_timer : 0.0f;
+
     if (state == NULL) {
         return;
     }
 
     state->combat_target_reaction = approachf(state->combat_target_reaction, 0.0f, 7.0f, dt);
     state->combat_hostile_reaction = approachf(state->combat_hostile_reaction, 0.0f, 7.6f, dt);
+    state->player_damage_pulse = approachf(state->player_damage_pulse, 0.0f, 7.8f, dt);
     state->firearm_cooldown_timer = fmaxf(state->firearm_cooldown_timer - dt, 0.0f);
+    state->combat_hostile_attack_cooldown = fmaxf(state->combat_hostile_attack_cooldown - dt, 0.0f);
+    state->combat_hostile_reposition_timer = fmaxf(state->combat_hostile_reposition_timer - dt, 0.0f);
+    state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer - dt, 0.0f);
+    state->combat_hostile_search_timer = fmaxf(state->combat_hostile_search_timer - dt, 0.0f);
+    state->player_recovery_delay = fmaxf(state->player_recovery_delay - dt, 0.0f);
+    state->player_reset_timer = fmaxf(state->player_reset_timer - dt, 0.0f);
+    state->witness_state_timer = fmaxf(state->witness_state_timer - dt, 0.0f);
+    state->witness_alert = approachf(state->witness_alert, 0.0f, 1.6f, dt);
+    state->bystander_state_timer = fmaxf(state->bystander_state_timer - dt, 0.0f);
+    state->bystander_alert = approachf(state->bystander_alert, 0.0f, 1.7f, dt);
+    state->street_incident_timer = fmaxf(state->street_incident_timer - dt, 0.0f);
+    state->street_incident_level = approachf(
+        state->street_incident_level,
+        0.0f,
+        state->street_incident_timer > 0.0f ? 0.24f : 1.10f,
+        dt
+    );
 
     if (state->firearm_last_shot_timer > 0.0f) {
         state->firearm_last_shot_timer = fmaxf(state->firearm_last_shot_timer - dt, 0.0f);
         if (state->firearm_last_shot_timer <= 0.0f) {
             state->firearm_last_shot_hit = 0u;
+            state->firearm_last_shot_blocked = 0u;
         }
+    }
+
+    if (state->combat_hostile_last_shot_timer > 0.0f) {
+        state->combat_hostile_last_shot_timer = fmaxf(state->combat_hostile_last_shot_timer - dt, 0.0f);
+        if (state->combat_hostile_last_shot_timer <= 0.0f) {
+            state->combat_hostile_last_shot_hit = 0u;
+        }
+    }
+
+    if (state->player_health < kPlayerMaxHealth &&
+        state->player_recovery_delay <= 0.0f &&
+        state->player_reset_timer <= 0.0f) {
+        state->player_health = fminf(state->player_health + (kPlayerRecoveryRate * dt), kPlayerMaxHealth);
     }
 
     if (state->combat_target_reset_timer > 0.0f) {
@@ -1086,8 +1575,18 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
             state->combat_hostile_health = kLookoutMaxHealth;
             state->combat_hostile_reaction = 0.0f;
             state->combat_hostile_alert = 0.0f;
-            state->combat_hostile_position = kLookoutBasePosition;
+            state->combat_hostile_anchor_index = 3u;
+            state->combat_hostile_position = lookout_anchor_position(state->combat_hostile_anchor_index);
             state->combat_hostile_heading = kPi;
+            state->combat_hostile_reposition_timer = 0.0f;
+            state->combat_hostile_reacquire_timer = kLookoutVehicleReacquireDuration;
+            state->combat_hostile_search_position = kCombatLaneResetPosition;
+            state->combat_hostile_search_timer = 0.0f;
+            state->combat_hostile_attack_cooldown = 0.0f;
+            state->combat_hostile_attack_windup = 0.0f;
+            state->street_incident_position = kCombatLaneResetPosition;
+            state->street_incident_level = 0.0f;
+            state->street_incident_timer = 0.0f;
         }
     }
 
@@ -1098,28 +1597,221 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
         }
     }
 
+    {
+        const MDTBFloat3 player_position = current_player_position(state);
+        const float player_distance_squared = distance_squared_xz(player_position, state->witness_position);
+        const float hostile_distance_squared = distance_squared_xz(state->combat_hostile_position, state->witness_position);
+        const float threat_distance_squared = fminf(player_distance_squared, hostile_distance_squared);
+        const int firearm_noise = state->firearm_last_shot_timer > 0.0f || state->combat_hostile_last_shot_timer > 0.0f;
+        const int melee_noise = state->melee_attack_connected != 0 && state->melee_attack_phase != MDTBMeleeAttackIdle;
+        const int notice_noise = (firearm_noise || melee_noise) && threat_distance_squared <= (kWitnessNoticeRadius * kWitnessNoticeRadius);
+        const int panic_noise =
+            (firearm_noise || state->combat_hostile_attack_windup > 0.0f || state->player_health < kPlayerMaxHealth) &&
+            threat_distance_squared <= (kWitnessPanicRadius * kWitnessPanicRadius);
+        MDTBFloat3 desired_witness = witness_target_position(state->witness_state);
+        MDTBFloat3 desired_heading_target = player_position;
+        float witness_speed = 3.6f;
+
+        switch (state->witness_state) {
+            case MDTBWitnessStateIdle:
+                if (notice_noise) {
+                    state->witness_state = MDTBWitnessStateInvestigate;
+                    state->witness_state_timer = kWitnessInvestigateDuration;
+                    state->witness_alert = fmaxf(state->witness_alert, firearm_noise ? 0.82f : 0.54f);
+                    trigger_street_incident(
+                        state,
+                        state->witness_position,
+                        firearm_noise ? 0.42f : 0.28f,
+                        kStreetIncidentNoticeDuration
+                    );
+                }
+                desired_witness = kWitnessBasePosition;
+                break;
+            case MDTBWitnessStateInvestigate:
+                desired_witness = kWitnessInvestigatePosition;
+                witness_speed = 4.2f;
+                if (panic_noise || state->combat_hostile_search_timer > 0.0f) {
+                    state->witness_state = MDTBWitnessStateFlee;
+                    state->witness_state_timer = kWitnessFleeDuration;
+                    state->witness_alert = 1.0f;
+                    start_hostile_search(state, player_position, kLookoutSearchDuration);
+                    trigger_street_incident(state, player_position, 1.0f, kStreetIncidentFleeDuration);
+                    desired_witness = kWitnessFleePosition;
+                } else if (state->witness_state_timer <= 0.0f && !notice_noise) {
+                    state->witness_state = MDTBWitnessStateCooldown;
+                    state->witness_state_timer = kWitnessCooldownDuration * 0.5f;
+                    desired_witness = kWitnessFleePosition;
+                }
+                break;
+            case MDTBWitnessStateFlee:
+                desired_witness = kWitnessFleePosition;
+                witness_speed = 6.2f;
+                desired_heading_target = desired_witness;
+                if (state->witness_state_timer <= 0.0f &&
+                    distance_squared_xz(state->witness_position, kWitnessFleePosition) <= (1.6f * 1.6f)) {
+                    state->witness_state = MDTBWitnessStateCooldown;
+                    state->witness_state_timer = kWitnessCooldownDuration;
+                }
+                break;
+            case MDTBWitnessStateCooldown:
+            default:
+                desired_witness = state->witness_state_timer > (kWitnessCooldownDuration * 0.45f)
+                    ? kWitnessFleePosition
+                    : kWitnessBasePosition;
+                witness_speed = 3.2f;
+                if (state->witness_state_timer <= 0.0f &&
+                    distance_squared_xz(state->witness_position, kWitnessBasePosition) <= (2.0f * 2.0f)) {
+                    state->witness_state = MDTBWitnessStateIdle;
+                    state->witness_alert = 0.0f;
+                    desired_witness = kWitnessBasePosition;
+                }
+                break;
+        }
+
+        state->witness_position = approach_float3(state->witness_position, desired_witness, witness_speed, dt);
+        const MDTBFloat3 to_heading_target = make_float3(
+            desired_heading_target.x - state->witness_position.x,
+            0.0f,
+            desired_heading_target.z - state->witness_position.z
+        );
+        if (fabsf(to_heading_target.x) > 0.001f || fabsf(to_heading_target.z) > 0.001f) {
+            state->witness_heading = approach_angle(
+                state->witness_heading,
+                atan2f(to_heading_target.x, -to_heading_target.z),
+                7.2f,
+                dt
+            );
+        }
+    }
+
+    {
+        const MDTBFloat3 incident_position = state->street_incident_position;
+        const float bystander_incident_distance_squared = distance_squared_xz(incident_position, state->bystander_position);
+        const int incident_active = state->street_incident_timer > 0.0f && state->street_incident_level > 0.12f;
+        const int notice_incident =
+            incident_active &&
+            bystander_incident_distance_squared <= (kBystanderNoticeRadius * kBystanderNoticeRadius) &&
+            (state->street_incident_level >= 0.18f ||
+             state->witness_state != MDTBWitnessStateIdle);
+        const int panic_incident =
+            incident_active &&
+            bystander_incident_distance_squared <= (kBystanderPanicRadius * kBystanderPanicRadius) &&
+            (state->street_incident_level >= 0.48f ||
+             state->witness_state == MDTBWitnessStateFlee ||
+             state->combat_hostile_search_timer > 0.0f);
+        MDTBFloat3 desired_bystander = bystander_target_position(state->bystander_state);
+        MDTBFloat3 desired_heading_target = incident_position;
+        float bystander_speed = 3.4f;
+
+        switch (state->bystander_state) {
+            case MDTBWitnessStateIdle:
+                if (notice_incident) {
+                    state->bystander_state = MDTBWitnessStateInvestigate;
+                    state->bystander_state_timer = kBystanderInvestigateDuration;
+                    state->bystander_alert = fmaxf(state->bystander_alert, 0.34f + state->street_incident_level * 0.28f);
+                    trigger_street_incident(state, state->bystander_position, 0.20f, kStreetIncidentNoticeDuration * 0.72f);
+                }
+                desired_bystander = kBystanderBasePosition;
+                break;
+            case MDTBWitnessStateInvestigate:
+                desired_bystander = kBystanderInvestigatePosition;
+                bystander_speed = 4.0f;
+                if (panic_incident) {
+                    state->bystander_state = MDTBWitnessStateFlee;
+                    state->bystander_state_timer = kBystanderFleeDuration;
+                    state->bystander_alert = 1.0f;
+                    trigger_street_incident(state, state->bystander_position, 0.82f, kStreetIncidentFleeDuration * 0.85f);
+                    desired_bystander = kBystanderFleePosition;
+                    desired_heading_target = desired_bystander;
+                } else if (state->bystander_state_timer <= 0.0f && !notice_incident) {
+                    state->bystander_state = MDTBWitnessStateCooldown;
+                    state->bystander_state_timer = kBystanderCooldownDuration * 0.45f;
+                    desired_bystander = kBystanderFleePosition;
+                }
+                break;
+            case MDTBWitnessStateFlee:
+                desired_bystander = kBystanderFleePosition;
+                desired_heading_target = desired_bystander;
+                bystander_speed = 6.4f;
+                if (state->bystander_state_timer <= 0.0f &&
+                    distance_squared_xz(state->bystander_position, kBystanderFleePosition) <= (1.9f * 1.9f)) {
+                    state->bystander_state = MDTBWitnessStateCooldown;
+                    state->bystander_state_timer = kBystanderCooldownDuration;
+                }
+                break;
+            case MDTBWitnessStateCooldown:
+            default:
+                desired_bystander = state->bystander_state_timer > (kBystanderCooldownDuration * 0.42f)
+                    ? kBystanderFleePosition
+                    : kBystanderBasePosition;
+                bystander_speed = 3.3f;
+                desired_heading_target = desired_bystander;
+                if (state->bystander_state_timer <= 0.0f &&
+                    distance_squared_xz(state->bystander_position, kBystanderBasePosition) <= (2.1f * 2.1f)) {
+                    state->bystander_state = MDTBWitnessStateIdle;
+                    state->bystander_alert = 0.0f;
+                    desired_bystander = kBystanderBasePosition;
+                }
+                break;
+        }
+
+        state->bystander_position = approach_float3(state->bystander_position, desired_bystander, bystander_speed, dt);
+        {
+            const MDTBFloat3 to_heading_target = make_float3(
+                desired_heading_target.x - state->bystander_position.x,
+                0.0f,
+                desired_heading_target.z - state->bystander_position.z
+            );
+            if (fabsf(to_heading_target.x) > 0.001f || fabsf(to_heading_target.z) > 0.001f) {
+                state->bystander_heading = approach_angle(
+                    state->bystander_heading,
+                    atan2f(to_heading_target.x, -to_heading_target.z),
+                    7.0f,
+                    dt
+                );
+            }
+        }
+    }
+
     if (state->traversal_mode != MDTBTraversalModeOnFoot) {
+        if (combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+            const MDTBFloat3 retreat_anchor = lookout_anchor_position(3u);
+            state->combat_hostile_anchor_index = 3u;
+            state->combat_hostile_reposition_timer = 0.0f;
+            start_hostile_search(state, state->combat_hostile_search_position, kLookoutVehicleReacquireDuration);
+            state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutVehicleReacquireDuration);
+            state->combat_hostile_position = approach_float3(state->combat_hostile_position, retreat_anchor, 4.8f, dt);
+            state->combat_hostile_heading = approach_angle(state->combat_hostile_heading, kPi, 6.2f, dt);
+            state->combat_hostile_alert = approachf(state->combat_hostile_alert, 0.20f, 4.5f, dt);
+            trigger_street_incident(state, state->combat_hostile_search_position, 0.58f, kStreetIncidentSearchDuration);
+        }
+
+        if (state->player_recovery_delay > 0.0f && state->combat_hostile_search_timer > 0.0f) {
+            state->player_recovery_delay = fmaxf(state->player_recovery_delay - dt * 0.75f, 0.0f);
+        }
         clear_melee_attack(state);
         cancel_firearm_reload(state);
+        state->combat_hostile_attack_windup = 0.0f;
         refresh_combat_proximity(state);
         return;
     }
 
     if (combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
         const MDTBFloat3 actor_position = current_player_position(state);
+        const MDTBFloat3 actor_cover_position = player_cover_position(state);
+        const uint32_t chosen_anchor = choose_lookout_pressure_anchor(state);
+        const MDTBFloat3 current_shot_origin = hostile_shot_origin(state);
+        const int current_angle_blocked = segment_hits_world_cover(current_shot_origin, actor_cover_position, 0.10f, NULL) != 0;
+        const int wants_angle_change =
+            state->combat_player_in_cover != 0u ||
+            current_angle_blocked ||
+            state->combat_hostile_reacquire_timer > 0.0f ||
+            (state->combat_hostile_attack_cooldown > 0.35f && state->combat_hostile_alert >= 0.78f);
         const float alert_distance_squared = distance_squared_xz(actor_position, state->combat_hostile_position);
-        const float patrol_phase = state->elapsed_time * 0.92f;
-        const float patrol_depth_phase = state->elapsed_time * 1.56f;
         const float alert_target =
             (alert_distance_squared <= (kLookoutAlertDistance * kLookoutAlertDistance) ||
              state->combat_focus_target_kind == MDTBCombatTargetLookout) ? 1.0f : 0.18f;
-        const float patrol_scale = 1.0f - (state->combat_hostile_alert * 0.58f);
-        const float step_toward_player = clampf(state->combat_hostile_alert, 0.0f, 0.9f);
-        MDTBFloat3 desired_position = make_float3(
-            kLookoutBasePosition.x + sinf(patrol_phase) * 3.1f * patrol_scale,
-            kLookoutBasePosition.y,
-            kLookoutBasePosition.z + cosf(patrol_depth_phase) * 0.9f
-        );
+        MDTBFloat3 desired_position;
         const MDTBFloat3 to_actor = make_float3(
             actor_position.x - state->combat_hostile_position.x,
             0.0f,
@@ -1128,22 +1820,93 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
         float desired_heading = state->combat_hostile_heading;
 
         state->combat_hostile_alert = approachf(state->combat_hostile_alert, alert_target, 3.8f, dt);
-        desired_position.x += normalize_flat(to_actor).x * step_toward_player * 0.9f;
-        desired_position.z += normalize_flat(to_actor).z * step_toward_player * 0.9f;
-        state->combat_hostile_position = approach_float3(state->combat_hostile_position, desired_position, 5.0f, dt);
+
+        if (state->combat_player_in_cover != 0u || current_angle_blocked) {
+            start_hostile_search(state, actor_position, kLookoutSearchDuration * 0.62f);
+            trigger_street_incident(state, actor_position, 0.52f, kStreetIncidentSearchDuration);
+        } else {
+            state->combat_hostile_search_position = actor_position;
+            if (state->combat_hostile_search_timer > 0.0f) {
+                state->combat_hostile_search_timer = fmaxf(state->combat_hostile_search_timer - dt * 2.6f, 0.0f);
+            }
+        }
+
+        if (wants_angle_change &&
+            state->combat_hostile_reposition_timer <= 0.0f &&
+            chosen_anchor != state->combat_hostile_anchor_index) {
+            state->combat_hostile_anchor_index = chosen_anchor;
+            state->combat_hostile_reposition_timer = kLookoutRepositionRetargetDelay;
+            state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutReacquireDuration);
+            state->combat_hostile_attack_windup = 0.0f;
+        }
+
+        desired_position = lookout_anchor_position(state->combat_hostile_anchor_index);
+        desired_position.x += sinf(state->elapsed_time * 1.2f + (float)state->combat_hostile_anchor_index) * 0.14f * state->combat_hostile_alert;
+        desired_position.z += cosf(state->elapsed_time * 1.5f + (float)state->combat_hostile_anchor_index) * 0.10f * state->combat_hostile_alert;
+        state->combat_hostile_position = approach_float3(
+            state->combat_hostile_position,
+            desired_position,
+            state->combat_hostile_reacquire_timer > 0.0f ? 7.0f : 5.4f,
+            dt
+        );
 
         if (fabsf(to_actor.x) > 0.001f || fabsf(to_actor.z) > 0.001f) {
             desired_heading = atan2f(to_actor.x, -to_actor.z);
-        } else {
-            desired_heading = sinf(patrol_phase) * 0.16f;
         }
 
         state->combat_hostile_heading = approach_angle(state->combat_hostile_heading, desired_heading, 8.4f, dt);
+
+        if (state->combat_hostile_search_timer > 0.0f &&
+            state->player_recovery_delay > 0.0f &&
+            (state->combat_player_in_cover != 0u || current_angle_blocked)) {
+            state->player_recovery_delay = fmaxf(state->player_recovery_delay - dt * 0.65f, 0.0f);
+        }
     } else {
         state->combat_hostile_alert = approachf(state->combat_hostile_alert, 0.0f, 6.0f, dt);
+        state->combat_hostile_attack_windup = 0.0f;
+    }
+
+    if (previous_search_timer > 0.0f &&
+        state->combat_hostile_search_timer <= 0.0f &&
+        combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+        state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutSearchSettleDuration);
+        state->combat_hostile_attack_cooldown = fmaxf(state->combat_hostile_attack_cooldown, 0.32f);
+        trigger_street_incident(
+            state,
+            state->combat_hostile_search_position,
+            fmaxf(state->street_incident_level, 0.32f),
+            kStreetIncidentSettleDuration
+        );
     }
 
     refresh_combat_proximity(state);
+
+    if (combat_target_kind_is_active(state, MDTBCombatTargetLookout) &&
+        state->player_reset_timer <= 0.0f) {
+        const MDTBFloat3 player_position = current_player_position(state);
+        const float player_distance_squared = distance_squared_xz(player_position, state->combat_hostile_position);
+        const float anchor_error = sqrtf(distance_squared_xz(state->combat_hostile_position, lookout_anchor_position(state->combat_hostile_anchor_index)));
+        const int shot_blocked = segment_hits_world_cover(hostile_shot_origin(state), player_cover_position(state), 0.10f, NULL) != 0;
+
+        if (player_distance_squared <= (kLookoutAttackRange * kLookoutAttackRange) &&
+            state->combat_hostile_alert >= 0.55f &&
+            anchor_error <= 1.25f &&
+            !shot_blocked &&
+            state->combat_hostile_search_timer <= 0.0f &&
+            state->combat_hostile_reacquire_timer <= 0.0f &&
+            state->combat_hostile_attack_windup <= 0.0f &&
+            state->combat_hostile_attack_cooldown <= 0.0f) {
+            state->combat_hostile_attack_windup = kLookoutAttackWindupDuration;
+        }
+    }
+
+    if (state->combat_hostile_attack_windup > 0.0f) {
+        state->combat_hostile_attack_windup = fmaxf(state->combat_hostile_attack_windup - dt, 0.0f);
+        state->combat_hostile_reaction = fmaxf(state->combat_hostile_reaction, 0.34f);
+        if (state->combat_hostile_attack_windup <= 0.0f) {
+            fire_lookout_shot(state);
+        }
+    }
 
     if (wants_reload) {
         start_firearm_reload(state);
@@ -1616,6 +2379,61 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
             MDTBTrafficOccupancyReasonStopZone,
             stop_strength
         );
+    }
+
+    if (state->street_incident_timer > 0.0f && state->street_incident_level > 0.08f) {
+        const MDTBFloat3 incident_position = state->street_incident_position;
+        const uint32_t incident_axis = nearest_road_axis_for_position(incident_position);
+        const uint32_t incident_block_index = nearest_block_index_for_position(incident_position);
+        const float incident_radius = 2.8f + state->street_incident_level * 3.4f;
+        const float incident_strength = 0.46f + state->street_incident_level * 0.44f;
+
+        push_traffic_occupancy(
+            incident_position,
+            incident_radius,
+            incident_block_index,
+            incident_axis,
+            MDTBTrafficOccupancyReasonIncident,
+            incident_strength
+        );
+
+        if (state->combat_hostile_search_timer > 0.0f || state->witness_state == MDTBWitnessStateFlee) {
+            const MDTBFloat3 spill_position = make_float3(
+                (incident_position.x + state->witness_position.x) * 0.5f,
+                incident_position.y,
+                (incident_position.z + state->witness_position.z) * 0.5f
+            );
+            push_traffic_occupancy(
+                spill_position,
+                2.0f + state->street_incident_level * 2.2f,
+                nearest_block_index_for_position(spill_position),
+                nearest_road_axis_for_position(spill_position),
+                MDTBTrafficOccupancyReasonIncident,
+                0.34f + state->street_incident_level * 0.34f
+            );
+        }
+
+        if (state->witness_state != MDTBWitnessStateIdle) {
+            push_traffic_occupancy(
+                state->witness_position,
+                1.6f + state->witness_alert * 1.4f,
+                nearest_block_index_for_position(state->witness_position),
+                nearest_road_axis_for_position(state->witness_position),
+                MDTBTrafficOccupancyReasonIncident,
+                0.22f + state->witness_alert * 0.34f
+            );
+        }
+
+        if (state->bystander_state != MDTBWitnessStateIdle) {
+            push_traffic_occupancy(
+                state->bystander_position,
+                1.8f + state->bystander_alert * 1.8f,
+                nearest_block_index_for_position(state->bystander_position),
+                nearest_road_axis_for_position(state->bystander_position),
+                MDTBTrafficOccupancyReasonIncident,
+                0.26f + state->bystander_alert * 0.38f
+            );
+        }
     }
 }
 
@@ -2830,6 +3648,18 @@ static void build_combat_sandbox_props(void) {
         1
     );
     push_prop(
+        make_float3(9.8f, 0.54f, 49.7f),
+        make_float3(1.55f, 0.54f, 0.34f),
+        cover_color,
+        1
+    );
+    push_prop(
+        make_float3(-15.0f, 1.02f, 53.4f),
+        make_float3(0.12f, 1.02f, 1.84f),
+        make_float4(0.30f, 0.31f, 0.35f, 1.0f),
+        1
+    );
+    push_prop(
         make_float3(-4.0f, 0.18f, 58.9f),
         make_float3(9.2f, 0.18f, 0.34f),
         slab_color,
@@ -2851,6 +3681,7 @@ static void build_combat_sandbox_props(void) {
     push_planter(-8.1f, 47.8f, 0.54f);
     push_planter(2.4f, 48.7f, 0.58f);
     push_planter(8.5f, 56.2f, 0.50f);
+    push_planter(-12.6f, 49.4f, 0.50f);
 
     push_bollard(-15.8f, 45.2f, 0.92f);
     push_bollard(-11.8f, 45.4f, 0.92f);
@@ -3119,6 +3950,7 @@ static void sync_active_vehicle_anchor(const MDTBEngineState *state) {
 static void enter_vehicle_from_anchor(MDTBEngineState *state, uint32_t anchor_index) {
     MDTBGroundInfo ground;
     const MDTBVehicleTuning *tuning;
+    const MDTBFloat3 last_known_position = state != NULL ? state->actor_position : make_float3(0.0f, 0.0f, 0.0f);
 
     if (state == NULL || anchor_index >= g_vehicle_anchor_count) {
         return;
@@ -3146,6 +3978,10 @@ static void enter_vehicle_from_anchor(MDTBEngineState *state, uint32_t anchor_in
     state->active_vehicle_collision_pulse = 0.0f;
     state->active_vehicle_recovery = 0.0f;
     state->active_vehicle_steer_visual = 0.0f;
+    state->combat_hostile_attack_windup = 0.0f;
+    start_hostile_search(state, last_known_position, kLookoutSearchDuration);
+    state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutVehicleReacquireDuration);
+    trigger_street_incident(state, last_known_position, 0.74f, kStreetIncidentSearchDuration);
     clear_melee_attack(state);
     sync_active_vehicle_anchor(state);
 }
@@ -3222,6 +4058,10 @@ static void exit_vehicle_to_ground(MDTBEngineState *state) {
     state->active_vehicle_collision_pulse = 0.0f;
     state->active_vehicle_recovery = 0.0f;
     state->active_vehicle_steer_visual = 0.0f;
+    state->combat_hostile_search_position = exit_position;
+    state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutReacquireDuration);
+    state->combat_hostile_reposition_timer = 0.0f;
+    trigger_street_incident(state, exit_position, 0.52f, kStreetIncidentSettleDuration);
 }
 
 static int can_enter_vehicle_anchor(const MDTBEngineState *state, uint32_t anchor_index) {
@@ -3554,17 +4394,44 @@ void mdtb_engine_init(MDTBEngineState *state) {
     state->combat_target_health = kPracticeDummyMaxHealth;
     state->combat_target_reaction = 0.0f;
     state->combat_target_reset_timer = 0.0f;
-    state->combat_hostile_position = kLookoutBasePosition;
+    state->combat_hostile_anchor_index = 3u;
+    state->combat_hostile_position = lookout_anchor_position(state->combat_hostile_anchor_index);
     state->combat_hostile_heading = kPi;
     state->combat_hostile_in_range = 0u;
     state->combat_hostile_health = kLookoutMaxHealth;
     state->combat_hostile_reaction = 0.0f;
     state->combat_hostile_reset_timer = 0.0f;
     state->combat_hostile_alert = 0.0f;
+    state->combat_hostile_reposition_timer = 0.0f;
+    state->combat_hostile_reacquire_timer = 0.0f;
+    state->combat_hostile_search_position = kCombatLaneResetPosition;
+    state->combat_hostile_search_timer = 0.0f;
     state->combat_focus_target_kind = MDTBCombatTargetNone;
     state->combat_focus_distance = 0.0f;
     state->combat_focus_alignment = 0.0f;
     state->combat_last_hit_target_kind = MDTBCombatTargetNone;
+    state->combat_focus_occluded = 0u;
+    state->combat_player_in_cover = 0u;
+    state->player_health = kPlayerMaxHealth;
+    state->player_recovery_delay = 0.0f;
+    state->player_damage_pulse = 0.0f;
+    state->player_reset_timer = 0.0f;
+    state->witness_position = kWitnessBasePosition;
+    state->witness_heading = 0.18f;
+    state->witness_state = MDTBWitnessStateIdle;
+    state->witness_alert = 0.0f;
+    state->witness_state_timer = 0.0f;
+    state->bystander_position = kBystanderBasePosition;
+    state->bystander_heading = -0.24f;
+    state->bystander_state = MDTBWitnessStateIdle;
+    state->bystander_alert = 0.0f;
+    state->bystander_state_timer = 0.0f;
+    state->street_incident_position = kCombatLaneResetPosition;
+    state->street_incident_level = 0.0f;
+    state->street_incident_timer = 0.0f;
+    state->combat_hostile_attack_cooldown = 0.0f;
+    state->combat_hostile_attack_windup = 0.0f;
+    clear_hostile_last_shot(state);
     state->camera.focus_position = player_focus_position(state);
     state->camera.position = state->camera.focus_position;
     update_runtime_activity(state);

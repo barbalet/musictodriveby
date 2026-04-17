@@ -16,10 +16,10 @@ Please plan for the cycles needed to create this game allowing for 100 cycles or
 
 ### Current Cycle 
 
-18
+23
 
-Cycle 17 was completed on April 17, 2026.
-See `docs/cycles/cycle-17.md` for the cycle report.
+Cycle 22 was completed on April 17, 2026.
+See `docs/cycles/cycle-22.md` for the cycle report.
 
 ### Cycle Plan
 
@@ -200,10 +200,18 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - `swift run MusicToDriveBy`
 - Open `MusicToDriveBy.xcodeproj` in Xcode and run the `MusicToDriveBy` scheme on `My Mac`
 - Click inside the game view to capture mouse look, and press `Esc` to release it again.
-- Walk north along the starting sidewalk, press `T` near the glowing lead pipe or pistol pickup, use `1` or `2` to switch slots when both are owned, then use `Space` or captured left click to swing or fire at the nearby practice dummy.
-- With the pistol equipped, fire until the clip runs low, press `Y` to reload, and confirm the combat line reports clip and reserve ammunition while the prompt stays readable next to the staged vehicle handoff text.
+- Walk north along the starting sidewalk, press `T` near the glowing lead pipe or pistol pickup, and confirm the in-game HUD appears over the Metal view with health, weapon, encounter, street, and prompt panels instead of leaving combat readability entirely to the floating debug window.
+- Stay in the lane long enough for the lookout to pressure you and confirm it now slides between distinct firing angles instead of pacing in one strip. The encounter panel should call out the current angle and show reacquire timing when it is shifting.
+- With the pistol equipped, step behind the low cover, the west post, and the new east barrier in turn, and confirm the lookout changes angle to break static cover while blocked shots still splash against the first solid prop in the lane.
+- Fire the pistol or land a close melee hit near the witness and confirm the bystander now shifts into investigate or flee behavior while the new street card reports whether the lane is calm, escalating, or cooling.
+- Break line of sight behind cover or escape in a staged vehicle after the lookout is active, then confirm the world now shows both the hostile search marker and the broader street-incident marker instead of jumping straight from pressure to idle.
+- Stay off the street edge long enough for the search to expire and confirm the lookout now settles through a brief reacquire window before firing again, while the street card reports that the block is still holding or cooling.
+- Push the incident a bit harder and confirm a second authored bystander on the far side of the block now joins the reaction instead of leaving the street response to only one civilian.
+- Watch the nearby sidewalks once the incident is live and confirm some ambient pedestrians now peel away from the block with warmer reaction cues instead of marching straight through the danger pocket.
+- Cross near the lane after civilians have reacted and confirm ambient traffic now eases back from the block while the debug activity line reports both reacting pedestrians and vehicles that are easing off.
+- Fire until the clip runs low, press `Y` to reload, and confirm the prompt pill, health card, weapon card, encounter card, and street card stay readable while hostile movement, multi-civilian reaction, traffic reaction, and staged vehicle handoff prompts overlap.
 
-The current prototype is a macOS graybox four-block neighborhood slice with two authored streaming chunks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, staged sedan, coupe, moped, bicycle, and motorcycle handoffs with ranked selection cues and lock controls, and an expanding combat scaffold that now includes a lead-pipe pickup, a pistol pickup, weapon-slot switching, ammo and reload state, muzzle and impact feedback, and a shared practice dummy that supports both melee and ranged iteration without breaking the vehicle traversal loop. Use the on-screen overlay for controls, graph state, chunk visibility, staged vehicle prompts, combat state, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
+The current prototype is a macOS graybox four-block neighborhood slice with two authored streaming chunks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, staged sedan, coupe, moped, bicycle, and motorcycle handoffs with ranked selection cues and lock controls, and an expanding combat scaffold that now includes a lead-pipe pickup, a pistol pickup, weapon-slot switching, ammo and reload state, muzzle and impact feedback, cover-aware firearm blocking, a lookout hostile that can return fire, pressure-anchor-driven hostile repositioning, two authored civilian reaction sources around the lane, ambient pedestrians that can peel away from live incidents, a lightweight hostile last-seen search state, a persistent street-incident layer that pushes traffic away from the lane, an in-scene combat HUD with a separate street/system readout, player health and recovery feedback, and clearer search-to-reacquire timing after cover breaks or vehicle escape so combat pressure and traversal continue to coexist. Use the on-screen overlay and the floating controls window together for controls, chunk visibility, staged vehicle prompts, combat state, street pressure, traffic reaction, civilian reaction, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
 
 ### Any questions ###
 

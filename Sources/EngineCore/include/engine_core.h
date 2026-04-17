@@ -167,10 +167,41 @@ typedef struct {
     float combat_hostile_reaction;
     float combat_hostile_reset_timer;
     float combat_hostile_alert;
+    uint32_t combat_hostile_anchor_index;
+    float combat_hostile_reposition_timer;
+    float combat_hostile_reacquire_timer;
+    MDTBFloat3 combat_hostile_search_position;
+    float combat_hostile_search_timer;
     uint32_t combat_focus_target_kind;
     float combat_focus_distance;
     float combat_focus_alignment;
     uint32_t combat_last_hit_target_kind;
+    uint32_t combat_focus_occluded;
+    uint32_t combat_player_in_cover;
+    float player_health;
+    float player_recovery_delay;
+    float player_damage_pulse;
+    float player_reset_timer;
+    MDTBFloat3 witness_position;
+    float witness_heading;
+    uint32_t witness_state;
+    float witness_alert;
+    float witness_state_timer;
+    MDTBFloat3 bystander_position;
+    float bystander_heading;
+    uint32_t bystander_state;
+    float bystander_alert;
+    float bystander_state_timer;
+    MDTBFloat3 street_incident_position;
+    float street_incident_level;
+    float street_incident_timer;
+    float combat_hostile_attack_cooldown;
+    float combat_hostile_attack_windup;
+    MDTBFloat3 combat_hostile_last_shot_from;
+    MDTBFloat3 combat_hostile_last_shot_to;
+    float combat_hostile_last_shot_timer;
+    uint32_t combat_hostile_last_shot_hit;
+    uint32_t firearm_last_shot_blocked;
 } MDTBEngineState;
 
 typedef struct {
@@ -307,6 +338,7 @@ enum {
     MDTBTrafficOccupancyReasonPlayerVehicle = 1,
     MDTBTrafficOccupancyReasonPedestrian = 2,
     MDTBTrafficOccupancyReasonStopZone = 3,
+    MDTBTrafficOccupancyReasonIncident = 4,
 };
 
 enum {
@@ -326,6 +358,13 @@ enum {
     MDTBCombatTargetNone = 0,
     MDTBCombatTargetDummy = 1,
     MDTBCombatTargetLookout = 2,
+};
+
+enum {
+    MDTBWitnessStateIdle = 0,
+    MDTBWitnessStateInvestigate = 1,
+    MDTBWitnessStateFlee = 2,
+    MDTBWitnessStateCooldown = 3,
 };
 
 void mdtb_engine_init(MDTBEngineState *state);

@@ -1,11 +1,30 @@
 import Foundation
 import simd
 
+struct CombatHUDModel: Equatable {
+    var title = "Combat Lane"
+    var subtitle = "Approach the sandbox"
+    var healthRatio: Double = 1.0
+    var healthText = "100 hp"
+    var healthDetail = "Lane calm"
+    var weaponTitle = "Unarmed"
+    var weaponDetail = "Pick up a weapon"
+    var encounterTitle = "Lookout idle"
+    var encounterDetail = "No pressure yet"
+    var systemTitle = "Street calm"
+    var systemDetail = "No witness reaction yet"
+    var promptText = "Walk north to the combat lane"
+    var isCritical = false
+    var isVehicleMode = false
+    var isResetting = false
+}
+
 @MainActor
 final class GameViewModel: ObservableObject {
     @Published var debugSummary = """
     booting renderer...
     """
+    @Published var combatHUD = CombatHUDModel()
 
     let controlsSummary = """
     W A S D: walk, or throttle and steer while driving
@@ -28,7 +47,7 @@ final class GameViewModel: ObservableObject {
     Click the game view if keyboard focus is lost
     """
 
-    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, combatSummary: String, interactionSummary: String, selectionSummary: String, hazardSummary: String, currentBlock: String, nearestHook: String) {
+    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, combatSummary: String, interactionSummary: String, selectionSummary: String, hazardSummary: String, currentBlock: String, nearestHook: String, combatHUD: CombatHUDModel) {
         debugSummary = """
         camera: \(cameraMode)
         mouse look: \(mouseLook)
@@ -50,6 +69,7 @@ final class GameViewModel: ObservableObject {
         speed: \(Self.format(speed)) m/s
         fps: \(String(format: "%.1f", fps))
         """
+        self.combatHUD = combatHUD
     }
 
     private static func format(_ value: Float) -> String {
