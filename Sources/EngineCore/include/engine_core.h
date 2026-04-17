@@ -136,6 +136,41 @@ typedef struct {
     float active_vehicle_collision_pulse;
     float active_vehicle_recovery;
     float active_vehicle_steer_visual;
+    uint32_t melee_weapon_owned;
+    uint32_t melee_weapon_pickup_in_range;
+    MDTBFloat3 melee_weapon_pickup_position;
+    uint32_t melee_attack_phase;
+    uint32_t melee_attack_connected;
+    float melee_attack_timer;
+    uint32_t firearm_owned;
+    uint32_t firearm_pickup_in_range;
+    MDTBFloat3 firearm_pickup_position;
+    uint32_t equipped_weapon_kind;
+    uint32_t firearm_clip_ammo;
+    uint32_t firearm_reserve_ammo;
+    uint32_t firearm_reloading;
+    float firearm_reload_timer;
+    float firearm_cooldown_timer;
+    MDTBFloat3 firearm_last_shot_from;
+    MDTBFloat3 firearm_last_shot_to;
+    float firearm_last_shot_timer;
+    uint32_t firearm_last_shot_hit;
+    MDTBFloat3 combat_target_position;
+    uint32_t combat_target_in_range;
+    float combat_target_health;
+    float combat_target_reaction;
+    float combat_target_reset_timer;
+    MDTBFloat3 combat_hostile_position;
+    float combat_hostile_heading;
+    uint32_t combat_hostile_in_range;
+    float combat_hostile_health;
+    float combat_hostile_reaction;
+    float combat_hostile_reset_timer;
+    float combat_hostile_alert;
+    uint32_t combat_focus_target_kind;
+    float combat_focus_distance;
+    float combat_focus_alignment;
+    uint32_t combat_last_hit_target_kind;
 } MDTBEngineState;
 
 typedef struct {
@@ -159,6 +194,11 @@ enum {
     MDTBInputUse = 1u << 10,
     MDTBInputCycleHandoff = 1u << 11,
     MDTBInputToggleHandoffLock = 1u << 12,
+    MDTBInputPickupWeapon = 1u << 13,
+    MDTBInputAttack = 1u << 14,
+    MDTBInputEquipMeleeWeapon = 1u << 15,
+    MDTBInputEquipFirearm = 1u << 16,
+    MDTBInputReloadWeapon = 1u << 17,
 };
 
 enum {
@@ -267,6 +307,25 @@ enum {
     MDTBTrafficOccupancyReasonPlayerVehicle = 1,
     MDTBTrafficOccupancyReasonPedestrian = 2,
     MDTBTrafficOccupancyReasonStopZone = 3,
+};
+
+enum {
+    MDTBMeleeAttackIdle = 0,
+    MDTBMeleeAttackWindup = 1,
+    MDTBMeleeAttackStrike = 2,
+    MDTBMeleeAttackRecovery = 3,
+};
+
+enum {
+    MDTBEquippedWeaponNone = 0,
+    MDTBEquippedWeaponLeadPipe = 1,
+    MDTBEquippedWeaponPistol = 2,
+};
+
+enum {
+    MDTBCombatTargetNone = 0,
+    MDTBCombatTargetDummy = 1,
+    MDTBCombatTargetLookout = 2,
 };
 
 void mdtb_engine_init(MDTBEngineState *state);

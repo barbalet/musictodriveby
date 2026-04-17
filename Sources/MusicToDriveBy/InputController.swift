@@ -34,6 +34,31 @@ final class InputController {
                 transientButtons |= UInt32(MDTBInputToggleHandoffLock)
                 return
             }
+
+            if keyCode == 17 {
+                transientButtons |= UInt32(MDTBInputPickupWeapon)
+                return
+            }
+
+            if keyCode == 18 {
+                transientButtons |= UInt32(MDTBInputEquipMeleeWeapon)
+                return
+            }
+
+            if keyCode == 19 {
+                transientButtons |= UInt32(MDTBInputEquipFirearm)
+                return
+            }
+
+            if keyCode == 16 {
+                transientButtons |= UInt32(MDTBInputReloadWeapon)
+                return
+            }
+
+            if keyCode == 49 {
+                transientButtons |= UInt32(MDTBInputAttack)
+                return
+            }
         }
 
         setKey(keyCode, isPressed: true)
@@ -62,6 +87,10 @@ final class InputController {
             lookDeltaX = 0
             lookDeltaY = 0
         }
+    }
+
+    func triggerAttack() {
+        transientButtons |= UInt32(MDTBInputAttack)
     }
 
     func clear() {

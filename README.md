@@ -16,10 +16,10 @@ Please plan for the cycles needed to create this game allowing for 100 cycles or
 
 ### Current Cycle 
 
-15
+18
 
-Cycle 14 was completed on April 17, 2026.
-See `docs/cycles/cycle-14.md` for the cycle report.
+Cycle 17 was completed on April 17, 2026.
+See `docs/cycles/cycle-17.md` for the cycle report.
 
 ### Cycle Plan
 
@@ -200,8 +200,10 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - `swift run MusicToDriveBy`
 - Open `MusicToDriveBy.xcodeproj` in Xcode and run the `MusicToDriveBy` scheme on `My Mac`
 - Click inside the game view to capture mouse look, and press `Esc` to release it again.
+- Walk north along the starting sidewalk, press `T` near the glowing lead pipe or pistol pickup, use `1` or `2` to switch slots when both are owned, then use `Space` or captured left click to swing or fire at the nearby practice dummy.
+- With the pistol equipped, fire until the clip runs low, press `Y` to reload, and confirm the combat line reports clip and reserve ammunition while the prompt stays readable next to the staged vehicle handoff text.
 
-The current prototype is a macOS graybox four-block neighborhood slice with two authored streaming chunks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, and staged sedan, coupe, moped, bicycle, and motorcycle handoffs that now expose ranked selection cues, manual cycle and lock controls, and stronger bicycle and motorcycle edge-case polish. Use the on-screen overlay for controls, graph state, chunk visibility, staged vehicle prompts, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
+The current prototype is a macOS graybox four-block neighborhood slice with two authored streaming chunks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, staged sedan, coupe, moped, bicycle, and motorcycle handoffs with ranked selection cues and lock controls, and an expanding combat scaffold that now includes a lead-pipe pickup, a pistol pickup, weapon-slot switching, ammo and reload state, muzzle and impact feedback, and a shared practice dummy that supports both melee and ranged iteration without breaking the vehicle traversal loop. Use the on-screen overlay for controls, graph state, chunk visibility, staged vehicle prompts, combat state, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
 
 ### Any questions ###
 

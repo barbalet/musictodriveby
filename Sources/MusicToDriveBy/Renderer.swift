@@ -261,16 +261,26 @@ final class Renderer: NSObject, MTKViewDelegate {
             elapsedTime: engineState.elapsed_time,
             blocks: blocks
         )
+        let combatVertices = Self.makeCombatVertices(
+            state: engineState,
+            elapsedTime: engineState.elapsed_time
+        )
         let actorVertices = isThirdPerson && engineState.traversal_mode == UInt32(MDTBTraversalModeOnFoot)
             ? Self.makeActorVertices(
                 position: actorPosition,
                 heading: engineState.actor_heading,
                 cameraYaw: engineState.camera.yaw,
                 speed: engineState.camera.move_speed,
-                elapsedTime: engineState.elapsed_time
+                elapsedTime: engineState.elapsed_time,
+                equippedWeapon: engineState.equipped_weapon_kind,
+                meleeAttackPhase: engineState.melee_attack_phase,
+                meleeAttackTimer: engineState.melee_attack_timer,
+                firearmReloading: engineState.firearm_reloading != 0,
+                firearmReloadTimer: engineState.firearm_reload_timer,
+                firearmShotTimer: engineState.firearm_last_shot_timer
             )
             : []
-        let drawVertices = staticVertices + ambientFrame.vertices + vehicleAnchorVertices + actorVertices
+        let drawVertices = staticVertices + ambientFrame.vertices + combatVertices + vehicleAnchorVertices + actorVertices
         let drawVertexCount = drawVertices.count
         latestVisibleStaticBoxCount = staticVertices.count / 36
 
@@ -357,6 +367,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotLayout = "\(blocks.count) blocks / \(Self.chunkCount(blocks)) chunks / \(roadLinks.count) links / \(vehicleAnchors.count) staged veh / \(trafficOccupancies.count) occ / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic / \(latestVisibleStaticBoxCount)/\(staticSceneBoxes.count) static"
         let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles, trafficOccupancies: trafficOccupancies, vehicleAnchors: vehicleAnchors)
         let snapshotVehicle = Self.vehicleStatusSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
+        let snapshotCombat = Self.combatSummary(state: engineState)
         let snapshotInteraction = Self.interactionSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
         let snapshotSelection = Self.handoffSelectionSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
         let snapshotHazard = Self.trafficHazardSummary(state: engineState, trafficHazard: trafficHazard)
@@ -377,6 +388,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             layoutSummary: snapshotLayout,
             activitySummary: snapshotActivity,
             vehicleStatus: snapshotVehicle,
+            combatSummary: snapshotCombat,
             interactionSummary: snapshotInteraction,
             selectionSummary: snapshotSelection,
             hazardSummary: snapshotHazard,
@@ -1521,7 +1533,326 @@ final class Renderer: NSObject, MTKViewDelegate {
         return vertices
     }
 
-    private static func makeActorVertices(position: SIMD3<Float>, heading: Float, cameraYaw: Float, speed: Float, elapsedTime: Float) -> [Vertex] {
+    private static func makeCombatVertices(state: MDTBEngineState, elapsedTime: Float) -> [Vertex] {
+        let pipePickupPosition = SIMD3<Float>(
+            state.melee_weapon_pickup_position.x,
+            state.melee_weapon_pickup_position.y,
+            state.melee_weapon_pickup_position.z
+        )
+        let pistolPickupPosition = SIMD3<Float>(
+            state.firearm_pickup_position.x,
+            state.firearm_pickup_position.y,
+            state.firearm_pickup_position.z
+        )
+        let dummyPosition = SIMD3<Float>(
+            state.combat_target_position.x,
+            state.combat_target_position.y,
+            state.combat_target_position.z
+        )
+        let hostilePosition = SIMD3<Float>(
+            state.combat_hostile_position.x,
+            state.combat_hostile_position.y,
+            state.combat_hostile_position.z
+        )
+        let shotFrom = SIMD3<Float>(
+            state.firearm_last_shot_from.x,
+            state.firearm_last_shot_from.y,
+            state.firearm_last_shot_from.z
+        )
+        let shotTo = SIMD3<Float>(
+            state.firearm_last_shot_to.x,
+            state.firearm_last_shot_to.y,
+            state.firearm_last_shot_to.z
+        )
+        let dummyReaction = min(max(state.combat_target_reaction, 0.0), 1.4)
+        let hostileReaction = min(max(state.combat_hostile_reaction, 0.0), 1.5)
+        let dummyHealthRatio = max(0.0, min(state.combat_target_health / 100.0, 1.0))
+        let hostileHealthRatio = max(0.0, min(state.combat_hostile_health / 84.0, 1.0))
+        let dummyInRange = state.combat_target_in_range != 0
+        let hostileInRange = state.combat_hostile_in_range != 0
+        let dummyDowned = state.combat_target_health <= 0.0 && state.combat_target_reset_timer > 0.0
+        let hostileDowned = state.combat_hostile_health <= 0.0 && state.combat_hostile_reset_timer > 0.0
+        let hostileAlert = min(max(state.combat_hostile_alert, 0.0), 1.0)
+        let focusKind = state.combat_focus_target_kind
+        let hitKind = state.combat_last_hit_target_kind
+        let pickupPulse = 0.78 + (sin(elapsedTime * 5.4) * 0.18)
+        let shotPulse = min(max(state.firearm_last_shot_timer / 0.10, 0.0), 1.0)
+        let pipePickupColor = SIMD4<Float>(0.77, 0.72, 0.66, 1.0)
+        let pipePickupHalo = SIMD4<Float>(0.94, 0.80, 0.30, 0.42)
+        let pistolBodyColor = SIMD4<Float>(0.19, 0.21, 0.24, 1.0)
+        let pistolAccentColor = SIMD4<Float>(0.48, 0.68, 0.92, 1.0)
+        let pistolPickupHalo = SIMD4<Float>(0.38, 0.70, 1.0, 0.38)
+        let dummyBodyColor = SIMD4<Float>(
+            0.30 + ((1.0 - dummyHealthRatio) * 0.36) + (dummyReaction * 0.16),
+            0.38 + (dummyHealthRatio * 0.24),
+            0.46 - ((1.0 - dummyHealthRatio) * 0.16),
+            1.0
+        )
+        let dummyAccentColor = SIMD4<Float>(0.92, 0.52 + dummyHealthRatio * 0.18, 0.22 + dummyReaction * 0.12, 1.0)
+        let hostileBodyColor = SIMD4<Float>(
+            0.34 + hostileAlert * 0.28,
+            0.22 + hostileHealthRatio * 0.30,
+            0.20 + hostileReaction * 0.12,
+            1.0
+        )
+        let hostileAccentColor = SIMD4<Float>(1.0, 0.40 + hostileAlert * 0.36, 0.18 + hostileReaction * 0.18, 1.0)
+        let hostileHeading = state.combat_hostile_heading
+        let hostileRight = SIMD3<Float>(cos(hostileHeading), 0.0, sin(hostileHeading))
+        let hitFlashActive = (state.melee_attack_connected != 0 && state.melee_attack_phase == UInt32(MDTBMeleeAttackStrike))
+            || (state.firearm_last_shot_hit != 0 && state.firearm_last_shot_timer > 0.0)
+
+        var vertices: [Vertex] = []
+        vertices.reserveCapacity(36 * 36)
+
+        func appendHealthBar(center: SIMD3<Float>, ratio: Float, color: SIMD4<Float>) {
+            let clampedRatio = max(0.0, min(ratio, 1.0))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: center,
+                halfExtents: SIMD3<Float>(0.68, 0.04, 0.05),
+                yaw: 0.0,
+                color: SIMD4<Float>(0.16, 0.18, 0.20, 0.72)
+            ))
+            if clampedRatio > 0.0 {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(center.x - (0.68 * (1.0 - clampedRatio)), center.y, center.z),
+                    halfExtents: SIMD3<Float>(0.68 * clampedRatio, 0.03, 0.04),
+                    yaw: 0.0,
+                    color: color
+                ))
+            }
+        }
+
+        func appendFocusMarker(position: SIMD3<Float>, alignment: Float, baseColor: SIMD4<Float>) {
+            let clampedAlignment = max(0.0, min(alignment, 1.0))
+            let pulse = 0.74 + (sin(elapsedTime * 8.6) * 0.18)
+            let color = SIMD4<Float>(
+                baseColor.x,
+                min(baseColor.y + clampedAlignment * 0.28, 1.0),
+                min(baseColor.z + clampedAlignment * 0.22, 1.0),
+                0.78
+            )
+
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(position.x, position.y + 2.48, position.z),
+                halfExtents: SIMD3<Float>(0.16 + clampedAlignment * 0.08, 0.05, 0.16 + clampedAlignment * 0.08),
+                yaw: elapsedTime * 1.8,
+                color: animatedColor(color, intensity: pulse)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(position.x, position.y + 0.07, position.z),
+                halfExtents: SIMD3<Float>(0.66 + clampedAlignment * 0.24, 0.02, 0.66 + clampedAlignment * 0.24),
+                yaw: 0.0,
+                color: SIMD4<Float>(color.x, color.y, color.z, 0.34)
+            ))
+        }
+
+        func appendHitFlash(position: SIMD3<Float>, color: SIMD4<Float>, scale: Float) {
+            let pulse = 0.70 + shotPulse * 0.40
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: position,
+                halfExtents: SIMD3<Float>(0.14 + scale * pulse, 0.12 + scale * 0.4, 0.14 + scale * pulse),
+                yaw: elapsedTime * 1.1,
+                color: color
+            ))
+        }
+
+        if state.melee_weapon_owned == 0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pipePickupPosition.x, pipePickupPosition.y + 0.09, pipePickupPosition.z),
+                halfExtents: SIMD3<Float>(0.06, 0.04, 0.54),
+                yaw: -0.92,
+                color: pipePickupColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pipePickupPosition.x, pipePickupPosition.y + 0.08, pipePickupPosition.z - 0.42),
+                halfExtents: SIMD3<Float>(0.12, 0.05, 0.10),
+                yaw: -0.92,
+                color: SIMD4<Float>(0.16, 0.17, 0.19, 1.0)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pipePickupPosition.x, pipePickupPosition.y + 0.02, pipePickupPosition.z),
+                halfExtents: SIMD3<Float>(0.48 + pickupPulse * 0.14, 0.02, 0.48 + pickupPulse * 0.14),
+                yaw: 0.0,
+                color: pipePickupHalo
+            ))
+        }
+
+        if state.firearm_owned == 0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.12, pistolPickupPosition.z + 0.04),
+                halfExtents: SIMD3<Float>(0.18, 0.08, 0.26),
+                yaw: 0.34,
+                color: pistolBodyColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.03, pistolPickupPosition.z - 0.08),
+                halfExtents: SIMD3<Float>(0.08, 0.11, 0.10),
+                yaw: 0.34,
+                color: pistolAccentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.02, pistolPickupPosition.z),
+                halfExtents: SIMD3<Float>(0.46 + pickupPulse * 0.12, 0.02, 0.46 + pickupPulse * 0.12),
+                yaw: 0.0,
+                color: pistolPickupHalo
+            ))
+        }
+
+        if dummyDowned {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 0.24, dummyPosition.z),
+                halfExtents: SIMD3<Float>(0.82, 0.20, 0.34),
+                yaw: 0.18,
+                color: dummyBodyColor
+            ))
+        } else {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 1.00 + dummyReaction * 0.08, dummyPosition.z),
+                halfExtents: SIMD3<Float>(0.28, 0.88, 0.20),
+                yaw: 0.0,
+                color: dummyBodyColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 1.92 + dummyReaction * 0.12, dummyPosition.z + 0.02),
+                halfExtents: SIMD3<Float>(0.18, 0.20, 0.18),
+                yaw: 0.0,
+                color: SIMD4<Float>(0.80, 0.63, 0.51, 1.0)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(dummyPosition.x - 0.36, dummyPosition.y + 1.02, dummyPosition.z),
+                halfExtents: SIMD3<Float>(0.07, 0.34, 0.07),
+                yaw: -0.10 - dummyReaction * 0.26,
+                color: dummyAccentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(dummyPosition.x + 0.36, dummyPosition.y + 1.02, dummyPosition.z),
+                halfExtents: SIMD3<Float>(0.07, 0.34, 0.07),
+                yaw: 0.10 + dummyReaction * 0.26,
+                color: dummyAccentColor
+            ))
+        }
+
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 0.06, dummyPosition.z),
+            halfExtents: SIMD3<Float>(0.48 + (dummyInRange ? 0.18 : 0.0), 0.03, 0.48 + (dummyInRange ? 0.18 : 0.0)),
+            yaw: 0.0,
+            color: dummyInRange
+                ? SIMD4<Float>(0.96, 0.72, 0.28, 0.52)
+                : SIMD4<Float>(0.44, 0.58, 0.66, 0.32)
+        ))
+
+        appendHealthBar(
+            center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 2.34, dummyPosition.z),
+            ratio: dummyDowned ? 0.0 : dummyHealthRatio,
+            color: SIMD4<Float>(1.0, 0.70, 0.24, 0.92)
+        )
+
+        if focusKind == UInt32(MDTBCombatTargetDummy) {
+            appendFocusMarker(
+                position: dummyPosition,
+                alignment: state.combat_focus_alignment,
+                baseColor: SIMD4<Float>(0.92, 0.68, 0.26, 1.0)
+            )
+        }
+
+        if hitFlashActive && hitKind == UInt32(MDTBCombatTargetDummy) {
+            appendHitFlash(
+                position: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 1.30, dummyPosition.z + 0.12),
+                color: SIMD4<Float>(1.0, 0.78, 0.32, 0.88),
+                scale: 0.16 + dummyReaction * 0.12
+            )
+        }
+
+        if hostileDowned {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 0.22, hostilePosition.z),
+                halfExtents: SIMD3<Float>(0.76, 0.18, 0.32),
+                yaw: hostileHeading + 0.38,
+                color: hostileBodyColor
+            ))
+        } else {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 1.02 + hostileReaction * 0.08, hostilePosition.z),
+                halfExtents: SIMD3<Float>(0.26, 0.90, 0.22),
+                yaw: hostileHeading,
+                color: hostileBodyColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 1.98 + hostileReaction * 0.10, hostilePosition.z),
+                halfExtents: SIMD3<Float>(0.17, 0.19, 0.17),
+                yaw: hostileHeading,
+                color: SIMD4<Float>(0.72, 0.52, 0.42, 1.0)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostilePosition + (hostileRight * 0.34) + SIMD3<Float>(0.0, 1.12, 0.0),
+                halfExtents: SIMD3<Float>(0.08, 0.34, 0.08),
+                yaw: hostileHeading + 0.22 + hostileReaction * 0.12,
+                color: hostileAccentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostilePosition - (hostileRight * 0.34) + SIMD3<Float>(0.0, 1.08, 0.0),
+                halfExtents: SIMD3<Float>(0.08, 0.30, 0.08),
+                yaw: hostileHeading - 0.16,
+                color: hostileAccentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: hostilePosition + (hostileRight * 0.36) + SIMD3<Float>(0.0, 0.98, -0.06),
+                halfExtents: SIMD3<Float>(0.26, 0.05, 0.05),
+                yaw: hostileHeading + 0.06,
+                color: SIMD4<Float>(0.14, 0.15, 0.18, 1.0)
+            ))
+        }
+
+        vertices.append(contentsOf: makeWorldBoxVertices(
+            center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 0.06, hostilePosition.z),
+            halfExtents: SIMD3<Float>(0.50 + hostileAlert * 0.18 + (hostileInRange ? 0.12 : 0.0), 0.03, 0.50 + hostileAlert * 0.18 + (hostileInRange ? 0.12 : 0.0)),
+            yaw: 0.0,
+            color: SIMD4<Float>(0.72 + hostileAlert * 0.24, 0.20 + hostileAlert * 0.20, 0.18, 0.34 + hostileAlert * 0.22)
+        ))
+
+        appendHealthBar(
+            center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 2.40, hostilePosition.z),
+            ratio: hostileDowned ? 0.0 : hostileHealthRatio,
+            color: SIMD4<Float>(1.0, 0.34 + hostileAlert * 0.28, 0.20, 0.96)
+        )
+
+        if focusKind == UInt32(MDTBCombatTargetLookout) {
+            appendFocusMarker(
+                position: hostilePosition,
+                alignment: state.combat_focus_alignment,
+                baseColor: SIMD4<Float>(1.0, 0.34 + hostileAlert * 0.24, 0.18, 1.0)
+            )
+        }
+
+        if hitFlashActive && hitKind == UInt32(MDTBCombatTargetLookout) {
+            appendHitFlash(
+                position: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 1.34, hostilePosition.z),
+                color: SIMD4<Float>(1.0, 0.54, 0.24, 0.90),
+                scale: 0.18 + hostileReaction * 0.14
+            )
+        }
+
+        if state.firearm_last_shot_timer > 0.0 {
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: shotFrom,
+                halfExtents: SIMD3<Float>(0.12 + shotPulse * 0.08, 0.12 + shotPulse * 0.08, 0.12 + shotPulse * 0.08),
+                yaw: 0.0,
+                color: SIMD4<Float>(1.0, 0.82, 0.34, 0.72)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: shotTo,
+                halfExtents: SIMD3<Float>(0.10 + shotPulse * 0.12, 0.10 + shotPulse * 0.12, 0.10 + shotPulse * 0.12),
+                yaw: 0.0,
+                color: state.firearm_last_shot_hit != 0
+                    ? SIMD4<Float>(1.0, 0.58, 0.26, 0.84)
+                    : SIMD4<Float>(0.92, 0.88, 0.68, 0.44)
+            ))
+        }
+
+        return vertices
+    }
+
+    private static func makeActorVertices(position: SIMD3<Float>, heading: Float, cameraYaw: Float, speed: Float, elapsedTime: Float, equippedWeapon: UInt32, meleeAttackPhase: UInt32, meleeAttackTimer: Float, firearmReloading: Bool, firearmReloadTimer: Float, firearmShotTimer: Float) -> [Vertex] {
         let gaitFrequency: Float = 6.0 + (speed * 0.45)
         let gaitPhase = elapsedTime * gaitFrequency
         let strideIntensity = min(speed / 6.0, 1.0)
@@ -1530,8 +1861,56 @@ final class Renderer: NSObject, MTKViewDelegate {
         let headDelta = max(min(Self.wrapAngle(cameraYaw - heading), 0.75), -0.75)
         let torsoYaw = heading + (headDelta * 0.22)
         let headYaw = heading + (headDelta * 0.56)
+        let isPipeEquipped = equippedWeapon == UInt32(MDTBEquippedWeaponLeadPipe)
+        let isPistolEquipped = equippedWeapon == UInt32(MDTBEquippedWeaponPistol)
+        let attackSwing: Float
+        let attackReach: Float
 
-        return
+        switch meleeAttackPhase {
+        case UInt32(MDTBMeleeAttackWindup):
+            let progress = 1.0 - min(max(meleeAttackTimer / 0.12, 0.0), 1.0)
+            attackSwing = -0.62 * progress
+            attackReach = 0.12 * progress
+        case UInt32(MDTBMeleeAttackStrike):
+            let progress = 1.0 - min(max(meleeAttackTimer / 0.10, 0.0), 1.0)
+            attackSwing = 0.96 * progress
+            attackReach = 0.28 + progress * 0.18
+        case UInt32(MDTBMeleeAttackRecovery):
+            let progress = min(max(meleeAttackTimer / 0.24, 0.0), 1.0)
+            attackSwing = 0.32 * progress
+            attackReach = 0.14 * progress
+        default:
+            attackSwing = 0.0
+            attackReach = 0.0
+        }
+
+        let shotKick = min(max(firearmShotTimer / 0.10, 0.0), 1.0)
+        let reloadProgress = firearmReloading ? 1.0 - min(max(firearmReloadTimer / 1.15, 0.0), 1.0) : 0.0
+        let leftArmYaw: Float
+        let rightArmYaw: Float
+        let leftArmOffset: Float
+        let rightArmOffset: Float
+
+        if isPipeEquipped {
+            leftArmYaw = torsoYaw
+            rightArmYaw = torsoYaw + attackSwing + 0.10
+            leftArmOffset = -armSwing
+            rightArmOffset = armSwing + 0.08 - attackReach * 0.35
+        } else if isPistolEquipped {
+            let reloadLift = reloadProgress * 0.72
+            let recoil = shotKick * 0.24
+            leftArmYaw = torsoYaw + 0.10 - reloadLift * 0.24
+            rightArmYaw = torsoYaw + 0.18 + reloadLift * 0.40 - recoil
+            leftArmOffset = -armSwing * 0.45 + reloadLift * 0.12
+            rightArmOffset = 0.10 - recoil * 0.10 + reloadLift * 0.28
+        } else {
+            leftArmYaw = torsoYaw
+            rightArmYaw = torsoYaw
+            leftArmOffset = -armSwing
+            rightArmOffset = armSwing
+        }
+
+        var vertices =
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.04, 0.02), halfExtents: SIMD3<Float>(0.44, 0.02, 0.72), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.10, 0.11, 0.13, 1.0)) +
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.02, 0.0), halfExtents: SIMD3<Float>(0.34, 0.50, 0.18), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.14, -0.22), halfExtents: SIMD3<Float>(0.24, 0.30, 0.08), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.18, 0.20, 0.25, 1.0)) +
@@ -1540,9 +1919,62 @@ final class Renderer: NSObject, MTKViewDelegate {
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.48, 0.0), halfExtents: SIMD3<Float>(0.30, 0.14, 0.16), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.17, 0.19, 0.24, 1.0)) +
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.12, 0.22, stride), halfExtents: SIMD3<Float>(0.10, 0.22, 0.10), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.12, 0.14, 0.18, 1.0)) +
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.12, 0.22, -stride), halfExtents: SIMD3<Float>(0.10, 0.22, 0.10), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.12, 0.14, 0.18, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.42, 1.04, -armSwing), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.42, 1.04, armSwing), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.42, 1.04, leftArmOffset), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: leftArmYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.42, 1.04, rightArmOffset), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: rightArmYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
             makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.45, 0.18), halfExtents: SIMD3<Float>(0.22, 0.18, 0.10), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.86, 0.73, 0.33, 1.0))
+
+        if isPipeEquipped {
+            let weaponColor = meleeAttackPhase == UInt32(MDTBMeleeAttackIdle)
+                ? SIMD4<Float>(0.73, 0.69, 0.62, 1.0)
+                : SIMD4<Float>(0.94, 0.82, 0.36, 1.0)
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: SIMD3<Float>(0.64, 0.94, 0.26 - attackReach * 0.25),
+                halfExtents: SIMD3<Float>(0.04, 0.04, 0.64),
+                bodyYaw: heading,
+                partYaw: rightArmYaw,
+                color: weaponColor
+            ))
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: SIMD3<Float>(0.64, 0.92, -0.12 - attackReach * 0.10),
+                halfExtents: SIMD3<Float>(0.10, 0.05, 0.10),
+                bodyYaw: heading,
+                partYaw: rightArmYaw,
+                color: SIMD4<Float>(0.18, 0.19, 0.21, 1.0)
+            ))
+        } else if isPistolEquipped {
+            let recoil = shotKick * 0.20
+            let slideColor = firearmReloading
+                ? SIMD4<Float>(0.94, 0.72, 0.34, 1.0)
+                : SIMD4<Float>(0.55, 0.70, 0.94, 1.0)
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: SIMD3<Float>(0.60, 0.92, 0.04 - recoil * 0.12),
+                halfExtents: SIMD3<Float>(0.16, 0.07, 0.20),
+                bodyYaw: heading,
+                partYaw: rightArmYaw,
+                color: SIMD4<Float>(0.16, 0.18, 0.21, 1.0)
+            ))
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: SIMD3<Float>(0.60, 0.82, -0.02 + reloadProgress * 0.04),
+                halfExtents: SIMD3<Float>(0.08, 0.12, 0.08),
+                bodyYaw: heading,
+                partYaw: rightArmYaw,
+                color: slideColor
+            ))
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: SIMD3<Float>(0.44, 0.98, -0.02),
+                halfExtents: SIMD3<Float>(0.06, 0.10, 0.06),
+                bodyYaw: heading,
+                partYaw: leftArmYaw,
+                color: SIMD4<Float>(0.18, 0.20, 0.24, 1.0)
+            ))
+        }
+
+        return vertices
     }
 
     private static func makeWorldBoxVertices(center: SIMD3<Float>, halfExtents: SIMD3<Float>, yaw: Float, color: SIMD4<Float>) -> [Vertex] {
@@ -1950,16 +2382,82 @@ final class Renderer: NSObject, MTKViewDelegate {
         return "\(vehicleKindLabel(anchor.kind)) staged / \(formatScalar(distance))m / \(parkingStateLabel(anchor.parkingState)) / \(blockName(for: anchor.blockIndex, blocks: blocks)) / \(vehicleActionLabel(anchor.kind))"
     }
 
+    private static func combatSummary(state: MDTBEngineState) -> String {
+        let playerPosition = currentPlayerPosition(state: state)
+        let pipePickupPosition = SIMD3<Float>(state.melee_weapon_pickup_position.x, state.melee_weapon_pickup_position.y, state.melee_weapon_pickup_position.z)
+        let pistolPickupPosition = SIMD3<Float>(state.firearm_pickup_position.x, state.firearm_pickup_position.y, state.firearm_pickup_position.z)
+        let dummyPosition = SIMD3<Float>(state.combat_target_position.x, state.combat_target_position.y, state.combat_target_position.z)
+        let lookoutPosition = SIMD3<Float>(state.combat_hostile_position.x, state.combat_hostile_position.y, state.combat_hostile_position.z)
+        let pipeDistance = formatScalar(sqrt(distanceSquared(playerPosition, pipePickupPosition)))
+        let pistolDistance = formatScalar(sqrt(distanceSquared(playerPosition, pistolPickupPosition)))
+        let dummyDistance = formatScalar(sqrt(distanceSquared(playerPosition, dummyPosition)))
+        let lookoutDistance = formatScalar(sqrt(distanceSquared(playerPosition, lookoutPosition)))
+        let dummySummary = dummyStatusSummary(state: state, targetDistance: dummyDistance)
+        let lookoutSummary = lookoutStatusSummary(state: state, targetDistance: lookoutDistance)
+        let focusSummary = combatFocusSummary(state: state)
+        let laneSummary = [focusSummary, dummySummary, lookoutSummary].compactMap { $0 }.joined(separator: " / ")
+        let pistolSummary = pistolAmmoSummary(state: state)
+
+        if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
+            guard state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponNone) else {
+                return "combat stowed / \(laneSummary) / \(vehicleKindLabel(state.active_vehicle_kind))"
+            }
+
+            if state.equipped_weapon_kind == UInt32(MDTBEquippedWeaponPistol) {
+                return "\(equippedWeaponLabel(state.equipped_weapon_kind)) stowed / \(pistolSummary) / \(laneSummary) / \(vehicleKindLabel(state.active_vehicle_kind))"
+            }
+
+            return "\(equippedWeaponLabel(state.equipped_weapon_kind)) stowed / \(laneSummary) / \(vehicleKindLabel(state.active_vehicle_kind))"
+        }
+
+        switch state.equipped_weapon_kind {
+        case UInt32(MDTBEquippedWeaponLeadPipe):
+            let attackState = attackPhaseLabel(state.melee_attack_phase)
+            let attackSummary = state.melee_attack_phase == UInt32(MDTBMeleeAttackIdle)
+                ? "ready"
+                : "\(attackState) \(formatScalar(state.melee_attack_timer))s" + (state.melee_attack_connected != 0 ? " hit" : "")
+            let pistolTail = state.firearm_owned != 0 ? " / slot 2 \(pistolSummary)" : ""
+            return "slot 1 lead pipe / \(attackSummary) / \(laneSummary)\(pistolTail)"
+        case UInt32(MDTBEquippedWeaponPistol):
+            let firearmState = state.firearm_reloading != 0
+                ? "reload \(formatScalar(state.firearm_reload_timer))s"
+                : (state.firearm_last_shot_timer > 0.0
+                    ? (state.firearm_last_shot_hit != 0 ? "fired hit" : "fired")
+                    : "ready")
+            return "slot 2 pistol / \(pistolSummary) / \(firearmState) / \(laneSummary)"
+        default:
+            break
+        }
+
+        var pickupParts: [String] = []
+        if state.melee_weapon_owned == 0 {
+            pickupParts.append("pipe \(state.melee_weapon_pickup_in_range != 0 ? "ready" : "\(pipeDistance)m")")
+        }
+        if state.firearm_owned == 0 {
+            pickupParts.append("pistol \(state.firearm_pickup_in_range != 0 ? "ready" : "\(pistolDistance)m")")
+        }
+
+        if pickupParts.isEmpty {
+            return "no weapon equipped / \(laneSummary)"
+        }
+
+        return "pickups " + pickupParts.joined(separator: " / ") + " / " + laneSummary
+    }
+
     private static func interactionSummary(state: MDTBEngineState, vehicleAnchors: [SceneVehicleAnchor], blocks: [SceneBlock]) -> String {
+        let combatPrompt = combatInteractionPrompt(state: state)
+
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
             if abs(state.active_vehicle_speed) <= 1.4 {
-                return "press F to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
+                let vehiclePrompt = "press F to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
+                return combatPrompt.map { "\($0) / \(vehiclePrompt)" } ?? vehiclePrompt
             }
-            return "slow down to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
+            let vehiclePrompt = "slow down to \(vehicleExitLabel(state.active_vehicle_kind)) \(vehicleKindLabel(state.active_vehicle_kind))"
+            return combatPrompt.map { "\($0) / \(vehiclePrompt)" } ?? vehiclePrompt
         }
 
         guard state.nearby_vehicle_anchor_index < vehicleAnchors.count else {
-            return "walk up to a staged vehicle and press F"
+            return combatPrompt ?? "walk up to a staged vehicle and press F"
         }
 
         let anchor = vehicleAnchors[Int(state.nearby_vehicle_anchor_index)]
@@ -1975,12 +2473,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         } ?? ""
         let lockHint = state.vehicle_selection_locked != 0 ? "G unlock" : "G lock"
         let selectionControls = ranked.count > 1 ? " / R cycle / \(lockHint)" : " / \(lockHint)"
+        let vehiclePrompt: String
 
         if distance <= Self.vehicleMountRadius {
-            return "press F to \(vehicleActionLabel(anchor.kind)) \(vehicleKindLabel(anchor.kind)) from \(parkingStateLabel(anchor.parkingState)) \(blockName(for: anchor.blockIndex, blocks: blocks))\(nextChoice)\(selectionControls)"
+            vehiclePrompt = "press F to \(vehicleActionLabel(anchor.kind)) \(vehicleKindLabel(anchor.kind)) from \(parkingStateLabel(anchor.parkingState)) \(blockName(for: anchor.blockIndex, blocks: blocks))\(nextChoice)\(selectionControls)"
+        } else {
+            vehiclePrompt = "approach \(vehicleKindLabel(anchor.kind)) \(formatScalar(distance))m to \(vehicleActionLabel(anchor.kind))\(nextChoice)\(selectionControls)"
         }
 
-        return "approach \(vehicleKindLabel(anchor.kind)) \(formatScalar(distance))m to \(vehicleActionLabel(anchor.kind))\(nextChoice)\(selectionControls)"
+        return combatPrompt.map { "\($0) / \(vehiclePrompt)" } ?? vehiclePrompt
     }
 
     private static func handoffSelectionSummary(state: MDTBEngineState, vehicleAnchors: [SceneVehicleAnchor], blocks: [SceneBlock]) -> String {
@@ -2023,6 +2524,182 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "watch the road \(formatScalar(trafficHazard))"
         }
         return "traffic calm \(formatScalar(trafficHazard))"
+    }
+
+    private static func combatInteractionPrompt(state: MDTBEngineState) -> String? {
+        if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
+            guard state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponNone) else {
+                return nil
+            }
+            if state.equipped_weapon_kind == UInt32(MDTBEquippedWeaponPistol) {
+                return "pistol stowed while driving"
+            }
+            return "\(equippedWeaponLabel(state.equipped_weapon_kind)) stowed while driving"
+        }
+
+        if let pickupPrompt = pickupPrompt(state: state) {
+            return pickupPrompt
+        }
+
+        let switchHint = weaponSwitchHint(state: state)
+        let focusLabel = combatTargetLabel(state.combat_focus_target_kind)
+
+        switch state.equipped_weapon_kind {
+        case UInt32(MDTBEquippedWeaponLeadPipe):
+            switch state.melee_attack_phase {
+            case UInt32(MDTBMeleeAttackWindup):
+                return "lead pipe windup \(formatScalar(state.melee_attack_timer))s\(switchHint)"
+            case UInt32(MDTBMeleeAttackStrike):
+                return (state.melee_attack_connected != 0
+                    ? "lead pipe strike connected"
+                    : "lead pipe strike live") + switchHint
+            case UInt32(MDTBMeleeAttackRecovery):
+                return "lead pipe recover \(formatScalar(state.melee_attack_timer))s\(switchHint)"
+            default:
+                if state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) {
+                    if (state.combat_focus_target_kind == UInt32(MDTBCombatTargetDummy) && state.combat_target_in_range != 0)
+                        || (state.combat_focus_target_kind == UInt32(MDTBCombatTargetLookout) && state.combat_hostile_in_range != 0) {
+                        return "Space or click to swing at the \(focusLabel)\(switchHint)"
+                    }
+                    return "close on the \(focusLabel) and swing with Space or click\(switchHint)"
+                }
+                if state.combat_target_reset_timer > 0.0 || state.combat_hostile_reset_timer > 0.0 {
+                    return "combat lane resetting / re-center on a live target\(switchHint)"
+                }
+                return "close the gap and face a target before swinging\(switchHint)"
+            }
+        case UInt32(MDTBEquippedWeaponPistol):
+            if state.firearm_reloading != 0 {
+                return "pistol reload \(formatScalar(state.firearm_reload_timer))s\(switchHint)"
+            }
+            if state.firearm_clip_ammo == 0 {
+                if state.firearm_reserve_ammo > 0 {
+                    return "press Y to reload the pistol\(switchHint)"
+                }
+                return "pistol empty\(switchHint)"
+            }
+            if state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) {
+                if state.combat_focus_alignment >= 0.90 {
+                    return "Space or click to fire at the \(focusLabel) / Y reload\(switchHint)"
+                }
+                return "steady the sights on the \(focusLabel) / Space or click to fire / Y reload\(switchHint)"
+            }
+            return "line up either target / Space or click to fire / Y reload\(switchHint)"
+        default:
+            if state.melee_weapon_owned != 0 || state.firearm_owned != 0 {
+                return "press 1 or 2 to equip a weapon"
+            }
+            return nil
+        }
+    }
+
+    private static func pickupPrompt(state: MDTBEngineState) -> String? {
+        let actorPosition = currentPlayerPosition(state: state)
+        let pipeDistance = sqrt(distanceSquared(
+            actorPosition,
+            SIMD3<Float>(state.melee_weapon_pickup_position.x, state.melee_weapon_pickup_position.y, state.melee_weapon_pickup_position.z)
+        ))
+        let pistolDistance = sqrt(distanceSquared(
+            actorPosition,
+            SIMD3<Float>(state.firearm_pickup_position.x, state.firearm_pickup_position.y, state.firearm_pickup_position.z)
+        ))
+
+        var nearestLabel: String?
+        var nearestDistance = Float.greatestFiniteMagnitude
+
+        if state.melee_weapon_owned == 0, state.melee_weapon_pickup_in_range != 0, pipeDistance < nearestDistance {
+            nearestLabel = "lead pipe"
+            nearestDistance = pipeDistance
+        }
+
+        if state.firearm_owned == 0, state.firearm_pickup_in_range != 0, pistolDistance < nearestDistance {
+            nearestLabel = "pistol"
+            nearestDistance = pistolDistance
+        }
+
+        guard let nearestLabel else {
+            return nil
+        }
+
+        return "press T to grab the \(nearestLabel)"
+    }
+
+    private static func pistolAmmoSummary(state: MDTBEngineState) -> String {
+        "clip \(state.firearm_clip_ammo) / reserve \(state.firearm_reserve_ammo)"
+    }
+
+    private static func combatTargetLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBCombatTargetDummy):
+            return "dummy"
+        case UInt32(MDTBCombatTargetLookout):
+            return "lookout"
+        default:
+            return "target"
+        }
+    }
+
+    private static func combatFocusSummary(state: MDTBEngineState) -> String? {
+        guard state.combat_focus_target_kind != UInt32(MDTBCombatTargetNone) else {
+            return nil
+        }
+        return "focus \(combatTargetLabel(state.combat_focus_target_kind)) \(formatScalar(state.combat_focus_distance))m aim \(formatScalar(state.combat_focus_alignment))"
+    }
+
+    private static func targetStatusSummary(label: String, distance: String, inRange: Bool, health: Float, resetTimer: Float, alert: Float? = nil) -> String {
+        var summary: String
+
+        if health <= 0.0 && resetTimer > 0.0 {
+            summary = "\(label) reset \(formatScalar(resetTimer))s"
+        } else if inRange {
+            summary = "\(label) close \(formatScalar(health))hp"
+        } else {
+            summary = "\(label) \(distance)m \(formatScalar(health))hp"
+        }
+
+        if let alert {
+            summary += " a\(formatScalar(alert))"
+        }
+
+        return summary
+    }
+
+    private static func dummyStatusSummary(state: MDTBEngineState, targetDistance: String) -> String {
+        targetStatusSummary(
+            label: "dummy",
+            distance: targetDistance,
+            inRange: state.combat_target_in_range != 0,
+            health: state.combat_target_health,
+            resetTimer: state.combat_target_reset_timer
+        )
+    }
+
+    private static func lookoutStatusSummary(state: MDTBEngineState, targetDistance: String) -> String {
+        targetStatusSummary(
+            label: "lookout",
+            distance: targetDistance,
+            inRange: state.combat_hostile_in_range != 0,
+            health: state.combat_hostile_health,
+            resetTimer: state.combat_hostile_reset_timer,
+            alert: state.combat_hostile_alert
+        )
+    }
+
+    private static func weaponSwitchHint(state: MDTBEngineState) -> String {
+        var hints: [String] = []
+
+        if state.melee_weapon_owned != 0 && state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponLeadPipe) {
+            hints.append("1 lead pipe")
+        }
+        if state.firearm_owned != 0 && state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponPistol) {
+            hints.append("2 pistol")
+        }
+
+        guard !hints.isEmpty else {
+            return ""
+        }
+
+        return " / " + hints.joined(separator: " / ")
     }
 
     private static func styleLabel(_ value: UInt32) -> String {
@@ -2164,6 +2841,30 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "dismount"
         default:
             return "exit"
+        }
+    }
+
+    private static func attackPhaseLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBMeleeAttackWindup):
+            return "windup"
+        case UInt32(MDTBMeleeAttackStrike):
+            return "strike"
+        case UInt32(MDTBMeleeAttackRecovery):
+            return "recover"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func equippedWeaponLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBEquippedWeaponLeadPipe):
+            return "lead pipe"
+        case UInt32(MDTBEquippedWeaponPistol):
+            return "pistol"
+        default:
+            return "unarmed"
         }
     }
 

@@ -67,10 +67,14 @@ static uint32_t g_scene_scope_layer = MDTBSceneLayerShared;
 static void build_frontage_for_block(const MDTBBlockDescriptor *block);
 static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
 static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
+static void build_combat_sandbox_props(void);
 static MDTBFloat3 view_forward(float yaw, float pitch);
 static MDTBFloat3 normalize_flat(MDTBFloat3 value);
 static MDTBFloat3 vehicle_forward_flat(float heading);
 static MDTBFloat3 vehicle_right_flat(float heading);
+static MDTBFloat3 actor_focus_position(const MDTBEngineState *state);
+static void refresh_combat_proximity(MDTBEngineState *state);
+static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack, int wants_reload);
 
 static const float kPi = 3.1415926535f;
 static const float kRoadHalfWidth = 5.8f;
@@ -90,6 +94,31 @@ static const float kVehicleMountRadius = 3.6f;
 static const float kVehiclePreviewRadius = 10.5f;
 static const float kVehicleLaneAssistStrength = 5.2f;
 static const float kVehicleLanePullStrength = 4.0f;
+static const MDTBFloat3 kLeadPipePickupPosition = {-13.4f, kSidewalkHeight, 43.8f};
+static const MDTBFloat3 kPistolPickupPosition = {-4.2f, kSidewalkHeight, 44.6f};
+static const MDTBFloat3 kPracticeDummyPosition = {-12.6f, kSidewalkHeight, 57.4f};
+static const MDTBFloat3 kLookoutBasePosition = {4.6f, kSidewalkHeight, 56.8f};
+static const float kMeleePickupRadius = 1.45f;
+static const float kMeleeTargetRange = 2.45f;
+static const float kMeleeTargetProximityRadius = 3.1f;
+static const float kMeleeArcDot = 0.38f;
+static const float kMeleeWindupDuration = 0.12f;
+static const float kMeleeStrikeDuration = 0.10f;
+static const float kMeleeRecoveryDuration = 0.24f;
+static const float kPracticeDummyMaxHealth = 100.0f;
+static const float kPracticeDummyRespawnDelay = 1.6f;
+static const float kLookoutMaxHealth = 84.0f;
+static const float kLookoutRespawnDelay = 2.2f;
+static const float kLookoutAlertDistance = 8.2f;
+static const float kLookoutAimBias = 0.06f;
+static const uint32_t kPistolClipCapacity = 6u;
+static const uint32_t kPistolInitialReserveAmmo = 18u;
+static const float kPistolPickupRadius = 1.45f;
+static const float kPistolRange = 20.0f;
+static const float kPistolAimDot = 0.90f;
+static const float kPistolShotCooldown = 0.24f;
+static const float kPistolReloadDuration = 1.15f;
+static const float kPistolShotFlashDuration = 0.10f;
 
 static const MDTBBlockDescriptor kBlockLayout[] = {
     {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateCivicRetail, MDTBWorldChunkWestGrid},
@@ -482,6 +511,697 @@ static MDTBFloat3 current_player_position(const MDTBEngineState *state) {
     }
 
     return make_float3(0.0f, 0.0f, 0.0f);
+}
+
+static int weapon_is_owned(const MDTBEngineState *state, uint32_t weapon_kind) {
+    if (state == NULL) {
+        return 0;
+    }
+
+    switch (weapon_kind) {
+        case MDTBEquippedWeaponLeadPipe:
+            return state->melee_weapon_owned != 0u;
+        case MDTBEquippedWeaponPistol:
+            return state->firearm_owned != 0u;
+        default:
+            return 0;
+    }
+}
+
+static int combat_target_kind_is_active(const MDTBEngineState *state, uint32_t target_kind) {
+    if (state == NULL) {
+        return 0;
+    }
+
+    switch (target_kind) {
+        case MDTBCombatTargetDummy:
+            return state->combat_target_health > 0.0f &&
+                state->combat_target_reset_timer <= 0.0f;
+        case MDTBCombatTargetLookout:
+            return state->combat_hostile_health > 0.0f &&
+                state->combat_hostile_reset_timer <= 0.0f;
+        default:
+            return 0;
+    }
+}
+
+static MDTBFloat3 combat_target_position_for_kind(const MDTBEngineState *state, uint32_t target_kind) {
+    if (state == NULL) {
+        return make_float3(0.0f, 0.0f, 0.0f);
+    }
+
+    switch (target_kind) {
+        case MDTBCombatTargetDummy:
+            return state->combat_target_position;
+        case MDTBCombatTargetLookout:
+            return state->combat_hostile_position;
+        default:
+            return make_float3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+static MDTBFloat3 combat_target_aim_position_for_kind(const MDTBEngineState *state, uint32_t target_kind) {
+    MDTBFloat3 position = combat_target_position_for_kind(state, target_kind);
+
+    switch (target_kind) {
+        case MDTBCombatTargetDummy:
+            position.y += 1.35f;
+            break;
+        case MDTBCombatTargetLookout:
+            position.y += 1.42f;
+            break;
+        default:
+            break;
+    }
+
+    return position;
+}
+
+static float combat_target_distance_xz(const MDTBEngineState *state, uint32_t target_kind) {
+    return distance_squared_xz(current_player_position(state), combat_target_position_for_kind(state, target_kind));
+}
+
+static uint32_t preferred_focus_target(const MDTBEngineState *state) {
+    if (state == NULL) {
+        return MDTBCombatTargetNone;
+    }
+
+    if (combat_target_kind_is_active(state, state->combat_focus_target_kind)) {
+        return state->combat_focus_target_kind;
+    }
+
+    if (state->combat_target_in_range != 0u && combat_target_kind_is_active(state, MDTBCombatTargetDummy)) {
+        return MDTBCombatTargetDummy;
+    }
+
+    if (state->combat_hostile_in_range != 0u && combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+        return MDTBCombatTargetLookout;
+    }
+
+    return MDTBCombatTargetNone;
+}
+
+static void update_combat_focus(MDTBEngineState *state) {
+    MDTBFloat3 origin;
+    MDTBFloat3 forward;
+    MDTBFloat3 forward_flat;
+    uint32_t target_kinds[2] = {MDTBCombatTargetDummy, MDTBCombatTargetLookout};
+    uint32_t best_kind = MDTBCombatTargetNone;
+    float best_score = -1000000.0f;
+    float best_distance = 0.0f;
+    float best_alignment = 0.0f;
+
+    if (state == NULL) {
+        return;
+    }
+
+    state->combat_focus_target_kind = MDTBCombatTargetNone;
+    state->combat_focus_distance = 0.0f;
+    state->combat_focus_alignment = 0.0f;
+
+    if (state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return;
+    }
+
+    origin = actor_focus_position(state);
+    forward = view_forward(state->camera.yaw, state->camera.pitch);
+    forward_flat = normalize_flat(make_float3(forward.x, 0.0f, forward.z));
+
+    for (size_t index = 0u; index < 2u; ++index) {
+        const uint32_t target_kind = target_kinds[index];
+        const MDTBFloat3 target = combat_target_aim_position_for_kind(state, target_kind);
+        const MDTBFloat3 to_target = make_float3(target.x - origin.x, target.y - origin.y, target.z - origin.z);
+        const float distance = sqrtf((to_target.x * to_target.x) + (to_target.y * to_target.y) + (to_target.z * to_target.z));
+        const float flat_distance = sqrtf(combat_target_distance_xz(state, target_kind));
+        const float direction_length = sqrtf((to_target.x * to_target.x) + (to_target.y * to_target.y) + (to_target.z * to_target.z));
+        const float alignment = direction_length <= 0.0001f
+            ? 0.0f
+            : ((forward.x * to_target.x) + (forward.y * to_target.y) + (forward.z * to_target.z)) / direction_length;
+        const MDTBFloat3 to_target_flat = normalize_flat(make_float3(target.x - origin.x, 0.0f, target.z - origin.z));
+        const float flat_alignment = dot_flat(forward_flat, to_target_flat);
+        float score;
+
+        if (!combat_target_kind_is_active(state, target_kind)) {
+            continue;
+        }
+
+        if (distance > (kPistolRange + 2.0f)) {
+            continue;
+        }
+
+        if (alignment < 0.52f && flat_alignment < 0.56f) {
+            continue;
+        }
+
+        score = alignment * 5.0f;
+        score += flat_alignment * 1.6f;
+        score -= distance * 0.10f;
+        if (target_kind == preferred_focus_target(state)) {
+            score += 0.28f;
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best_kind = target_kind;
+            best_distance = flat_distance;
+            best_alignment = fmaxf(alignment, flat_alignment);
+        }
+    }
+
+    state->combat_focus_target_kind = best_kind;
+    state->combat_focus_distance = best_kind == MDTBCombatTargetNone ? 0.0f : best_distance;
+    state->combat_focus_alignment = best_kind == MDTBCombatTargetNone ? 0.0f : clampf(best_alignment, 0.0f, 1.0f);
+}
+
+static uint32_t select_melee_target(const MDTBEngineState *state) {
+    const MDTBFloat3 origin = state->actor_position;
+    const MDTBFloat3 forward = normalize_flat(view_forward(state->camera.yaw, 0.0f));
+    uint32_t target_kinds[2] = {MDTBCombatTargetDummy, MDTBCombatTargetLookout};
+    uint32_t best_kind = MDTBCombatTargetNone;
+    float best_score = 1000000.0f;
+
+    if (state == NULL || state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return MDTBCombatTargetNone;
+    }
+
+    for (size_t index = 0u; index < 2u; ++index) {
+        const uint32_t target_kind = target_kinds[index];
+        const MDTBFloat3 target = combat_target_position_for_kind(state, target_kind);
+        const MDTBFloat3 to_target = make_float3(target.x - origin.x, 0.0f, target.z - origin.z);
+        const float distance_squared = distance_squared_xz(origin, target);
+        const MDTBFloat3 direction = normalize_flat(to_target);
+        const float alignment = dot_flat(forward, direction);
+        float score;
+
+        if (!combat_target_kind_is_active(state, target_kind)) {
+            continue;
+        }
+
+        if (distance_squared > (kMeleeTargetRange * kMeleeTargetRange) || alignment < kMeleeArcDot) {
+            continue;
+        }
+
+        score = distance_squared - (alignment * 4.0f);
+        if (target_kind == state->combat_focus_target_kind) {
+            score -= 0.30f;
+        }
+
+        if (score < best_score) {
+            best_score = score;
+            best_kind = target_kind;
+        }
+    }
+
+    return best_kind;
+}
+
+static uint32_t select_firearm_target(const MDTBEngineState *state, MDTBFloat3 origin, MDTBFloat3 *shot_end_out) {
+    MDTBFloat3 forward = view_forward(state->camera.yaw, state->camera.pitch);
+    const float forward_length = sqrtf((forward.x * forward.x) + (forward.y * forward.y) + (forward.z * forward.z));
+    MDTBFloat3 shot_end;
+    MDTBFloat3 forward_flat;
+    uint32_t target_kinds[2] = {MDTBCombatTargetDummy, MDTBCombatTargetLookout};
+    uint32_t best_kind = MDTBCombatTargetNone;
+    float best_score = 1000000.0f;
+
+    if (shot_end_out != NULL) {
+        *shot_end_out = origin;
+    }
+
+    if (state == NULL || state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return MDTBCombatTargetNone;
+    }
+
+    if (forward_length <= 0.0001f) {
+        forward = make_float3(0.0f, 0.0f, -1.0f);
+    } else {
+        forward = make_float3(
+            forward.x / forward_length,
+            forward.y / forward_length,
+            forward.z / forward_length
+        );
+    }
+
+    shot_end = make_float3(
+        origin.x + (forward.x * kPistolRange),
+        origin.y + (forward.y * kPistolRange),
+        origin.z + (forward.z * kPistolRange)
+    );
+    forward_flat = normalize_flat(make_float3(forward.x, 0.0f, forward.z));
+
+    if (shot_end_out != NULL) {
+        *shot_end_out = shot_end;
+    }
+
+    for (size_t index = 0u; index < 2u; ++index) {
+        const uint32_t target_kind = target_kinds[index];
+        const MDTBFloat3 target = combat_target_aim_position_for_kind(state, target_kind);
+        const MDTBFloat3 to_target_flat = normalize_flat(make_float3(target.x - origin.x, 0.0f, target.z - origin.z));
+        const float flat_alignment = dot_flat(forward_flat, to_target_flat);
+        const float impact_radius = target_kind == MDTBCombatTargetLookout ? 0.78f : 0.85f;
+        const float aim_dot_threshold = target_kind == MDTBCombatTargetLookout ? (kPistolAimDot - kLookoutAimBias) : kPistolAimDot;
+        const float distance_squared = point_to_segment_distance_squared_xz(target, origin, shot_end);
+        float score;
+
+        if (!combat_target_kind_is_active(state, target_kind)) {
+            continue;
+        }
+
+        if (flat_alignment < aim_dot_threshold || distance_squared > (impact_radius * impact_radius)) {
+            continue;
+        }
+
+        score = distance_squared;
+        score += (1.0f - flat_alignment) * 4.0f;
+        score += combat_target_distance_xz(state, target_kind) * 0.0015f;
+        if (target_kind == state->combat_focus_target_kind) {
+            score -= 0.14f;
+        }
+
+        if (score < best_score) {
+            best_score = score;
+            best_kind = target_kind;
+            if (shot_end_out != NULL) {
+                *shot_end_out = target;
+            }
+        }
+    }
+
+    return best_kind;
+}
+
+static void refresh_combat_proximity(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->melee_weapon_pickup_position = kLeadPipePickupPosition;
+    state->firearm_pickup_position = kPistolPickupPosition;
+    state->combat_target_position = kPracticeDummyPosition;
+    state->melee_weapon_pickup_in_range = 0u;
+    state->firearm_pickup_in_range = 0u;
+    state->combat_target_in_range = 0u;
+    state->combat_hostile_in_range = 0u;
+    state->combat_focus_target_kind = MDTBCombatTargetNone;
+    state->combat_focus_distance = 0.0f;
+    state->combat_focus_alignment = 0.0f;
+
+    if (state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return;
+    }
+
+    if (!state->melee_weapon_owned &&
+        distance_squared_xz(state->actor_position, kLeadPipePickupPosition) <= (kMeleePickupRadius * kMeleePickupRadius)) {
+        state->melee_weapon_pickup_in_range = 1u;
+    }
+
+    if (!state->firearm_owned &&
+        distance_squared_xz(state->actor_position, kPistolPickupPosition) <= (kPistolPickupRadius * kPistolPickupRadius)) {
+        state->firearm_pickup_in_range = 1u;
+    }
+
+    if (combat_target_kind_is_active(state, MDTBCombatTargetDummy) &&
+        distance_squared_xz(state->actor_position, state->combat_target_position) <= (kMeleeTargetProximityRadius * kMeleeTargetProximityRadius)) {
+        state->combat_target_in_range = 1u;
+    }
+
+    if (combat_target_kind_is_active(state, MDTBCombatTargetLookout) &&
+        distance_squared_xz(state->actor_position, state->combat_hostile_position) <= (kMeleeTargetProximityRadius * kMeleeTargetProximityRadius)) {
+        state->combat_hostile_in_range = 1u;
+    }
+
+    update_combat_focus(state);
+}
+
+static void clear_melee_attack(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->melee_attack_phase = MDTBMeleeAttackIdle;
+    state->melee_attack_timer = 0.0f;
+    state->melee_attack_connected = 0u;
+}
+
+static void clear_firearm_last_shot(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->firearm_last_shot_from = make_float3(0.0f, 0.0f, 0.0f);
+    state->firearm_last_shot_to = make_float3(0.0f, 0.0f, 0.0f);
+    state->firearm_last_shot_timer = 0.0f;
+    state->firearm_last_shot_hit = 0u;
+}
+
+static void cancel_firearm_reload(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->firearm_reloading = 0u;
+    state->firearm_reload_timer = 0.0f;
+}
+
+static void equip_weapon(MDTBEngineState *state, uint32_t weapon_kind) {
+    if (state == NULL) {
+        return;
+    }
+
+    if (weapon_kind != MDTBEquippedWeaponNone && !weapon_is_owned(state, weapon_kind)) {
+        return;
+    }
+
+    if (weapon_kind != MDTBEquippedWeaponLeadPipe) {
+        clear_melee_attack(state);
+    }
+
+    if (weapon_kind != MDTBEquippedWeaponPistol) {
+        cancel_firearm_reload(state);
+    }
+
+    state->equipped_weapon_kind = weapon_kind;
+}
+
+static void start_melee_attack(MDTBEngineState *state) {
+    if (state == NULL ||
+        state->traversal_mode != MDTBTraversalModeOnFoot ||
+        state->equipped_weapon_kind != MDTBEquippedWeaponLeadPipe ||
+        !state->melee_weapon_owned ||
+        state->melee_attack_phase != MDTBMeleeAttackIdle) {
+        return;
+    }
+
+    state->melee_attack_phase = MDTBMeleeAttackWindup;
+    state->melee_attack_timer = kMeleeWindupDuration;
+    state->melee_attack_connected = 0u;
+    state->combat_last_hit_target_kind = MDTBCombatTargetNone;
+}
+
+static void apply_damage_to_target(MDTBEngineState *state, uint32_t target_kind, float damage, float live_reaction, float down_reaction) {
+    if (state == NULL || !combat_target_kind_is_active(state, target_kind)) {
+        return;
+    }
+
+    switch (target_kind) {
+        case MDTBCombatTargetDummy:
+            state->combat_target_health = fmaxf(0.0f, state->combat_target_health - damage);
+            state->combat_target_reaction = fmaxf(
+                state->combat_target_reaction,
+                state->combat_target_health > 0.0f ? live_reaction : down_reaction
+            );
+            if (state->combat_target_health <= 0.0f) {
+                state->combat_target_reset_timer = kPracticeDummyRespawnDelay;
+            }
+            break;
+        case MDTBCombatTargetLookout:
+            state->combat_hostile_health = fmaxf(0.0f, state->combat_hostile_health - damage);
+            state->combat_hostile_reaction = fmaxf(
+                state->combat_hostile_reaction,
+                state->combat_hostile_health > 0.0f ? live_reaction : down_reaction
+            );
+            state->combat_hostile_alert = state->combat_hostile_health > 0.0f ? 1.0f : 0.0f;
+            if (state->combat_hostile_health <= 0.0f) {
+                state->combat_hostile_reset_timer = kLookoutRespawnDelay;
+            }
+            break;
+        default:
+            return;
+    }
+
+    state->combat_last_hit_target_kind = target_kind;
+}
+
+static void pickup_nearest_weapon(MDTBEngineState *state) {
+    float best_distance_squared = 1000000.0f;
+    uint32_t selected_weapon = MDTBEquippedWeaponNone;
+
+    if (state == NULL || state->traversal_mode != MDTBTraversalModeOnFoot) {
+        return;
+    }
+
+    if (!state->melee_weapon_owned && state->melee_weapon_pickup_in_range != 0u) {
+        const float distance_squared = distance_squared_xz(state->actor_position, kLeadPipePickupPosition);
+        if (distance_squared < best_distance_squared) {
+            best_distance_squared = distance_squared;
+            selected_weapon = MDTBEquippedWeaponLeadPipe;
+        }
+    }
+
+    if (!state->firearm_owned && state->firearm_pickup_in_range != 0u) {
+        const float distance_squared = distance_squared_xz(state->actor_position, kPistolPickupPosition);
+        if (distance_squared < best_distance_squared) {
+            best_distance_squared = distance_squared;
+            selected_weapon = MDTBEquippedWeaponPistol;
+        }
+    }
+
+    switch (selected_weapon) {
+        case MDTBEquippedWeaponLeadPipe:
+            state->melee_weapon_owned = 1u;
+            equip_weapon(state, MDTBEquippedWeaponLeadPipe);
+            break;
+        case MDTBEquippedWeaponPistol:
+            state->firearm_owned = 1u;
+            if (state->firearm_clip_ammo == 0u && state->firearm_reserve_ammo == 0u) {
+                state->firearm_clip_ammo = kPistolClipCapacity;
+                state->firearm_reserve_ammo = kPistolInitialReserveAmmo;
+            }
+            equip_weapon(state, MDTBEquippedWeaponPistol);
+            break;
+        default:
+            break;
+    }
+}
+
+static void start_firearm_reload(MDTBEngineState *state) {
+    if (state == NULL ||
+        state->traversal_mode != MDTBTraversalModeOnFoot ||
+        state->equipped_weapon_kind != MDTBEquippedWeaponPistol ||
+        !state->firearm_owned ||
+        state->firearm_reloading != 0u ||
+        state->firearm_clip_ammo >= kPistolClipCapacity ||
+        state->firearm_reserve_ammo == 0u) {
+        return;
+    }
+
+    clear_melee_attack(state);
+    state->firearm_reloading = 1u;
+    state->firearm_reload_timer = kPistolReloadDuration;
+}
+
+static void complete_firearm_reload(MDTBEngineState *state) {
+    uint32_t missing_rounds;
+    uint32_t loaded_rounds;
+
+    if (state == NULL) {
+        return;
+    }
+
+    missing_rounds = kPistolClipCapacity - state->firearm_clip_ammo;
+    loaded_rounds = missing_rounds < state->firearm_reserve_ammo ? missing_rounds : state->firearm_reserve_ammo;
+
+    state->firearm_clip_ammo += loaded_rounds;
+    state->firearm_reserve_ammo -= loaded_rounds;
+    state->firearm_reloading = 0u;
+    state->firearm_reload_timer = 0.0f;
+}
+
+static void fire_pistol(MDTBEngineState *state) {
+    MDTBFloat3 shot_origin;
+    MDTBFloat3 shot_end;
+    MDTBFloat3 muzzle_right;
+    uint32_t hit_target_kind;
+
+    if (state == NULL ||
+        state->traversal_mode != MDTBTraversalModeOnFoot ||
+        state->equipped_weapon_kind != MDTBEquippedWeaponPistol ||
+        !state->firearm_owned ||
+        state->firearm_reloading != 0u ||
+        state->firearm_cooldown_timer > 0.0f) {
+        return;
+    }
+
+    if (state->firearm_clip_ammo == 0u) {
+        if (state->firearm_reserve_ammo > 0u) {
+            start_firearm_reload(state);
+        }
+        return;
+    }
+
+    state->firearm_clip_ammo -= 1u;
+    state->firearm_cooldown_timer = kPistolShotCooldown;
+    state->combat_last_hit_target_kind = MDTBCombatTargetNone;
+
+    shot_origin = actor_focus_position(state);
+    muzzle_right = make_float3(cosf(state->camera.yaw), 0.0f, sinf(state->camera.yaw));
+    shot_origin.x += muzzle_right.x * 0.14f;
+    shot_origin.z += muzzle_right.z * 0.14f;
+    shot_origin.y -= 0.04f;
+
+    hit_target_kind = select_firearm_target(state, shot_origin, &shot_end);
+    state->firearm_last_shot_from = shot_origin;
+    state->firearm_last_shot_to = shot_end;
+    state->firearm_last_shot_timer = kPistolShotFlashDuration;
+    state->firearm_last_shot_hit = hit_target_kind != MDTBCombatTargetNone ? 1u : 0u;
+
+    if (hit_target_kind != MDTBCombatTargetNone) {
+        apply_damage_to_target(
+            state,
+            hit_target_kind,
+            hit_target_kind == MDTBCombatTargetLookout ? 28.0f : 22.0f,
+            hit_target_kind == MDTBCombatTargetLookout ? 0.98f : 0.82f,
+            hit_target_kind == MDTBCombatTargetLookout ? 1.42f : 1.30f
+        );
+    }
+}
+
+static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack, int wants_reload) {
+    if (state == NULL) {
+        return;
+    }
+
+    state->combat_target_reaction = approachf(state->combat_target_reaction, 0.0f, 7.0f, dt);
+    state->combat_hostile_reaction = approachf(state->combat_hostile_reaction, 0.0f, 7.6f, dt);
+    state->firearm_cooldown_timer = fmaxf(state->firearm_cooldown_timer - dt, 0.0f);
+
+    if (state->firearm_last_shot_timer > 0.0f) {
+        state->firearm_last_shot_timer = fmaxf(state->firearm_last_shot_timer - dt, 0.0f);
+        if (state->firearm_last_shot_timer <= 0.0f) {
+            state->firearm_last_shot_hit = 0u;
+        }
+    }
+
+    if (state->combat_target_reset_timer > 0.0f) {
+        state->combat_target_reset_timer = fmaxf(state->combat_target_reset_timer - dt, 0.0f);
+        if (state->combat_target_reset_timer <= 0.0f) {
+            state->combat_target_health = kPracticeDummyMaxHealth;
+            state->combat_target_reaction = 0.0f;
+        }
+    }
+
+    if (state->combat_hostile_reset_timer > 0.0f) {
+        state->combat_hostile_reset_timer = fmaxf(state->combat_hostile_reset_timer - dt, 0.0f);
+        if (state->combat_hostile_reset_timer <= 0.0f) {
+            state->combat_hostile_health = kLookoutMaxHealth;
+            state->combat_hostile_reaction = 0.0f;
+            state->combat_hostile_alert = 0.0f;
+            state->combat_hostile_position = kLookoutBasePosition;
+            state->combat_hostile_heading = kPi;
+        }
+    }
+
+    if (state->firearm_reloading != 0u) {
+        state->firearm_reload_timer = fmaxf(state->firearm_reload_timer - dt, 0.0f);
+        if (state->firearm_reload_timer <= 0.0f) {
+            complete_firearm_reload(state);
+        }
+    }
+
+    if (state->traversal_mode != MDTBTraversalModeOnFoot) {
+        clear_melee_attack(state);
+        cancel_firearm_reload(state);
+        refresh_combat_proximity(state);
+        return;
+    }
+
+    if (combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+        const MDTBFloat3 actor_position = current_player_position(state);
+        const float alert_distance_squared = distance_squared_xz(actor_position, state->combat_hostile_position);
+        const float patrol_phase = state->elapsed_time * 0.92f;
+        const float patrol_depth_phase = state->elapsed_time * 1.56f;
+        const float alert_target =
+            (alert_distance_squared <= (kLookoutAlertDistance * kLookoutAlertDistance) ||
+             state->combat_focus_target_kind == MDTBCombatTargetLookout) ? 1.0f : 0.18f;
+        const float patrol_scale = 1.0f - (state->combat_hostile_alert * 0.58f);
+        const float step_toward_player = clampf(state->combat_hostile_alert, 0.0f, 0.9f);
+        MDTBFloat3 desired_position = make_float3(
+            kLookoutBasePosition.x + sinf(patrol_phase) * 3.1f * patrol_scale,
+            kLookoutBasePosition.y,
+            kLookoutBasePosition.z + cosf(patrol_depth_phase) * 0.9f
+        );
+        const MDTBFloat3 to_actor = make_float3(
+            actor_position.x - state->combat_hostile_position.x,
+            0.0f,
+            actor_position.z - state->combat_hostile_position.z
+        );
+        float desired_heading = state->combat_hostile_heading;
+
+        state->combat_hostile_alert = approachf(state->combat_hostile_alert, alert_target, 3.8f, dt);
+        desired_position.x += normalize_flat(to_actor).x * step_toward_player * 0.9f;
+        desired_position.z += normalize_flat(to_actor).z * step_toward_player * 0.9f;
+        state->combat_hostile_position = approach_float3(state->combat_hostile_position, desired_position, 5.0f, dt);
+
+        if (fabsf(to_actor.x) > 0.001f || fabsf(to_actor.z) > 0.001f) {
+            desired_heading = atan2f(to_actor.x, -to_actor.z);
+        } else {
+            desired_heading = sinf(patrol_phase) * 0.16f;
+        }
+
+        state->combat_hostile_heading = approach_angle(state->combat_hostile_heading, desired_heading, 8.4f, dt);
+    } else {
+        state->combat_hostile_alert = approachf(state->combat_hostile_alert, 0.0f, 6.0f, dt);
+    }
+
+    refresh_combat_proximity(state);
+
+    if (wants_reload) {
+        start_firearm_reload(state);
+    }
+
+    if (wants_attack) {
+        switch (state->equipped_weapon_kind) {
+            case MDTBEquippedWeaponLeadPipe:
+                start_melee_attack(state);
+                break;
+            case MDTBEquippedWeaponPistol:
+                fire_pistol(state);
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (state->melee_attack_phase != MDTBMeleeAttackIdle) {
+        state->melee_attack_timer = fmaxf(state->melee_attack_timer - dt, 0.0f);
+    }
+
+    switch (state->melee_attack_phase) {
+        case MDTBMeleeAttackWindup:
+            if (state->melee_attack_timer <= 0.0f) {
+                const uint32_t melee_target_kind = select_melee_target(state);
+                state->melee_attack_phase = MDTBMeleeAttackStrike;
+                state->melee_attack_timer = kMeleeStrikeDuration;
+                state->melee_attack_connected = 0u;
+                if (melee_target_kind != MDTBCombatTargetNone) {
+                    apply_damage_to_target(
+                        state,
+                        melee_target_kind,
+                        melee_target_kind == MDTBCombatTargetLookout ? 30.0f : 34.0f,
+                        melee_target_kind == MDTBCombatTargetLookout ? 1.08f : 1.0f,
+                        melee_target_kind == MDTBCombatTargetLookout ? 1.46f : 1.35f
+                    );
+                    state->melee_attack_connected = 1u;
+                }
+            }
+            break;
+        case MDTBMeleeAttackStrike:
+            if (state->melee_attack_timer <= 0.0f) {
+                state->melee_attack_phase = MDTBMeleeAttackRecovery;
+                state->melee_attack_timer = kMeleeRecoveryDuration;
+            }
+            break;
+        case MDTBMeleeAttackRecovery:
+            if (state->melee_attack_timer <= 0.0f) {
+                clear_melee_attack(state);
+            }
+            break;
+        case MDTBMeleeAttackIdle:
+        default:
+            break;
+    }
+
+    refresh_combat_proximity(state);
 }
 
 static int position_overlaps_collision(MDTBFloat3 position, float radius) {
@@ -2066,6 +2786,80 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
     }
 }
 
+static void build_combat_sandbox_props(void) {
+    const MDTBFloat4 lane_color = make_float4(0.23f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 stripe_color = make_float4(0.90f, 0.86f, 0.64f, 1.0f);
+    const MDTBFloat4 cover_color = make_float4(0.47f, 0.48f, 0.44f, 1.0f);
+    const MDTBFloat4 slab_color = make_float4(0.62f, 0.58f, 0.52f, 1.0f);
+
+    push_scene_box(make_box(
+        make_float3(-4.0f, kSidewalkHeight + 0.02f, 51.0f),
+        make_float3(13.2f, 0.02f, 11.0f),
+        lane_color
+    ));
+
+    for (int stripe_index = 0; stripe_index < 4; ++stripe_index) {
+        push_scene_box(make_box(
+            make_float3(-12.0f + ((float)stripe_index * 5.8f), kSidewalkHeight + 0.03f, 46.8f),
+            make_float3(1.45f, 0.01f, 0.10f),
+            stripe_color
+        ));
+        push_scene_box(make_box(
+            make_float3(-11.4f + ((float)stripe_index * 5.8f), kSidewalkHeight + 0.03f, 55.1f),
+            make_float3(1.20f, 0.01f, 0.10f),
+            stripe_color
+        ));
+    }
+
+    push_prop(
+        make_float3(-10.6f, 0.55f, 50.2f),
+        make_float3(1.75f, 0.55f, 0.36f),
+        cover_color,
+        1
+    );
+    push_prop(
+        make_float3(-1.5f, 0.52f, 53.0f),
+        make_float3(1.32f, 0.52f, 0.36f),
+        cover_color,
+        1
+    );
+    push_prop(
+        make_float3(6.2f, 1.06f, 52.7f),
+        make_float3(0.12f, 1.06f, 2.25f),
+        make_float4(0.30f, 0.31f, 0.35f, 1.0f),
+        1
+    );
+    push_prop(
+        make_float3(-4.0f, 0.18f, 58.9f),
+        make_float3(9.2f, 0.18f, 0.34f),
+        slab_color,
+        1
+    );
+    push_prop(
+        make_float3(-12.6f, 1.0f, 60.6f),
+        make_float3(2.4f, 1.0f, 0.14f),
+        make_float4(0.34f, 0.36f, 0.38f, 1.0f),
+        1
+    );
+    push_prop(
+        make_float3(4.8f, 1.0f, 60.6f),
+        make_float3(2.8f, 1.0f, 0.14f),
+        make_float4(0.34f, 0.36f, 0.38f, 1.0f),
+        1
+    );
+
+    push_planter(-8.1f, 47.8f, 0.54f);
+    push_planter(2.4f, 48.7f, 0.58f);
+    push_planter(8.5f, 56.2f, 0.50f);
+
+    push_bollard(-15.8f, 45.2f, 0.92f);
+    push_bollard(-11.8f, 45.4f, 0.92f);
+    push_bollard(-7.8f, 45.2f, 0.92f);
+    push_bollard(-3.8f, 45.4f, 0.92f);
+    push_bollard(0.2f, 45.2f, 0.92f);
+    push_bollard(4.2f, 45.4f, 0.92f);
+}
+
 static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
     build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
@@ -2131,6 +2925,10 @@ static void build_scene(void) {
 
         clear_scene_scope();
     }
+
+    set_scene_scope(0u, MDTBSceneLayerBlockOwned);
+    build_combat_sandbox_props();
+    clear_scene_scope();
 
     g_scene_initialized = 1;
 }
@@ -2348,6 +3146,7 @@ static void enter_vehicle_from_anchor(MDTBEngineState *state, uint32_t anchor_in
     state->active_vehicle_collision_pulse = 0.0f;
     state->active_vehicle_recovery = 0.0f;
     state->active_vehicle_steer_visual = 0.0f;
+    clear_melee_attack(state);
     sync_active_vehicle_anchor(state);
 }
 
@@ -2734,9 +3533,42 @@ void mdtb_engine_init(MDTBEngineState *state) {
     state->active_vehicle_collision_pulse = 0.0f;
     state->active_vehicle_recovery = 0.0f;
     state->active_vehicle_steer_visual = 0.0f;
+    state->melee_weapon_owned = 0u;
+    state->melee_weapon_pickup_in_range = 0u;
+    state->melee_weapon_pickup_position = kLeadPipePickupPosition;
+    state->melee_attack_phase = MDTBMeleeAttackIdle;
+    state->melee_attack_connected = 0u;
+    state->melee_attack_timer = 0.0f;
+    state->firearm_owned = 0u;
+    state->firearm_pickup_in_range = 0u;
+    state->firearm_pickup_position = kPistolPickupPosition;
+    state->equipped_weapon_kind = MDTBEquippedWeaponNone;
+    state->firearm_clip_ammo = 0u;
+    state->firearm_reserve_ammo = 0u;
+    state->firearm_reloading = 0u;
+    state->firearm_reload_timer = 0.0f;
+    state->firearm_cooldown_timer = 0.0f;
+    clear_firearm_last_shot(state);
+    state->combat_target_position = kPracticeDummyPosition;
+    state->combat_target_in_range = 0u;
+    state->combat_target_health = kPracticeDummyMaxHealth;
+    state->combat_target_reaction = 0.0f;
+    state->combat_target_reset_timer = 0.0f;
+    state->combat_hostile_position = kLookoutBasePosition;
+    state->combat_hostile_heading = kPi;
+    state->combat_hostile_in_range = 0u;
+    state->combat_hostile_health = kLookoutMaxHealth;
+    state->combat_hostile_reaction = 0.0f;
+    state->combat_hostile_reset_timer = 0.0f;
+    state->combat_hostile_alert = 0.0f;
+    state->combat_focus_target_kind = MDTBCombatTargetNone;
+    state->combat_focus_distance = 0.0f;
+    state->combat_focus_alignment = 0.0f;
+    state->combat_last_hit_target_kind = MDTBCombatTargetNone;
     state->camera.focus_position = player_focus_position(state);
     state->camera.position = state->camera.focus_position;
     update_runtime_activity(state);
+    refresh_combat_proximity(state);
     refresh_traffic_occupancies(state);
 }
 
@@ -2788,6 +3620,7 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
     }
 
     update_runtime_activity(state);
+    refresh_combat_proximity(state);
 
     if (state->traversal_mode == MDTBTraversalModeOnFoot) {
         if ((input.buttons & MDTBInputCycleHandoff) != 0u) {
@@ -2796,6 +3629,19 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
 
         if ((input.buttons & MDTBInputToggleHandoffLock) != 0u) {
             toggle_vehicle_selection_lock(state);
+        }
+
+        if ((input.buttons & MDTBInputPickupWeapon) != 0u) {
+            pickup_nearest_weapon(state);
+            refresh_combat_proximity(state);
+        }
+
+        if ((input.buttons & MDTBInputEquipMeleeWeapon) != 0u) {
+            equip_weapon(state, MDTBEquippedWeaponLeadPipe);
+        }
+
+        if ((input.buttons & MDTBInputEquipFirearm) != 0u) {
+            equip_weapon(state, MDTBEquippedWeaponPistol);
         }
     }
 
@@ -2812,6 +3658,12 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
         }
     }
 
+    step_combat_state(
+        state,
+        dt,
+        (input.buttons & MDTBInputAttack) != 0u,
+        (input.buttons & MDTBInputReloadWeapon) != 0u
+    );
     refresh_traffic_occupancies(state);
 
     if (state->traversal_mode == MDTBTraversalModeVehicle) {

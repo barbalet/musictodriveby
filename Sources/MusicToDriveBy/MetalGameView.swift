@@ -93,7 +93,11 @@ final class GameMTKView: MTKView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        setMouseLookEnabled(true)
+        if inputController.isMouseLookEnabled {
+            inputController.triggerAttack()
+        } else {
+            setMouseLookEnabled(true)
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {

@@ -10,10 +10,14 @@ final class GameViewModel: ObservableObject {
     let controlsSummary = """
     W A S D: walk, or throttle and steer while driving
     Mouse / trackpad: look when captured
+    Space or left click while captured: attack or fire the equipped weapon
     Q / E or ← / →: turn
     ↑ / ↓: look
     Shift: sprint
     F: enter or exit the selected staged vehicle when prompted
+    T: grab the nearest weapon pickup when you are close to it
+    1 / 2: equip lead pipe or pistol when owned
+    Y: reload the pistol
     R: cycle staged vehicle candidates
     G: lock or unlock the current handoff candidate
     C or Tab: toggle first / third person
@@ -24,7 +28,7 @@ final class GameViewModel: ObservableObject {
     Click the game view if keyboard focus is lost
     """
 
-    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, interactionSummary: String, selectionSummary: String, hazardSummary: String, currentBlock: String, nearestHook: String) {
+    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, combatSummary: String, interactionSummary: String, selectionSummary: String, hazardSummary: String, currentBlock: String, nearestHook: String) {
         debugSummary = """
         camera: \(cameraMode)
         mouse look: \(mouseLook)
@@ -32,6 +36,7 @@ final class GameViewModel: ObservableObject {
         layout: \(layoutSummary)
         activity: \(activitySummary)
         vehicle: \(vehicleStatus)
+        combat: \(combatSummary)
         prompt: \(interactionSummary)
         handoff: \(selectionSummary)
         hazard: \(hazardSummary)
