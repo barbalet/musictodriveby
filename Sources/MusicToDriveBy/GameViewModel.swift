@@ -16,14 +16,20 @@ final class GameViewModel: ObservableObject {
     C or Tab: toggle first / third person
     Click in the game view: capture mouse look
     Esc: release mouse look
+    Command + /: show or hide controls window
+    Green window button or Control + Command + F: fullscreen main window
     Click the game view if keyboard focus is lost
     """
 
-    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String) {
+    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, currentBlock: String, nearestHook: String) {
         debugSummary = """
         camera: \(cameraMode)
         mouse look: \(mouseLook)
         surface: \(surface)
+        layout: \(layoutSummary)
+        activity: \(activitySummary)
+        block: \(currentBlock)
+        nearest hook: \(nearestHook)
         actor: \(Self.format(actorPosition.x)) \(Self.format(actorPosition.y)) \(Self.format(actorPosition.z))
         view: \(Self.format(cameraPosition.x)) \(Self.format(cameraPosition.y)) \(Self.format(cameraPosition.z))
         yaw: \(Self.format(yaw)) rad

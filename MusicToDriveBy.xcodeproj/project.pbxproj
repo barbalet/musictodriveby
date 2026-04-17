@@ -16,6 +16,8 @@
 		9A1B2C3D4E5F678901000206 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000106 /* Renderer.swift */; };
 		9A1B2C3D4E5F678901000207 /* ShaderSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000107 /* ShaderSource.swift */; };
 		9A1B2C3D4E5F678901000208 /* engine_core.c in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000108 /* engine_core.c */; };
+		9A1B2C3D4E5F678901000211 /* ControlPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000111 /* ControlPanelView.swift */; };
+		9A1B2C3D4E5F678901000212 /* WindowSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000112 /* WindowSupport.swift */; };
 		9A1B2C3D4E5F67890100020C /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010C /* AppKit.framework */; };
 		9A1B2C3D4E5F67890100020D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010D /* Metal.framework */; };
 		9A1B2C3D4E5F67890100020E /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010E /* MetalKit.framework */; };
@@ -42,6 +44,8 @@
 		9A1B2C3D4E5F67890100010E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		9A1B2C3D4E5F67890100010F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		9A1B2C3D4E5F678901000110 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		9A1B2C3D4E5F678901000111 /* ControlPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelView.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000112 /* WindowSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSupport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +101,8 @@
 				9A1B2C3D4E5F678901000105 /* MetalGameView.swift */,
 				9A1B2C3D4E5F678901000106 /* Renderer.swift */,
 				9A1B2C3D4E5F678901000107 /* ShaderSource.swift */,
+				9A1B2C3D4E5F678901000111 /* ControlPanelView.swift */,
+				9A1B2C3D4E5F678901000112 /* WindowSupport.swift */,
 			);
 			path = MusicToDriveBy;
 			sourceTree = "<group>";
@@ -195,6 +201,8 @@
 				9A1B2C3D4E5F678901000205 /* MetalGameView.swift in Sources */,
 				9A1B2C3D4E5F678901000206 /* Renderer.swift in Sources */,
 				9A1B2C3D4E5F678901000207 /* ShaderSource.swift in Sources */,
+				9A1B2C3D4E5F678901000211 /* ControlPanelView.swift in Sources */,
+				9A1B2C3D4E5F678901000212 /* WindowSupport.swift in Sources */,
 				9A1B2C3D4E5F678901000208 /* engine_core.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

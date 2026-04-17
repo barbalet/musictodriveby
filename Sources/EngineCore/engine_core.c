@@ -4,8 +4,11 @@
 #include <string.h>
 
 enum {
-    MDTBMaxSceneBoxes = 2304,
-    MDTBMaxCollisionBoxes = 768,
+    MDTBMaxSceneBoxes = 4096,
+    MDTBMaxCollisionBoxes = 1536,
+    MDTBMaxBlocks = 16,
+    MDTBMaxRoadLinks = 32,
+    MDTBMaxInterestPoints = 128,
 };
 
 typedef struct {
@@ -17,21 +20,41 @@ static MDTBBox g_scene_boxes[MDTBMaxSceneBoxes];
 static size_t g_scene_box_count = 0u;
 static MDTBBox g_collision_boxes[MDTBMaxCollisionBoxes];
 static size_t g_collision_box_count = 0u;
+static MDTBBlockDescriptor g_blocks[MDTBMaxBlocks];
+static size_t g_block_count = 0u;
+static MDTBRoadLink g_road_links[MDTBMaxRoadLinks];
+static size_t g_road_link_count = 0u;
+static MDTBInterestPoint g_interest_points[MDTBMaxInterestPoints];
+static size_t g_interest_point_count = 0u;
 static int g_scene_initialized = 0;
 
 static const float kPi = 3.1415926535f;
-static const float kSegmentLength = 24.0f;
 static const float kRoadHalfWidth = 5.8f;
 static const float kCurbOuter = 6.35f;
 static const float kSidewalkOuter = 12.0f;
-static const float kPlayableHalfWidth = 58.0f;
-static const float kPlayableHalfLength = 58.0f;
+static const float kPlayableHalfWidth = 104.0f;
+static const float kPlayableHalfLength = 132.0f;
 static const float kRoadHeight = 0.02f;
 static const float kSidewalkHeight = 0.22f;
 static const float kPlayerRadius = 0.34f;
 static const float kEyeHeight = 1.68f;
 static const float kIntersectionClear = 9.75f;
 static const float kCollisionGap = 0.05f;
+static const float kCrosswalkOffset = 7.25f;
+static const float kLinkActivationHalfWidth = 14.0f;
+
+static const MDTBBlockDescriptor kBlockLayout[] = {
+    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 54.0f},
+    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 54.0f},
+};
+
+static const MDTBRoadLink kRoadLayout[] = {
+    {0u, 1u, {0.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
+};
+
+static size_t scene_layout_count(void) {
+    return sizeof(kBlockLayout) / sizeof(kBlockLayout[0]);
+}
 
 static MDTBFloat3 make_float3(float x, float y, float z) {
     MDTBFloat3 value;
@@ -58,6 +81,10 @@ static MDTBBox make_box(MDTBFloat3 center, MDTBFloat3 half_extents, MDTBFloat4 c
     return value;
 }
 
+static MDTBFloat3 offset_point(MDTBFloat3 origin, float x, float y, float z) {
+    return make_float3(origin.x + x, origin.y + y, origin.z + z);
+}
+
 static float clampf(float value, float minimum, float maximum) {
     if (value < minimum) {
         return minimum;
@@ -80,6 +107,28 @@ static float wrap_angle(float value) {
     }
 
     return value;
+}
+
+static float distance_squared_xz(MDTBFloat3 a, MDTBFloat3 b) {
+    const float dx = a.x - b.x;
+    const float dz = a.z - b.z;
+    return (dx * dx) + (dz * dz);
+}
+
+static float point_to_segment_distance_squared_xz(MDTBFloat3 point, MDTBFloat3 a, MDTBFloat3 b) {
+    const float ab_x = b.x - a.x;
+    const float ab_z = b.z - a.z;
+    const float length_squared = (ab_x * ab_x) + (ab_z * ab_z);
+
+    if (length_squared <= 0.0001f) {
+        return distance_squared_xz(point, a);
+    }
+
+    const float ap_x = point.x - a.x;
+    const float ap_z = point.z - a.z;
+    const float t = clampf(((ap_x * ab_x) + (ap_z * ab_z)) / length_squared, 0.0f, 1.0f);
+    const MDTBFloat3 closest = make_float3(a.x + (ab_x * t), point.y, a.z + (ab_z * t));
+    return distance_squared_xz(point, closest);
 }
 
 static float approachf(float current, float target, float speed, float dt) {
@@ -122,6 +171,122 @@ static void push_collision_box(MDTBBox box) {
     }
 
     g_collision_boxes[g_collision_box_count++] = box;
+}
+
+static void push_block_descriptor(MDTBBlockDescriptor block) {
+    if (g_block_count >= MDTBMaxBlocks) {
+        return;
+    }
+
+    g_blocks[g_block_count++] = block;
+}
+
+static void push_road_link(MDTBRoadLink link) {
+    if (g_road_link_count >= MDTBMaxRoadLinks) {
+        return;
+    }
+
+    g_road_links[g_road_link_count++] = link;
+}
+
+static void push_interest_point(MDTBFloat3 position, float radius, uint32_t kind, uint32_t block_index) {
+    if (g_interest_point_count >= MDTBMaxInterestPoints) {
+        return;
+    }
+
+    g_interest_points[g_interest_point_count].position = position;
+    g_interest_points[g_interest_point_count].radius = radius;
+    g_interest_points[g_interest_point_count].kind = kind;
+    g_interest_points[g_interest_point_count].block_index = block_index;
+    g_interest_point_count += 1u;
+}
+
+static int block_is_active_at_position(uint32_t block_index, MDTBFloat3 position) {
+    if (block_index >= g_block_count) {
+        return 0;
+    }
+
+    const MDTBBlockDescriptor *block = &g_blocks[block_index];
+    const float activation_distance = block->activation_radius;
+    return distance_squared_xz(position, block->origin) <= (activation_distance * activation_distance);
+}
+
+static void update_runtime_activity(MDTBEngineState *state) {
+    MDTBFloat3 actor_position;
+    uint32_t active_block_index = MDTBIndexNone;
+    float best_block_distance_squared = 1000000.0f;
+    uint32_t nearby_block_count = 0u;
+    float best_link_distance_squared = 1000000.0f;
+
+    if (state == NULL) {
+        return;
+    }
+
+    actor_position = state->actor_position;
+    state->active_block_index = MDTBIndexNone;
+    state->nearby_block_count = 0u;
+    state->active_link_index = MDTBIndexNone;
+    state->active_pedestrian_spawn_count = 0u;
+    state->active_vehicle_spawn_count = 0u;
+
+    for (size_t index = 0u; index < g_block_count; ++index) {
+        const float block_distance_squared = distance_squared_xz(actor_position, g_blocks[index].origin);
+
+        if (block_distance_squared < best_block_distance_squared) {
+            best_block_distance_squared = block_distance_squared;
+            active_block_index = (uint32_t)index;
+        }
+
+        if (block_is_active_at_position((uint32_t)index, actor_position)) {
+            nearby_block_count += 1u;
+        }
+    }
+
+    if (active_block_index == MDTBIndexNone) {
+        return;
+    }
+
+    state->active_block_index = active_block_index;
+    state->nearby_block_count = nearby_block_count > 0u ? nearby_block_count : 1u;
+
+    for (size_t index = 0u; index < g_road_link_count; ++index) {
+        const MDTBRoadLink *link = &g_road_links[index];
+        float link_distance_squared;
+
+        if (link->from_block_index >= g_block_count || link->to_block_index >= g_block_count) {
+            continue;
+        }
+
+        if (link->from_block_index != active_block_index && link->to_block_index != active_block_index) {
+            continue;
+        }
+
+        link_distance_squared = point_to_segment_distance_squared_xz(
+            actor_position,
+            g_blocks[link->from_block_index].origin,
+            g_blocks[link->to_block_index].origin
+        );
+
+        if (link_distance_squared < best_link_distance_squared &&
+            link_distance_squared <= (kLinkActivationHalfWidth * kLinkActivationHalfWidth)) {
+            best_link_distance_squared = link_distance_squared;
+            state->active_link_index = (uint32_t)index;
+        }
+    }
+
+    for (size_t index = 0u; index < g_interest_point_count; ++index) {
+        const MDTBInterestPoint *point = &g_interest_points[index];
+
+        if (!block_is_active_at_position(point->block_index, actor_position) && point->block_index != active_block_index) {
+            continue;
+        }
+
+        if (point->kind == MDTBInterestPointPedestrianSpawn) {
+            state->active_pedestrian_spawn_count += 1u;
+        } else if (point->kind == MDTBInterestPointVehicleSpawn) {
+            state->active_vehicle_spawn_count += 1u;
+        }
+    }
 }
 
 static void push_building(MDTBFloat3 center, MDTBFloat3 half_extents, MDTBFloat4 color) {
@@ -365,21 +530,21 @@ static void push_lane_arrow_z(float z_center, float direction_sign) {
     ));
 }
 
-static void push_lane_arrow_x(float x_center, float direction_sign) {
+static void push_lane_arrow_x(float x_center, float z_origin, float direction_sign) {
     const MDTBFloat4 stripe_color = make_float4(0.88f, 0.86f, 0.68f, 1.0f);
 
     push_scene_box(make_box(
-        make_float3(x_center - (direction_sign * 0.85f), kRoadHeight + 0.01f, 0.0f),
+        make_float3(x_center - (direction_sign * 0.85f), kRoadHeight + 0.01f, z_origin),
         make_float3(1.05f, 0.01f, 0.20f),
         stripe_color
     ));
     push_scene_box(make_box(
-        make_float3(x_center + (direction_sign * 0.34f), kRoadHeight + 0.01f, -0.42f),
+        make_float3(x_center + (direction_sign * 0.34f), kRoadHeight + 0.01f, z_origin - 0.42f),
         make_float3(0.46f, 0.01f, 0.18f),
         stripe_color
     ));
     push_scene_box(make_box(
-        make_float3(x_center + (direction_sign * 0.34f), kRoadHeight + 0.01f, 0.42f),
+        make_float3(x_center + (direction_sign * 0.34f), kRoadHeight + 0.01f, z_origin + 0.42f),
         make_float3(0.46f, 0.01f, 0.18f),
         stripe_color
     ));
@@ -437,6 +602,35 @@ static void push_half_court(float x, float z) {
     }
 }
 
+static void push_carport_landmark(float x, float z) {
+    const MDTBFloat4 beam_color = make_float4(0.55f, 0.52f, 0.44f, 1.0f);
+
+    push_prop(make_float3(x - 2.9f, 1.35f, z - 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
+    push_prop(make_float3(x + 2.9f, 1.35f, z - 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
+    push_prop(make_float3(x - 2.9f, 1.35f, z + 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
+    push_prop(make_float3(x + 2.9f, 1.35f, z + 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
+    push_prop(make_float3(x, 2.95f, z), make_float3(3.25f, 0.18f, 2.15f), make_float4(0.72f, 0.69f, 0.58f, 1.0f), 0);
+    push_parked_car(x, z, 1.28f, 2.45f, make_float4(0.42f, 0.37f, 0.58f, 1.0f));
+}
+
+static void push_bus_shelter(float x, float z) {
+    const MDTBFloat4 frame_color = make_float4(0.31f, 0.33f, 0.36f, 1.0f);
+    const MDTBFloat4 roof_color = make_float4(0.67f, 0.76f, 0.80f, 1.0f);
+
+    push_prop(make_float3(x - 0.92f, 1.22f, z), make_float3(0.08f, 1.22f, 0.08f), frame_color, 1);
+    push_prop(make_float3(x + 0.92f, 1.22f, z), make_float3(0.08f, 1.22f, 0.08f), frame_color, 1);
+    push_prop(make_float3(x, 2.46f, z), make_float3(1.14f, 0.10f, 1.34f), roof_color, 0);
+    push_prop(make_float3(x - 0.78f, 1.18f, z), make_float3(0.05f, 1.02f, 1.08f), make_float4(0.69f, 0.79f, 0.84f, 1.0f), 0);
+    push_bench(x, z - 0.52f);
+}
+
+static void push_apartment_entry(float x, float z) {
+    push_prop(make_float3(x, kSidewalkHeight + 1.55f, z), make_float3(0.28f, 1.55f, 2.85f), make_float4(0.62f, 0.58f, 0.46f, 1.0f), 1);
+    push_prop(make_float3(x - 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.10f, 1.24f, 2.42f), make_float4(0.43f, 0.46f, 0.48f, 1.0f), 1);
+    push_prop(make_float3(x + 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.10f, 1.24f, 2.42f), make_float4(0.43f, 0.46f, 0.48f, 1.0f), 1);
+    push_prop(make_float3(x, kSidewalkHeight + 3.05f, z), make_float3(1.48f, 0.14f, 2.85f), make_float4(0.86f, 0.76f, 0.34f, 1.0f), 0);
+}
+
 static void push_corner_store_landmark(float x, float z) {
     push_building(
         make_float3(x, kSidewalkHeight + 2.55f, z),
@@ -466,21 +660,10 @@ static void push_corner_store_landmark(float x, float z) {
     );
 }
 
-static void push_carport_landmark(float x, float z) {
-    const MDTBFloat4 beam_color = make_float4(0.55f, 0.52f, 0.44f, 1.0f);
-
-    push_prop(make_float3(x - 2.9f, 1.35f, z - 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
-    push_prop(make_float3(x + 2.9f, 1.35f, z - 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
-    push_prop(make_float3(x - 2.9f, 1.35f, z + 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
-    push_prop(make_float3(x + 2.9f, 1.35f, z + 1.8f), make_float3(0.14f, 1.35f, 0.14f), beam_color, 1);
-    push_prop(make_float3(x, 2.95f, z), make_float3(3.25f, 0.18f, 2.15f), make_float4(0.72f, 0.69f, 0.58f, 1.0f), 0);
-    push_parked_car(x, z, 1.28f, 2.45f, make_float4(0.42f, 0.37f, 0.58f, 1.0f));
-}
-
-static void push_crosswalk_x(float x_center) {
+static void push_crosswalk_x(float x_center, float z_origin) {
     for (int stripe_index = -3; stripe_index <= 3; ++stripe_index) {
         push_scene_box(make_box(
-            make_float3(x_center, kRoadHeight + 0.01f, (float)stripe_index * 1.45f),
+            make_float3(x_center, kRoadHeight + 0.01f, z_origin + ((float)stripe_index * 1.45f)),
             make_float3(0.85f, 0.01f, 0.42f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
@@ -516,12 +699,6 @@ static void build_world_surfaces(void) {
         road_color
     ));
 
-    push_scene_box(make_box(
-        make_float3(0.0f, kRoadHeight * 0.5f, 0.0f),
-        make_float3(kPlayableHalfWidth + 4.0f, kRoadHeight * 0.5f, kRoadHalfWidth),
-        road_color
-    ));
-
     for (int side = -1; side <= 1; side += 2) {
         push_scene_box(make_box(
             make_float3((float)side * 6.08f, 0.09f, 0.0f),
@@ -530,338 +707,360 @@ static void build_world_surfaces(void) {
         ));
 
         push_scene_box(make_box(
-            make_float3(0.0f, 0.09f, (float)side * 6.08f),
-            make_float3(kPlayableHalfWidth + 4.0f, 0.09f, 0.20f),
-            curb_color
+            make_float3((float)side * 9.18f, kSidewalkHeight * 0.5f, 0.0f),
+            make_float3(2.82f, kSidewalkHeight * 0.5f, kPlayableHalfLength + 4.0f),
+            sidewalk_color
         ));
     }
 
-    for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
-        for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const float z_origin = kBlockLayout[index].origin.z;
+
+        push_scene_box(make_box(
+            make_float3(0.0f, kRoadHeight * 0.5f, z_origin),
+            make_float3(kPlayableHalfWidth + 4.0f, kRoadHeight * 0.5f, kRoadHalfWidth),
+            road_color
+        ));
+
+        for (int side = -1; side <= 1; side += 2) {
             push_scene_box(make_box(
-                make_float3((float)x_sign * 9.18f, kSidewalkHeight * 0.5f, (float)z_sign * 31.9f),
-                make_float3(2.82f, kSidewalkHeight * 0.5f, 26.1f),
-                sidewalk_color
+                make_float3(0.0f, 0.09f, z_origin + ((float)side * 6.08f)),
+                make_float3(kPlayableHalfWidth + 4.0f, 0.09f, 0.20f),
+                curb_color
             ));
 
             push_scene_box(make_box(
-                make_float3((float)x_sign * 31.9f, kSidewalkHeight * 0.5f, (float)z_sign * 9.18f),
-                make_float3(26.1f, kSidewalkHeight * 0.5f, 2.82f),
+                make_float3(0.0f, kSidewalkHeight * 0.5f, z_origin + ((float)side * 9.18f)),
+                make_float3(kPlayableHalfWidth + 4.0f, kSidewalkHeight * 0.5f, 2.82f),
                 sidewalk_color
-            ));
-
-            push_scene_box(make_box(
-                make_float3((float)x_sign * 35.0f, kSidewalkHeight * 0.5f, (float)z_sign * 35.0f),
-                make_float3(23.0f, kSidewalkHeight * 0.5f, 23.0f),
-                lot_color
             ));
         }
+
+        push_scene_box(make_box(
+            make_float3(-35.0f, kSidewalkHeight * 0.5f, z_origin),
+            make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
+            lot_color
+        ));
+
+        push_scene_box(make_box(
+            make_float3(35.0f, kSidewalkHeight * 0.5f, z_origin),
+            make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
+            lot_color
+        ));
     }
 }
 
 static void build_road_markings(void) {
     const MDTBFloat4 stripe_color = make_float4(0.89f, 0.82f, 0.20f, 1.0f);
 
-    for (int segment = -2; segment <= 2; ++segment) {
-        const float center = (float)segment * kSegmentLength;
-        if (fabsf(center) > kIntersectionClear) {
+    for (int segment = -5; segment <= 5; ++segment) {
+        const float center = (float)segment * 20.0f;
+        int inside_intersection = 0;
+
+        for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+            if (fabsf(center - kBlockLayout[block_index].origin.z) <= kIntersectionClear) {
+                inside_intersection = 1;
+                break;
+            }
+        }
+
+        if (!inside_intersection) {
             for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
                 push_scene_box(make_box(
-                    make_float3(0.0f, kRoadHeight + 0.01f, center + ((float)stripe_index * 5.0f)),
-                    make_float3(0.13f, 0.01f, 1.4f),
+                    make_float3(0.0f, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
+                    make_float3(0.13f, 0.01f, 1.2f),
                     stripe_color
                 ));
             }
         }
+    }
 
-        if (fabsf(center) > kIntersectionClear) {
+    for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+        const float z_origin = kBlockLayout[block_index].origin.z;
+
+        for (int segment = -4; segment <= 4; ++segment) {
+            const float center_x = (float)segment * 24.0f;
+            if (fabsf(center_x) <= kIntersectionClear) {
+                continue;
+            }
+
             for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
                 push_scene_box(make_box(
-                    make_float3(center + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, 0.0f),
+                    make_float3(center_x + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, z_origin),
                     make_float3(1.4f, 0.01f, 0.13f),
                     stripe_color
                 ));
             }
         }
+
+        push_crosswalk_x(-kCrosswalkOffset, z_origin);
+        push_crosswalk_x(kCrosswalkOffset, z_origin);
+        push_crosswalk_z(z_origin - kCrosswalkOffset);
+        push_crosswalk_z(z_origin + kCrosswalkOffset);
+
+        push_scene_box(make_box(
+            make_float3(0.0f, kRoadHeight + 0.01f, z_origin - 6.65f),
+            make_float3(4.65f, 0.01f, 0.12f),
+            make_float4(0.92f, 0.91f, 0.87f, 1.0f)
+        ));
+        push_scene_box(make_box(
+            make_float3(0.0f, kRoadHeight + 0.01f, z_origin + 6.65f),
+            make_float3(4.65f, 0.01f, 0.12f),
+            make_float4(0.92f, 0.91f, 0.87f, 1.0f)
+        ));
+        push_scene_box(make_box(
+            make_float3(-6.65f, kRoadHeight + 0.01f, z_origin),
+            make_float3(0.12f, 0.01f, 4.65f),
+            make_float4(0.92f, 0.91f, 0.87f, 1.0f)
+        ));
+        push_scene_box(make_box(
+            make_float3(6.65f, kRoadHeight + 0.01f, z_origin),
+            make_float3(0.12f, 0.01f, 4.65f),
+            make_float4(0.92f, 0.91f, 0.87f, 1.0f)
+        ));
+
+        push_lane_arrow_z(z_origin - 18.5f, -1.0f);
+        push_lane_arrow_z(z_origin + 18.5f, 1.0f);
+        push_lane_arrow_x(-18.5f, z_origin, -1.0f);
+        push_lane_arrow_x(18.5f, z_origin, 1.0f);
     }
-
-    push_crosswalk_x(-7.25f);
-    push_crosswalk_x(7.25f);
-    push_crosswalk_z(-7.25f);
-    push_crosswalk_z(7.25f);
-
-    push_scene_box(make_box(
-        make_float3(0.0f, kRoadHeight + 0.01f, -6.65f),
-        make_float3(4.65f, 0.01f, 0.12f),
-        make_float4(0.92f, 0.91f, 0.87f, 1.0f)
-    ));
-
-    push_scene_box(make_box(
-        make_float3(0.0f, kRoadHeight + 0.01f, 6.65f),
-        make_float3(4.65f, 0.01f, 0.12f),
-        make_float4(0.92f, 0.91f, 0.87f, 1.0f)
-    ));
-
-    push_scene_box(make_box(
-        make_float3(-6.65f, kRoadHeight + 0.01f, 0.0f),
-        make_float3(0.12f, 0.01f, 4.65f),
-        make_float4(0.92f, 0.91f, 0.87f, 1.0f)
-    ));
-
-    push_scene_box(make_box(
-        make_float3(6.65f, kRoadHeight + 0.01f, 0.0f),
-        make_float3(0.12f, 0.01f, 4.65f),
-        make_float4(0.92f, 0.91f, 0.87f, 1.0f)
-    ));
-
-    push_lane_arrow_z(-18.5f, -1.0f);
-    push_lane_arrow_z(18.5f, 1.0f);
-    push_lane_arrow_x(-18.5f, -1.0f);
-    push_lane_arrow_x(18.5f, 1.0f);
 }
 
-static void build_quadrant_blocks(int x_sign, int z_sign, int variant) {
-    static const MDTBFloat4 kFacadePalette[5] = {
+static void build_side_buildings(const MDTBBlockDescriptor *block, int x_sign) {
+    static const MDTBFloat4 hub_palette[4] = {
         {0.58f, 0.44f, 0.35f, 1.0f},
         {0.39f, 0.50f, 0.62f, 1.0f},
-        {0.43f, 0.55f, 0.38f, 1.0f},
         {0.62f, 0.54f, 0.34f, 1.0f},
         {0.51f, 0.40f, 0.47f, 1.0f},
     };
+    static const MDTBFloat4 residential_palette[4] = {
+        {0.53f, 0.45f, 0.39f, 1.0f},
+        {0.46f, 0.55f, 0.44f, 1.0f},
+        {0.56f, 0.53f, 0.40f, 1.0f},
+        {0.49f, 0.46f, 0.56f, 1.0f},
+    };
+
+    const MDTBFloat4 *palette = block->kind == MDTBBlockKindHub ? hub_palette : residential_palette;
 
     for (int row = 0; row < 2; ++row) {
         for (int column = 0; column < 2; ++column) {
-            const int palette_index = (variant + row + column) % 5;
-            const float center_x = (float)x_sign * (18.0f + ((float)column * 15.0f));
-            const float center_z = (float)z_sign * (18.0f + ((float)row * 15.0f));
-            const float half_x = 2.3f + ((column % 2 == 0) ? 0.6f : 0.0f);
-            const float half_y = 2.8f + (((variant + row) % 2 == 0) ? 0.9f : 0.2f);
-            const float half_z = 3.0f + (((variant + column) % 2 == 0) ? 0.5f : 1.1f);
+            const int palette_index = (int)((block->variant + (uint32_t)row + (uint32_t)column) % 4u);
+            const float center_x = block->origin.x + ((float)x_sign * (18.0f + ((float)column * 15.0f)));
+            const float center_z = block->origin.z + (-18.0f + ((float)row * 15.0f));
+            const float half_x = 2.6f + ((column == 0) ? 0.5f : 0.0f);
+            const float half_y = block->kind == MDTBBlockKindHub
+                ? (3.0f + ((row == 0) ? 0.9f : 0.25f) + ((column == 1) ? 0.35f : 0.0f))
+                : (2.1f + ((row == 1) ? 0.35f : 0.0f));
+            const float half_z = block->kind == MDTBBlockKindHub
+                ? (3.2f + ((column == 0) ? 0.8f : 0.3f))
+                : (3.6f + ((column == 0) ? 0.6f : 0.2f));
 
             push_building(
                 make_float3(center_x, kSidewalkHeight + half_y, center_z),
                 make_float3(half_x, half_y, half_z),
-                kFacadePalette[palette_index]
+                palette[palette_index]
             );
         }
     }
 
-    push_planter((float)x_sign * 9.1f, (float)z_sign * 15.6f, 0.58f);
-    push_planter((float)x_sign * 14.6f, (float)z_sign * 8.8f, 0.48f);
-    push_tree((float)x_sign * 13.2f, (float)z_sign * 20.2f, 1.0f);
+    push_tree(block->origin.x + ((float)x_sign * 13.4f), block->origin.z - 24.0f, 1.0f);
+    push_tree(block->origin.x + ((float)x_sign * 13.0f), block->origin.z + 22.8f, 1.0f);
+    push_planter(block->origin.x + ((float)x_sign * 14.8f), block->origin.z - 8.6f, 0.48f);
+    push_planter(block->origin.x + ((float)x_sign * 9.4f), block->origin.z + 14.2f, 0.58f);
 }
 
-static void build_vertical_segment_props(float center_z, int variant) {
-    const float z_offset = ((variant % 2 == 0) ? 5.0f : -5.0f);
-    if (fabsf(center_z) < kIntersectionClear) {
-        return;
-    }
+static void build_intersection_props(float z_origin) {
+    push_signal_pole(-8.9f, z_origin - 8.9f);
+    push_signal_pole(8.9f, z_origin - 8.9f);
+    push_signal_pole(-8.9f, z_origin + 8.9f);
+    push_signal_pole(8.9f, z_origin + 8.9f);
 
-    push_bench(-8.9f, center_z - 6.4f);
-    push_bench(8.9f, center_z + 5.8f);
-
-    push_planter(-8.2f, center_z + 5.8f, 0.44f);
-    push_planter(8.2f, center_z - 5.8f, 0.44f);
-
-    push_tree(-10.4f, center_z + z_offset, 0.95f);
-    push_tree(10.4f, center_z - z_offset, 0.95f);
-
-    push_parked_car(-14.4f, center_z + 2.8f, 1.1f, 2.1f, make_float4(0.64f, 0.28f, 0.24f, 1.0f));
-    push_parked_car(14.4f, center_z - 2.6f, 1.1f, 2.1f, make_float4(0.23f, 0.43f, 0.62f, 1.0f));
-}
-
-static void build_horizontal_segment_props(float center_x, int variant) {
-    const float x_offset = ((variant % 2 == 0) ? 5.0f : -5.0f);
-    if (fabsf(center_x) < kIntersectionClear) {
-        return;
-    }
-
-    push_bench(center_x - 6.3f, -8.9f);
-    push_bench(center_x + 5.7f, 8.9f);
-
-    push_planter(center_x + 5.7f, -8.2f, 0.44f);
-    push_planter(center_x - 5.7f, 8.2f, 0.44f);
-
-    push_tree(center_x + x_offset, -10.4f, 0.95f);
-    push_tree(center_x - x_offset, 10.4f, 0.95f);
-
-    push_parked_car(center_x + 2.8f, -14.4f, 2.1f, 1.1f, make_float4(0.56f, 0.48f, 0.22f, 1.0f));
-    push_parked_car(center_x - 2.6f, 14.4f, 2.1f, 1.1f, make_float4(0.33f, 0.55f, 0.37f, 1.0f));
-}
-
-static void build_intersection_props(void) {
-    push_signal_pole(-8.9f, -8.9f);
-    push_signal_pole(8.9f, -8.9f);
-    push_signal_pole(-8.9f, 8.9f);
-    push_signal_pole(8.9f, 8.9f);
-
-    push_planter(-10.2f, -10.2f, 0.56f);
-    push_planter(10.2f, -10.2f, 0.56f);
-    push_planter(-10.2f, 10.2f, 0.56f);
-    push_planter(10.2f, 10.2f, 0.56f);
+    push_planter(-10.2f, z_origin - 10.2f, 0.56f);
+    push_planter(10.2f, z_origin - 10.2f, 0.56f);
+    push_planter(-10.2f, z_origin + 10.2f, 0.56f);
+    push_planter(10.2f, z_origin + 10.2f, 0.56f);
 
     push_prop(
-        make_float3(11.4f, 1.15f, -16.0f),
+        make_float3(11.4f, 1.15f, z_origin - 16.0f),
         make_float3(0.12f, 1.15f, 1.35f),
         make_float4(0.28f, 0.29f, 0.32f, 1.0f),
         1
     );
-
     push_prop(
-        make_float3(10.8f, 2.15f, -16.0f),
+        make_float3(10.8f, 2.15f, z_origin - 16.0f),
         make_float3(0.82f, 0.16f, 1.55f),
         make_float4(0.56f, 0.61f, 0.68f, 1.0f),
         0
     );
-
     push_prop(
-        make_float3(10.8f, 1.05f, -16.0f),
+        make_float3(10.8f, 1.05f, z_origin - 16.0f),
         make_float3(0.65f, 0.55f, 1.15f),
         make_float4(0.70f, 0.72f, 0.75f, 1.0f),
         1
     );
 
     push_prop(
-        make_float3(-16.0f, 0.55f, 11.1f),
+        make_float3(-16.0f, 0.55f, z_origin + 11.1f),
         make_float3(1.55f, 0.55f, 0.34f),
         make_float4(0.79f, 0.25f, 0.19f, 1.0f),
         1
     );
-
     push_prop(
-        make_float3(16.0f, 0.55f, -11.1f),
+        make_float3(16.0f, 0.55f, z_origin - 11.1f),
         make_float3(1.55f, 0.55f, 0.34f),
         make_float4(0.23f, 0.49f, 0.67f, 1.0f),
         1
     );
 
-    push_bollard(-11.9f, -7.4f, 0.92f);
-    push_bollard(-11.9f, 7.4f, 0.92f);
-    push_bollard(11.9f, -7.4f, 0.92f);
-    push_bollard(11.9f, 7.4f, 0.92f);
-    push_bollard(-7.4f, -11.9f, 0.92f);
-    push_bollard(7.4f, -11.9f, 0.92f);
-    push_bollard(-7.4f, 11.9f, 0.92f);
-    push_bollard(7.4f, 11.9f, 0.92f);
+    push_bollard(-11.9f, z_origin - 7.4f, 0.92f);
+    push_bollard(-11.9f, z_origin + 7.4f, 0.92f);
+    push_bollard(11.9f, z_origin - 7.4f, 0.92f);
+    push_bollard(11.9f, z_origin + 7.4f, 0.92f);
+    push_bollard(-7.4f, z_origin - 11.9f, 0.92f);
+    push_bollard(7.4f, z_origin - 11.9f, 0.92f);
+    push_bollard(-7.4f, z_origin + 11.9f, 0.92f);
+    push_bollard(7.4f, z_origin + 11.9f, 0.92f);
 }
 
-static void build_landmarks(void) {
-    push_corner_store_landmark(-42.0f, -17.2f);
-    push_billboard(-23.5f, -45.5f, 5.4f, 1.45f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
+static void build_hub_frontage(const MDTBBlockDescriptor *block) {
+    const float z_origin = block->origin.z;
 
-    push_half_court(35.0f, 35.0f);
-    push_billboard(46.0f, 12.5f, 4.8f, 1.35f, 1, make_float4(0.29f, 0.53f, 0.67f, 1.0f));
-
-    push_carport_landmark(39.5f, -37.5f);
-    push_prop(
-        make_float3(46.2f, kSidewalkHeight + 2.4f, -21.5f),
-        make_float3(0.26f, 2.4f, 3.0f),
-        make_float4(0.78f, 0.72f, 0.52f, 1.0f),
-        1
-    );
-    push_prop(
-        make_float3(44.8f, kSidewalkHeight + 2.2f, -21.5f),
-        make_float3(1.1f, 2.2f, 0.18f),
-        make_float4(0.92f, 0.46f, 0.22f, 1.0f),
-        0
-    );
-
-    push_prop(
-        make_float3(-40.5f, kSidewalkHeight + 1.6f, 38.0f),
-        make_float3(5.6f, 1.6f, 0.28f),
-        make_float4(0.36f, 0.44f, 0.56f, 1.0f),
-        1
-    );
-    push_prop(
-        make_float3(-44.3f, kSidewalkHeight + 2.8f, 37.4f),
-        make_float3(0.20f, 2.8f, 0.20f),
-        make_float4(0.38f, 0.37f, 0.34f, 1.0f),
-        1
-    );
-    push_prop(
-        make_float3(-44.3f, kSidewalkHeight + 4.8f, 37.4f),
-        make_float3(1.45f, 0.16f, 0.16f),
-        make_float4(0.82f, 0.78f, 0.58f, 1.0f),
-        0
-    );
-}
-
-static void build_main_route_frontage(void) {
-    push_store_awning_x(-42.0f, -13.45f, 4.65f, 1.0f);
-    push_newsstand(-45.5f, -11.25f, 1);
-    push_trash_bin(-38.6f, -11.0f);
-    push_prop(make_float3(-40.9f, 0.38f, -11.1f), make_float3(0.42f, 0.38f, 0.42f), make_float4(0.55f, 0.43f, 0.30f, 1.0f), 1);
-    push_prop(make_float3(-39.8f, 0.62f, -11.0f), make_float3(0.34f, 0.62f, 0.28f), make_float4(0.19f, 0.35f, 0.56f, 1.0f), 1);
+    push_store_awning_x(-42.0f, z_origin - 13.45f, 4.65f, 1.0f);
+    push_newsstand(-45.5f, z_origin - 11.25f, 1);
+    push_trash_bin(-38.6f, z_origin - 11.0f);
+    push_prop(make_float3(-40.9f, 0.38f, z_origin - 11.1f), make_float3(0.42f, 0.38f, 0.42f), make_float4(0.55f, 0.43f, 0.30f, 1.0f), 1);
+    push_prop(make_float3(-39.8f, 0.62f, z_origin - 11.0f), make_float3(0.34f, 0.62f, 0.28f), make_float4(0.19f, 0.35f, 0.56f, 1.0f), 1);
 
     for (int bollard = 0; bollard < 4; ++bollard) {
-        push_bollard(-46.8f + ((float)bollard * 2.1f), -10.1f, 0.86f);
+        push_bollard(-46.8f + ((float)bollard * 2.1f), z_origin - 10.1f, 0.86f);
     }
 
-    push_store_awning_x(-18.0f, -13.65f, 3.35f, 1.0f);
-    push_store_awning_x(18.0f, -13.25f, 3.75f, 1.0f);
-    push_store_awning_x(33.0f, -13.65f, 2.95f, 1.0f);
-    push_newsstand(12.6f, -10.75f, 1);
-    push_newsstand(28.9f, -10.65f, 1);
-    push_trash_bin(-22.1f, -10.7f);
-    push_trash_bin(36.5f, -10.8f);
-    push_bench(23.9f, -10.3f);
-    push_prop(make_float3(18.8f, 0.42f, -10.6f), make_float3(0.38f, 0.42f, 0.38f), make_float4(0.58f, 0.44f, 0.30f, 1.0f), 1);
+    push_store_awning_x(-18.0f, z_origin - 13.65f, 3.35f, 1.0f);
+    push_store_awning_x(18.0f, z_origin - 13.25f, 3.75f, 1.0f);
+    push_store_awning_x(33.0f, z_origin - 13.65f, 2.95f, 1.0f);
+    push_newsstand(12.6f, z_origin - 10.75f, 1);
+    push_newsstand(28.9f, z_origin - 10.65f, 1);
+    push_trash_bin(-22.1f, z_origin - 10.7f);
+    push_trash_bin(36.5f, z_origin - 10.8f);
+    push_bench(23.9f, z_origin - 10.3f);
 
-    push_store_awning_x(-18.0f, 13.65f, 3.35f, -1.0f);
-    push_store_awning_x(18.0f, 13.25f, 3.75f, -1.0f);
-    push_store_awning_x(33.0f, 13.65f, 2.95f, -1.0f);
-    push_newsstand(-13.1f, 10.7f, 1);
-    push_newsstand(23.1f, 10.7f, 1);
-    push_trash_bin(-22.3f, 10.85f);
-    push_trash_bin(36.4f, 10.9f);
-    push_bench(27.4f, 10.4f);
-    push_prop(make_float3(17.8f, 0.46f, 10.8f), make_float3(0.34f, 0.46f, 0.34f), make_float4(0.26f, 0.44f, 0.29f, 1.0f), 1);
+    push_store_awning_x(-18.0f, z_origin + 13.65f, 3.35f, -1.0f);
+    push_store_awning_x(18.0f, z_origin + 13.25f, 3.75f, -1.0f);
+    push_store_awning_x(33.0f, z_origin + 13.65f, 2.95f, -1.0f);
+    push_newsstand(-13.1f, z_origin + 10.7f, 1);
+    push_newsstand(23.1f, z_origin + 10.7f, 1);
+    push_trash_bin(-22.3f, z_origin + 10.85f);
+    push_trash_bin(36.4f, z_origin + 10.9f);
+    push_bench(27.4f, z_origin + 10.4f);
 
-    push_bench(-10.7f, -31.5f);
-    push_trash_bin(-13.0f, -32.4f);
-    push_prop(make_float3(-11.2f, 2.05f, -34.0f), make_float3(0.12f, 2.05f, 0.12f), make_float4(0.36f, 0.37f, 0.39f, 1.0f), 1);
-    push_prop(make_float3(-11.2f, 3.42f, -34.0f), make_float3(1.08f, 0.12f, 0.12f), make_float4(0.83f, 0.75f, 0.49f, 1.0f), 0);
+    push_bench(-10.7f, z_origin - 31.5f);
+    push_trash_bin(-13.0f, z_origin - 32.4f);
+    push_prop(make_float3(-11.2f, 2.05f, z_origin - 34.0f), make_float3(0.12f, 2.05f, 0.12f), make_float4(0.36f, 0.37f, 0.39f, 1.0f), 1);
+    push_prop(make_float3(-11.2f, 3.42f, z_origin - 34.0f), make_float3(1.08f, 0.12f, 0.12f), make_float4(0.83f, 0.75f, 0.49f, 1.0f), 0);
 
-    push_bench(9.8f, 31.7f);
-    push_trash_bin(12.2f, 32.4f);
-    push_prop(make_float3(10.8f, 1.28f, 34.0f), make_float3(0.12f, 1.28f, 1.05f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
-    push_prop(make_float3(10.1f, 2.34f, 34.0f), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
+    push_bench(9.8f, z_origin + 31.7f);
+    push_trash_bin(12.2f, z_origin + 32.4f);
+    push_prop(make_float3(10.8f, 1.28f, z_origin + 34.0f), make_float3(0.12f, 1.28f, 1.05f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(10.1f, 2.34f, z_origin + 34.0f), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
 }
 
-static void build_lot_edge_collision_detail(void) {
-    push_low_fence_run_x(-47.6f, 28.0f, 50.2f);
-    push_low_fence_run_z(28.0f, -47.6f, -28.6f);
+static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_side_buildings(block, -1);
+    build_side_buildings(block, 1);
+    build_intersection_props(block->origin.z);
+    build_hub_frontage(block);
 
-    push_low_fence_run_x(46.3f, -50.0f, -29.6f);
-    push_low_fence_run_z(-29.6f, 28.8f, 46.3f);
+    push_corner_store_landmark(-42.0f, block->origin.z - 17.2f);
+    push_billboard(-23.5f, block->origin.z - 45.5f, 5.4f, 1.45f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
+    push_half_court(35.0f, block->origin.z + 35.0f);
+    push_billboard(46.0f, block->origin.z + 12.5f, 4.8f, 1.35f, 1, make_float4(0.29f, 0.53f, 0.67f, 1.0f));
+    push_carport_landmark(39.5f, block->origin.z - 37.5f);
 
-    push_low_fence_run_x(-29.0f, -50.2f, -35.6f);
-    push_low_fence_run_z(-50.2f, -47.8f, -32.6f);
-    push_low_fence_run_x(29.2f, 35.8f, 50.4f);
-    push_low_fence_run_z(50.4f, 29.2f, 44.0f);
+    push_low_fence_run_x(block->origin.z - 47.6f, 28.0f, 50.2f);
+    push_low_fence_run_z(28.0f, block->origin.z - 47.6f, block->origin.z - 28.6f);
+    push_low_fence_run_x(block->origin.z + 46.3f, -50.0f, -29.6f);
+    push_low_fence_run_z(-29.6f, block->origin.z + 28.8f, block->origin.z + 46.3f);
+
+    push_interest_point(make_float3(0.0f, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
+    push_interest_point(make_float3(-10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(-14.4f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    push_interest_point(make_float3(42.0f, kSidewalkHeight, block->origin.z - 17.2f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(35.0f, kSidewalkHeight, block->origin.z + 35.0f), 8.0f, MDTBInterestPointLandmark, block_index);
+}
+
+static void build_residential_frontage(const MDTBBlockDescriptor *block) {
+    const float z_origin = block->origin.z;
+
+    push_store_awning_x(-18.0f, z_origin - 13.6f, 3.1f, 1.0f);
+    push_store_awning_x(19.0f, z_origin - 13.1f, 2.8f, 1.0f);
+    push_store_awning_x(-18.0f, z_origin + 13.4f, 2.6f, -1.0f);
+    push_newsstand(-12.6f, z_origin + 10.7f, 1);
+    push_newsstand(22.4f, z_origin - 10.7f, 1);
+    push_trash_bin(-22.0f, z_origin - 10.9f);
+    push_trash_bin(34.8f, z_origin + 10.8f);
+    push_bench(24.0f, z_origin - 10.4f);
+    push_bench(-22.8f, z_origin + 10.3f);
+
+    push_bus_shelter(11.2f, z_origin - 16.2f);
+    push_apartment_entry(-41.6f, z_origin + 15.0f);
+    push_prop(make_float3(-43.0f, kSidewalkHeight + 3.45f, z_origin + 15.0f), make_float3(1.85f, 0.14f, 3.0f), make_float4(0.86f, 0.78f, 0.42f, 1.0f), 0);
+    push_prop(make_float3(39.0f, kSidewalkHeight + 1.2f, z_origin + 33.8f), make_float3(0.14f, 1.2f, 1.3f), make_float4(0.29f, 0.31f, 0.33f, 1.0f), 1);
+    push_prop(make_float3(38.4f, kSidewalkHeight + 2.1f, z_origin + 33.8f), make_float3(0.92f, 0.10f, 1.48f), make_float4(0.72f, 0.80f, 0.84f, 1.0f), 0);
+
+    push_low_fence_run_x(z_origin + 46.2f, -48.0f, -28.2f);
+    push_low_fence_run_z(-48.0f, z_origin + 28.5f, z_origin + 46.2f);
+    push_low_fence_run_x(z_origin + 46.0f, 29.0f, 48.5f);
+    push_low_fence_run_z(48.5f, z_origin + 29.0f, z_origin + 46.0f);
+}
+
+static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_side_buildings(block, -1);
+    build_side_buildings(block, 1);
+    build_intersection_props(block->origin.z);
+    build_residential_frontage(block);
+
+    push_billboard(-24.0f, block->origin.z - 42.0f, 4.8f, 1.25f, 0, make_float4(0.36f, 0.63f, 0.29f, 1.0f));
+    push_billboard(46.0f, block->origin.z + 18.5f, 4.6f, 1.25f, 1, make_float4(0.86f, 0.55f, 0.21f, 1.0f));
+    push_parked_car(-38.5f, block->origin.z - 35.2f, 1.15f, 2.2f, make_float4(0.22f, 0.48f, 0.63f, 1.0f));
+    push_parked_car(35.8f, block->origin.z + 35.6f, 1.15f, 2.2f, make_float4(0.58f, 0.38f, 0.25f, 1.0f));
+
+    push_interest_point(make_float3(0.0f, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
+    push_interest_point(make_float3(-10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(11.2f, kSidewalkHeight, block->origin.z - 16.2f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(-41.6f, kSidewalkHeight, block->origin.z + 15.0f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(35.8f, kSidewalkHeight, block->origin.z + 35.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
 }
 
 static void build_scene(void) {
     g_scene_box_count = 0u;
     g_collision_box_count = 0u;
+    g_block_count = 0u;
+    g_road_link_count = 0u;
+    g_interest_point_count = 0u;
 
     build_world_surfaces();
     build_road_markings();
 
-    for (int segment_index = -2; segment_index <= 2; ++segment_index) {
-        const float center = (float)segment_index * kSegmentLength;
-        build_vertical_segment_props(center, segment_index + 2);
-        build_horizontal_segment_props(center, segment_index + 3);
+    for (size_t index = 0u; index < (sizeof(kRoadLayout) / sizeof(kRoadLayout[0])); ++index) {
+        push_road_link(kRoadLayout[index]);
     }
 
-    build_quadrant_blocks(-1, -1, 0);
-    build_quadrant_blocks(1, -1, 1);
-    build_quadrant_blocks(-1, 1, 2);
-    build_quadrant_blocks(1, 1, 3);
-    build_intersection_props();
-    build_landmarks();
-    build_main_route_frontage();
-    build_lot_edge_collision_detail();
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const MDTBBlockDescriptor block = kBlockLayout[index];
+        push_block_descriptor(block);
+
+        switch (block.kind) {
+            case MDTBBlockKindResidential:
+                build_residential_block(&block, (uint32_t)index);
+                break;
+            case MDTBBlockKindHub:
+            default:
+                build_hub_block(&block, (uint32_t)index);
+                break;
+        }
+    }
 
     g_scene_initialized = 1;
 }
@@ -874,14 +1073,19 @@ static void ensure_scene_initialized(void) {
 
 static MDTBGroundInfo ground_info(float x, float z) {
     MDTBGroundInfo info;
-    const float abs_x = fabsf(x);
-    const float abs_z = fabsf(z);
-    const float distance_to_road = fminf(
-        fmaxf(abs_x - kRoadHalfWidth, 0.0f),
-        fmaxf(abs_z - kRoadHalfWidth, 0.0f)
-    );
+    float distance_to_road = fmaxf(fabsf(x) - kRoadHalfWidth, 0.0f);
+    int on_road = fabsf(x) <= kRoadHalfWidth;
 
-    if (abs_x <= kRoadHalfWidth || abs_z <= kRoadHalfWidth) {
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const float corridor_distance = fmaxf(fabsf(z - kBlockLayout[index].origin.z) - kRoadHalfWidth, 0.0f);
+        distance_to_road = fminf(distance_to_road, corridor_distance);
+
+        if (fabsf(z - kBlockLayout[index].origin.z) <= kRoadHalfWidth) {
+            on_road = 1;
+        }
+    }
+
+    if (on_road) {
         info.height = kRoadHeight;
         info.surface_kind = MDTBSurfaceRoad;
         return info;
@@ -1028,12 +1232,15 @@ void mdtb_engine_init(MDTBEngineState *state) {
     state->camera.yaw = 0.18f;
     state->camera.pitch = -0.10f;
     state->camera.mode = MDTBCameraModeFirstPerson;
+    state->active_block_index = MDTBIndexNone;
+    state->active_link_index = MDTBIndexNone;
     state->target_yaw = state->camera.yaw;
     state->target_pitch = state->camera.pitch;
     state->actor_heading = state->camera.yaw;
     state->surface_kind = MDTBSurfaceSidewalk;
     state->camera.focus_position = actor_focus_position(state);
     state->camera.position = state->camera.focus_position;
+    update_runtime_activity(state);
 }
 
 void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
@@ -1138,6 +1345,7 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
     state->actor_position.y = state->actor_ground_height;
     state->surface_kind = ground.surface_kind;
     state->camera.move_speed = sqrtf((state->actor_velocity.x * state->actor_velocity.x) + (state->actor_velocity.z * state->actor_velocity.z));
+    update_runtime_activity(state);
 
     const MDTBFloat3 actor_focus = actor_focus_position(state);
 
@@ -1189,11 +1397,55 @@ size_t mdtb_engine_box_count(void) {
 
 void mdtb_engine_copy_boxes(MDTBBox *boxes, size_t count) {
     ensure_scene_initialized();
-    const size_t available = mdtb_engine_box_count();
     if (boxes == NULL || count == 0u) {
         return;
     }
 
-    const size_t copy_count = count < available ? count : available;
+    const size_t copy_count = count < g_scene_box_count ? count : g_scene_box_count;
     memcpy(boxes, g_scene_boxes, copy_count * sizeof(MDTBBox));
+}
+
+size_t mdtb_engine_block_count(void) {
+    ensure_scene_initialized();
+    return g_block_count;
+}
+
+void mdtb_engine_copy_blocks(MDTBBlockDescriptor *blocks, size_t count) {
+    ensure_scene_initialized();
+    if (blocks == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_block_count ? count : g_block_count;
+    memcpy(blocks, g_blocks, copy_count * sizeof(MDTBBlockDescriptor));
+}
+
+size_t mdtb_engine_road_link_count(void) {
+    ensure_scene_initialized();
+    return g_road_link_count;
+}
+
+void mdtb_engine_copy_road_links(MDTBRoadLink *links, size_t count) {
+    ensure_scene_initialized();
+    if (links == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_road_link_count ? count : g_road_link_count;
+    memcpy(links, g_road_links, copy_count * sizeof(MDTBRoadLink));
+}
+
+size_t mdtb_engine_interest_point_count(void) {
+    ensure_scene_initialized();
+    return g_interest_point_count;
+}
+
+void mdtb_engine_copy_interest_points(MDTBInterestPoint *points, size_t count) {
+    ensure_scene_initialized();
+    if (points == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_interest_point_count ? count : g_interest_point_count;
+    memcpy(points, g_interest_points, copy_count * sizeof(MDTBInterestPoint));
 }

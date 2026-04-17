@@ -37,6 +37,28 @@ typedef struct {
 } MDTBBox;
 
 typedef struct {
+    MDTBFloat3 origin;
+    uint32_t kind;
+    uint32_t variant;
+    float activation_radius;
+} MDTBBlockDescriptor;
+
+typedef struct {
+    MDTBFloat3 position;
+    float radius;
+    uint32_t kind;
+    uint32_t block_index;
+} MDTBInterestPoint;
+
+typedef struct {
+    uint32_t from_block_index;
+    uint32_t to_block_index;
+    MDTBFloat3 midpoint;
+    float length;
+    uint32_t axis;
+} MDTBRoadLink;
+
+typedef struct {
     MDTBCamera camera;
     MDTBFloat3 actor_position;
     MDTBFloat3 actor_velocity;
@@ -46,6 +68,11 @@ typedef struct {
     float elapsed_time;
     float target_yaw;
     float target_pitch;
+    uint32_t active_block_index;
+    uint32_t nearby_block_count;
+    uint32_t active_link_index;
+    uint32_t active_pedestrian_spawn_count;
+    uint32_t active_vehicle_spawn_count;
 } MDTBEngineState;
 
 typedef struct {
@@ -80,10 +107,38 @@ enum {
     MDTBSurfaceLot = 3,
 };
 
+enum {
+    MDTBBlockKindHub = 0,
+    MDTBBlockKindResidential = 1,
+    MDTBBlockKindMixedUse = 2,
+};
+
+enum {
+    MDTBInterestPointPedestrianSpawn = 0,
+    MDTBInterestPointVehicleSpawn = 1,
+    MDTBInterestPointLandmark = 2,
+    MDTBInterestPointStreamingAnchor = 3,
+};
+
+enum {
+    MDTBIndexNone = 0xffffffffu,
+};
+
+enum {
+    MDTBRoadAxisNorthSouth = 0,
+    MDTBRoadAxisEastWest = 1,
+};
+
 void mdtb_engine_init(MDTBEngineState *state);
 void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input);
 size_t mdtb_engine_box_count(void);
 void mdtb_engine_copy_boxes(MDTBBox *boxes, size_t count);
+size_t mdtb_engine_block_count(void);
+void mdtb_engine_copy_blocks(MDTBBlockDescriptor *blocks, size_t count);
+size_t mdtb_engine_road_link_count(void);
+void mdtb_engine_copy_road_links(MDTBRoadLink *links, size_t count);
+size_t mdtb_engine_interest_point_count(void);
+void mdtb_engine_copy_interest_points(MDTBInterestPoint *points, size_t count);
 
 #ifdef __cplusplus
 }

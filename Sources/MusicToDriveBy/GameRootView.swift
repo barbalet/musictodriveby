@@ -1,37 +1,43 @@
 import SwiftUI
 
 struct GameRootView: View {
-    @StateObject private var viewModel = GameViewModel()
+    @ObservedObject var viewModel: GameViewModel
+    @ObservedObject var controlPanelController: ControlPanelController
+    @State private var showedInitialControls = false
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack {
             MetalGameView(viewModel: viewModel)
                 .ignoresSafeArea()
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("MusicToDriveBy")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-
-                Text("Cycle 4 streetscape and ambient pass")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-
-                Divider()
-
-                Text(viewModel.debugSummary)
-                    .font(.system(size: 13, weight: .regular, design: .monospaced))
-                    .textSelection(.enabled)
-
-                Divider()
-
-                Text(viewModel.controlsSummary)
-                    .font(.system(size: 13, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(18)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .padding(24)
         }
         .background(Color.black)
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                Button {
+                    controlPanelController.toggle(viewModel: viewModel)
+                } label: {
+                    Label(
+                        controlPanelController.isVisible ? "Hide Controls" : "Show Controls",
+                        systemImage: controlPanelController.isVisible ? "rectangle.compress.vertical" : "switch.2"
+                    )
+                }
+                .help("Show or hide the floating controls panel")
+
+                Button {
+                    MainGameWindowController.toggleFullScreen()
+                } label: {
+                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                .help("Toggle fullscreen for the main rendering window")
+            }
+        }
+        .onAppear {
+            guard !showedInitialControls else {
+                return
+            }
+
+            showedInitialControls = true
+            controlPanelController.show(viewModel: viewModel)
+        }
     }
 }
