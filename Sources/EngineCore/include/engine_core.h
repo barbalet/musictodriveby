@@ -37,12 +37,20 @@ typedef struct {
 } MDTBBox;
 
 typedef struct {
+    MDTBBox box;
+    uint32_t block_index;
+    uint32_t layer;
+} MDTBSceneBox;
+
+typedef struct {
     MDTBFloat3 origin;
     uint32_t kind;
     uint32_t variant;
     float activation_radius;
     uint32_t district;
     uint32_t tag_mask;
+    uint32_t frontage_template;
+    uint32_t chunk_index;
 } MDTBBlockDescriptor;
 
 typedef struct {
@@ -62,12 +70,31 @@ typedef struct {
 
 typedef struct {
     MDTBFloat3 position;
+    float yaw;
+    uint32_t block_index;
+    uint32_t kind;
+    uint32_t parking_state;
+    uint32_t lane_axis;
+    float lane_offset;
+} MDTBVehicleAnchor;
+
+typedef struct {
+    MDTBFloat3 position;
     MDTBFloat3 half_extents;
     MDTBFloat4 color;
     float phase_offset;
     uint32_t kind;
     uint32_t block_index;
 } MDTBDynamicProp;
+
+typedef struct {
+    uint32_t block_index;
+    float pedestrian_density;
+    float vehicle_density;
+    float ambient_energy;
+    float travel_bias;
+    uint32_t style_flags;
+} MDTBPopulationProfile;
 
 typedef struct {
     MDTBCamera camera;
@@ -84,6 +111,16 @@ typedef struct {
     uint32_t active_link_index;
     uint32_t active_pedestrian_spawn_count;
     uint32_t active_vehicle_spawn_count;
+    uint32_t traversal_mode;
+    uint32_t active_vehicle_anchor_index;
+    uint32_t nearby_vehicle_anchor_index;
+    uint32_t active_vehicle_kind;
+    MDTBFloat3 active_vehicle_position;
+    float active_vehicle_heading;
+    float active_vehicle_speed;
+    float active_vehicle_surface_grip;
+    float active_vehicle_lane_error;
+    float active_vehicle_collision_pulse;
 } MDTBEngineState;
 
 typedef struct {
@@ -104,6 +141,7 @@ enum {
     MDTBInputLookDown = 1u << 7,
     MDTBInputSprint = 1u << 8,
     MDTBInputToggleCamera = 1u << 9,
+    MDTBInputUse = 1u << 10,
 };
 
 enum {
@@ -144,6 +182,7 @@ enum {
     MDTBInterestPointVehicleSpawn = 1,
     MDTBInterestPointLandmark = 2,
     MDTBInterestPointStreamingAnchor = 3,
+    MDTBInterestPointHotspot = 4,
 };
 
 enum {
@@ -151,8 +190,30 @@ enum {
 };
 
 enum {
+    MDTBSceneLayerShared = 0,
+    MDTBSceneLayerBlockOwned = 1,
+};
+
+enum {
+    MDTBTraversalModeOnFoot = 0,
+    MDTBTraversalModeVehicle = 1,
+};
+
+enum {
+    MDTBWorldChunkWestGrid = 0,
+    MDTBWorldChunkEastGrid = 1,
+};
+
+enum {
     MDTBRoadAxisNorthSouth = 0,
     MDTBRoadAxisEastWest = 1,
+};
+
+enum {
+    MDTBFrontageTemplateCivicRetail = 0,
+    MDTBFrontageTemplateResidentialCourt = 1,
+    MDTBFrontageTemplateTransitMarket = 2,
+    MDTBFrontageTemplateServiceSpur = 3,
 };
 
 enum {
@@ -164,18 +225,42 @@ enum {
     MDTBDynamicPropNeon = 5,
 };
 
+enum {
+    MDTBPopulationStyleTransitHeavy = 1u << 0,
+    MDTBPopulationStyleResidentialCalm = 1u << 1,
+    MDTBPopulationStyleRetailClustered = 1u << 2,
+    MDTBPopulationStyleThroughTraffic = 1u << 3,
+};
+
+enum {
+    MDTBVehicleKindSedan = 0,
+    MDTBVehicleKindCoupe = 1,
+    MDTBVehicleKindMoped = 2,
+};
+
+enum {
+    MDTBVehicleParkingStateCurbside = 0,
+    MDTBVehicleParkingStateService = 1,
+};
+
 void mdtb_engine_init(MDTBEngineState *state);
 void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input);
 size_t mdtb_engine_box_count(void);
 void mdtb_engine_copy_boxes(MDTBBox *boxes, size_t count);
+size_t mdtb_engine_scene_box_count(void);
+void mdtb_engine_copy_scene_boxes(MDTBSceneBox *boxes, size_t count);
 size_t mdtb_engine_block_count(void);
 void mdtb_engine_copy_blocks(MDTBBlockDescriptor *blocks, size_t count);
 size_t mdtb_engine_road_link_count(void);
 void mdtb_engine_copy_road_links(MDTBRoadLink *links, size_t count);
+size_t mdtb_engine_vehicle_anchor_count(void);
+void mdtb_engine_copy_vehicle_anchors(MDTBVehicleAnchor *anchors, size_t count);
 size_t mdtb_engine_interest_point_count(void);
 void mdtb_engine_copy_interest_points(MDTBInterestPoint *points, size_t count);
 size_t mdtb_engine_dynamic_prop_count(void);
 void mdtb_engine_copy_dynamic_props(MDTBDynamicProp *props, size_t count);
+size_t mdtb_engine_population_profile_count(void);
+void mdtb_engine_copy_population_profiles(MDTBPopulationProfile *profiles, size_t count);
 
 #ifdef __cplusplus
 }

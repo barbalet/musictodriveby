@@ -8,11 +8,12 @@ final class GameViewModel: ObservableObject {
     """
 
     let controlsSummary = """
-    W A S D: move
+    W A S D: walk, or throttle and steer while driving
     Mouse / trackpad: look when captured
     Q / E or ← / →: turn
     ↑ / ↓: look
     Shift: sprint
+    F: enter or exit the staged vehicle when prompted
     C or Tab: toggle first / third person
     Click in the game view: capture mouse look
     Esc: release mouse look
@@ -21,13 +22,15 @@ final class GameViewModel: ObservableObject {
     Click the game view if keyboard focus is lost
     """
 
-    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, currentBlock: String, nearestHook: String) {
+    func update(actorPosition: SIMD3<Float>, cameraPosition: SIMD3<Float>, yaw: Float, pitch: Float, actorHeading: Float, speed: Float, fps: Double, cameraMode: String, surface: String, mouseLook: String, layoutSummary: String, activitySummary: String, vehicleStatus: String, interactionSummary: String, currentBlock: String, nearestHook: String) {
         debugSummary = """
         camera: \(cameraMode)
         mouse look: \(mouseLook)
         surface: \(surface)
         layout: \(layoutSummary)
         activity: \(activitySummary)
+        vehicle: \(vehicleStatus)
+        prompt: \(interactionSummary)
         block: \(currentBlock)
         nearest hook: \(nearestHook)
         actor: \(Self.format(actorPosition.x)) \(Self.format(actorPosition.y)) \(Self.format(actorPosition.z))

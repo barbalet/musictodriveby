@@ -36,7 +36,7 @@
 		9A1B2C3D4E5F678901000106 /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000107 /* ShaderSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShaderSource.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000108 /* engine_core.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = engine_core.c; sourceTree = "<group>"; };
-		9A1B2C3D4E5F678901000109 /* engine_core.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = engine_core.h; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000109 /* engine_core.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = include/engine_core.h; sourceTree = "<group>"; };
 		9A1B2C3D4E5F67890100010A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9A1B2C3D4E5F67890100010B /* MusicToDriveBy-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MusicToDriveBy-Bridging-Header.h"; sourceTree = "<group>"; };
 		9A1B2C3D4E5F67890100010C /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };

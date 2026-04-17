@@ -8,8 +8,10 @@ enum {
     MDTBMaxCollisionBoxes = 1536,
     MDTBMaxBlocks = 16,
     MDTBMaxRoadLinks = 32,
+    MDTBMaxVehicleAnchors = 16,
     MDTBMaxInterestPoints = 128,
     MDTBMaxDynamicProps = 192,
+    MDTBMaxPopulationProfiles = MDTBMaxBlocks,
 };
 
 typedef struct {
@@ -17,7 +19,29 @@ typedef struct {
     uint32_t surface_kind;
 } MDTBGroundInfo;
 
-static MDTBBox g_scene_boxes[MDTBMaxSceneBoxes];
+typedef struct {
+    float max_forward_speed;
+    float max_reverse_speed;
+    float acceleration_rate;
+    float brake_rate;
+    float coast_drag_rate;
+    float steer_rate;
+    float collision_radius;
+    float travel_lane_offset;
+    float seat_height;
+    float seat_forward;
+    float seat_side;
+    float exit_side_distance;
+    float exit_rear_distance;
+    float first_person_yaw_limit;
+    float first_person_pitch_min;
+    float first_person_pitch_max;
+    float third_person_distance;
+    float third_person_height;
+    float third_person_side;
+} MDTBVehicleTuning;
+
+static MDTBSceneBox g_scene_boxes[MDTBMaxSceneBoxes];
 static size_t g_scene_box_count = 0u;
 static MDTBBox g_collision_boxes[MDTBMaxCollisionBoxes];
 static size_t g_collision_box_count = 0u;
@@ -25,11 +49,21 @@ static MDTBBlockDescriptor g_blocks[MDTBMaxBlocks];
 static size_t g_block_count = 0u;
 static MDTBRoadLink g_road_links[MDTBMaxRoadLinks];
 static size_t g_road_link_count = 0u;
+static MDTBVehicleAnchor g_vehicle_anchors[MDTBMaxVehicleAnchors];
+static size_t g_vehicle_anchor_count = 0u;
 static MDTBInterestPoint g_interest_points[MDTBMaxInterestPoints];
 static size_t g_interest_point_count = 0u;
 static MDTBDynamicProp g_dynamic_props[MDTBMaxDynamicProps];
 static size_t g_dynamic_prop_count = 0u;
+static MDTBPopulationProfile g_population_profiles[MDTBMaxPopulationProfiles];
+static size_t g_population_profile_count = 0u;
 static int g_scene_initialized = 0;
+static uint32_t g_scene_scope_block_index = MDTBIndexNone;
+static uint32_t g_scene_scope_layer = MDTBSceneLayerShared;
+
+static void build_frontage_for_block(const MDTBBlockDescriptor *block);
+static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
+static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
 
 static const float kPi = 3.1415926535f;
 static const float kRoadHalfWidth = 5.8f;
@@ -45,16 +79,29 @@ static const float kIntersectionClear = 9.75f;
 static const float kCollisionGap = 0.05f;
 static const float kCrosswalkOffset = 7.25f;
 static const float kLinkActivationHalfWidth = 14.0f;
+static const float kVehicleMountRadius = 3.6f;
+static const float kVehicleLaneAssistStrength = 5.2f;
+static const float kVehicleLanePullStrength = 4.0f;
 
 static const MDTBBlockDescriptor kBlockLayout[] = {
-    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt},
-    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 56.0f, MDTBDistrictMapleHeights, MDTBBlockTagResidential | MDTBBlockTagTransit},
-    {{96.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 2u, 58.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur},
+    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateCivicRetail, MDTBWorldChunkWestGrid},
+    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 56.0f, MDTBDistrictMapleHeights, MDTBBlockTagResidential | MDTBBlockTagTransit, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkWestGrid},
+    {{96.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 2u, 58.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkEastGrid},
+    {{96.0f, 0.0f, 72.0f}, MDTBBlockKindMixedUse, 3u, 56.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur | MDTBBlockTagCourt, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkEastGrid},
 };
 
 static const MDTBRoadLink kRoadLayout[] = {
     {0u, 1u, {0.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
     {0u, 2u, {48.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest},
+    {1u, 3u, {48.0f, 0.22f, 72.0f}, 96.0f, MDTBRoadAxisEastWest},
+    {2u, 3u, {96.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
+};
+
+static const MDTBPopulationProfile kPopulationProfileLayout[] = {
+    {0u, 0.76f, 0.60f, 0.72f, 0.58f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {1u, 0.58f, 0.38f, 0.46f, 0.42f, MDTBPopulationStyleResidentialCalm},
+    {2u, 0.84f, 0.70f, 0.90f, 0.82f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {3u, 0.72f, 0.82f, 0.86f, 0.94f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
 };
 
 static size_t scene_layout_count(void) {
@@ -64,6 +111,16 @@ static size_t scene_layout_count(void) {
 static int layout_has_prior_z(size_t layout_index) {
     for (size_t index = 0u; index < layout_index; ++index) {
         if (fabsf(kBlockLayout[index].origin.z - kBlockLayout[layout_index].origin.z) <= 0.01f) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int layout_has_prior_x(size_t layout_index) {
+    for (size_t index = 0u; index < layout_index; ++index) {
+        if (fabsf(kBlockLayout[index].origin.x - kBlockLayout[layout_index].origin.x) <= 0.01f) {
             return 1;
         }
     }
@@ -172,12 +229,25 @@ static MDTBFloat3 lerp_float3(MDTBFloat3 a, MDTBFloat3 b, float t) {
     );
 }
 
+static void set_scene_scope(uint32_t block_index, uint32_t layer) {
+    g_scene_scope_block_index = block_index;
+    g_scene_scope_layer = layer;
+}
+
+static void clear_scene_scope(void) {
+    g_scene_scope_block_index = MDTBIndexNone;
+    g_scene_scope_layer = MDTBSceneLayerShared;
+}
+
 static void push_scene_box(MDTBBox box) {
     if (g_scene_box_count >= MDTBMaxSceneBoxes) {
         return;
     }
 
-    g_scene_boxes[g_scene_box_count++] = box;
+    g_scene_boxes[g_scene_box_count].box = box;
+    g_scene_boxes[g_scene_box_count].block_index = g_scene_scope_block_index;
+    g_scene_boxes[g_scene_box_count].layer = g_scene_scope_layer;
+    g_scene_box_count += 1u;
 }
 
 static void push_collision_box(MDTBBox box) {
@@ -202,6 +272,21 @@ static void push_road_link(MDTBRoadLink link) {
     }
 
     g_road_links[g_road_link_count++] = link;
+}
+
+static void push_vehicle_anchor(MDTBFloat3 position, float yaw, uint32_t block_index, uint32_t kind, uint32_t parking_state, uint32_t lane_axis, float lane_offset) {
+    if (g_vehicle_anchor_count >= MDTBMaxVehicleAnchors) {
+        return;
+    }
+
+    g_vehicle_anchors[g_vehicle_anchor_count].position = position;
+    g_vehicle_anchors[g_vehicle_anchor_count].yaw = yaw;
+    g_vehicle_anchors[g_vehicle_anchor_count].block_index = block_index;
+    g_vehicle_anchors[g_vehicle_anchor_count].kind = kind;
+    g_vehicle_anchors[g_vehicle_anchor_count].parking_state = parking_state;
+    g_vehicle_anchors[g_vehicle_anchor_count].lane_axis = lane_axis;
+    g_vehicle_anchors[g_vehicle_anchor_count].lane_offset = lane_offset;
+    g_vehicle_anchor_count += 1u;
 }
 
 static void push_interest_point(MDTBFloat3 position, float radius, uint32_t kind, uint32_t block_index) {
@@ -230,6 +315,14 @@ static void push_dynamic_prop(MDTBFloat3 position, MDTBFloat3 half_extents, MDTB
     g_dynamic_prop_count += 1u;
 }
 
+static void push_population_profile(MDTBPopulationProfile profile) {
+    if (g_population_profile_count >= MDTBMaxPopulationProfiles) {
+        return;
+    }
+
+    g_population_profiles[g_population_profile_count++] = profile;
+}
+
 static int block_is_active_at_position(uint32_t block_index, MDTBFloat3 position) {
     if (block_index >= g_block_count) {
         return 0;
@@ -240,23 +333,159 @@ static int block_is_active_at_position(uint32_t block_index, MDTBFloat3 position
     return distance_squared_xz(position, block->origin) <= (activation_distance * activation_distance);
 }
 
+static uint32_t nearest_block_index_for_position(MDTBFloat3 position) {
+    uint32_t best_index = MDTBIndexNone;
+    float best_distance_squared = 1000000.0f;
+
+    for (size_t index = 0u; index < g_block_count; ++index) {
+        const float block_distance_squared = distance_squared_xz(position, g_blocks[index].origin);
+        if (block_distance_squared < best_distance_squared) {
+            best_distance_squared = block_distance_squared;
+            best_index = (uint32_t)index;
+        }
+    }
+
+    return best_index;
+}
+
+static const MDTBVehicleTuning *vehicle_tuning_for_kind(uint32_t kind) {
+    static const MDTBVehicleTuning kSedanTuning = {
+        16.5f, 5.4f, 3.1f, 7.2f, 3.4f, 1.80f, 1.18f, 1.72f,
+        1.12f, 0.42f, -0.16f, 1.95f, 2.65f, 0.60f, -0.40f, 0.30f,
+        7.8f, 1.36f, 1.42f
+    };
+    static const MDTBVehicleTuning kCoupeTuning = {
+        18.6f, 5.8f, 3.8f, 7.8f, 3.7f, 2.20f, 1.10f, 1.64f,
+        1.04f, 0.36f, -0.14f, 1.80f, 2.45f, 0.64f, -0.42f, 0.32f,
+        7.2f, 1.26f, 1.34f
+    };
+    static const MDTBVehicleTuning kMopedTuning = {
+        12.4f, 3.6f, 4.4f, 6.6f, 4.2f, 2.90f, 0.68f, 1.38f,
+        0.96f, 0.18f, 0.0f, 1.30f, 1.82f, 0.78f, -0.46f, 0.36f,
+        5.8f, 1.04f, 0.72f
+    };
+
+    switch (kind) {
+        case MDTBVehicleKindCoupe:
+            return &kCoupeTuning;
+        case MDTBVehicleKindMoped:
+            return &kMopedTuning;
+        case MDTBVehicleKindSedan:
+        default:
+            return &kSedanTuning;
+    }
+}
+
+static float vehicle_surface_grip_multiplier(uint32_t surface_kind) {
+    switch (surface_kind) {
+        case MDTBSurfaceRoad:
+            return 1.0f;
+        case MDTBSurfaceCurb:
+            return 0.58f;
+        case MDTBSurfaceLot:
+            return 0.72f;
+        case MDTBSurfaceSidewalk:
+        default:
+            return 0.48f;
+    }
+}
+
+static float vehicle_lane_offset_for_heading(uint32_t axis, float heading, float lane_magnitude) {
+    if (axis == MDTBRoadAxisNorthSouth) {
+        return cosf(heading) >= 0.0f ? lane_magnitude : -lane_magnitude;
+    }
+
+    return sinf(heading) >= 0.0f ? -lane_magnitude : lane_magnitude;
+}
+
+static float vehicle_lane_heading_for_axis(uint32_t axis, float current_heading) {
+    if (axis == MDTBRoadAxisNorthSouth) {
+        return cosf(current_heading) >= 0.0f ? 0.0f : kPi;
+    }
+
+    return sinf(current_heading) >= 0.0f ? (kPi * 0.5f) : -(kPi * 0.5f);
+}
+
+static MDTBFloat3 current_player_position(const MDTBEngineState *state) {
+    if (state != NULL && state->traversal_mode == MDTBTraversalModeVehicle) {
+        return state->active_vehicle_position;
+    }
+
+    if (state != NULL) {
+        return state->actor_position;
+    }
+
+    return make_float3(0.0f, 0.0f, 0.0f);
+}
+
+static int position_overlaps_collision(MDTBFloat3 position, float radius) {
+    for (size_t index = 0u; index < g_collision_box_count; ++index) {
+        const MDTBBox *box = &g_collision_boxes[index];
+        if (fabsf(position.x - box->center.x) <= box->half_extents.x + radius &&
+            fabsf(position.y - box->center.y) <= box->half_extents.y + radius &&
+            fabsf(position.z - box->center.z) <= box->half_extents.z + radius) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static float resolve_collision_axis_with_radius(float fixed_value, float current, float proposed, int is_x_axis, float radius) {
+    float resolved = proposed;
+
+    for (size_t index = 0u; index < g_collision_box_count; ++index) {
+        const MDTBBox *box = &g_collision_boxes[index];
+        const float min_x = box->center.x - box->half_extents.x - radius - kCollisionGap;
+        const float max_x = box->center.x + box->half_extents.x + radius + kCollisionGap;
+        const float min_z = box->center.z - box->half_extents.z - radius - kCollisionGap;
+        const float max_z = box->center.z + box->half_extents.z + radius + kCollisionGap;
+
+        if (is_x_axis) {
+            if (fixed_value <= min_z || fixed_value >= max_z) {
+                continue;
+            }
+
+            if (resolved > current && current <= min_x && resolved > min_x && resolved < max_x) {
+                resolved = min_x;
+            } else if (resolved < current && current >= max_x && resolved < max_x && resolved > min_x) {
+                resolved = max_x;
+            }
+        } else {
+            if (fixed_value <= min_x || fixed_value >= max_x) {
+                continue;
+            }
+
+            if (resolved > current && current <= min_z && resolved > min_z && resolved < max_z) {
+                resolved = min_z;
+            } else if (resolved < current && current >= max_z && resolved < max_z && resolved > min_z) {
+                resolved = max_z;
+            }
+        }
+    }
+
+    return resolved;
+}
+
 static void update_runtime_activity(MDTBEngineState *state) {
     MDTBFloat3 actor_position;
     uint32_t active_block_index = MDTBIndexNone;
     float best_block_distance_squared = 1000000.0f;
     uint32_t nearby_block_count = 0u;
     float best_link_distance_squared = 1000000.0f;
+    float best_vehicle_distance_squared = kVehicleMountRadius * kVehicleMountRadius;
 
     if (state == NULL) {
         return;
     }
 
-    actor_position = state->actor_position;
+    actor_position = current_player_position(state);
     state->active_block_index = MDTBIndexNone;
     state->nearby_block_count = 0u;
     state->active_link_index = MDTBIndexNone;
     state->active_pedestrian_spawn_count = 0u;
     state->active_vehicle_spawn_count = 0u;
+    state->nearby_vehicle_anchor_index = MDTBIndexNone;
 
     for (size_t index = 0u; index < g_block_count; ++index) {
         const float block_distance_squared = distance_squared_xz(actor_position, g_blocks[index].origin);
@@ -315,6 +544,35 @@ static void update_runtime_activity(MDTBEngineState *state) {
         } else if (point->kind == MDTBInterestPointVehicleSpawn) {
             state->active_vehicle_spawn_count += 1u;
         }
+    }
+
+    for (size_t index = 0u; index < g_vehicle_anchor_count; ++index) {
+        const MDTBVehicleAnchor *anchor = &g_vehicle_anchors[index];
+        float vehicle_distance_squared;
+        int same_chunk = 0;
+
+        if (anchor->block_index >= g_block_count) {
+            continue;
+        }
+
+        if (active_block_index < g_block_count &&
+            g_blocks[anchor->block_index].chunk_index == g_blocks[active_block_index].chunk_index) {
+            same_chunk = 1;
+        }
+
+        if (!block_is_active_at_position(anchor->block_index, actor_position) && !same_chunk) {
+            continue;
+        }
+
+        vehicle_distance_squared = distance_squared_xz(actor_position, anchor->position);
+        if (vehicle_distance_squared < best_vehicle_distance_squared) {
+            best_vehicle_distance_squared = vehicle_distance_squared;
+            state->nearby_vehicle_anchor_index = (uint32_t)index;
+        }
+    }
+
+    if (state->traversal_mode == MDTBTraversalModeVehicle) {
+        state->nearby_vehicle_anchor_index = state->active_vehicle_anchor_index;
     }
 }
 
@@ -539,21 +797,21 @@ static void push_low_fence_run_z(float x, float z_start, float z_end) {
     }
 }
 
-static void push_lane_arrow_z(float z_center, float direction_sign) {
+static void push_lane_arrow_z(float x_origin, float z_center, float direction_sign) {
     const MDTBFloat4 stripe_color = make_float4(0.88f, 0.86f, 0.68f, 1.0f);
 
     push_scene_box(make_box(
-        make_float3(0.0f, kRoadHeight + 0.01f, z_center - (direction_sign * 0.85f)),
+        make_float3(x_origin, kRoadHeight + 0.01f, z_center - (direction_sign * 0.85f)),
         make_float3(0.20f, 0.01f, 1.05f),
         stripe_color
     ));
     push_scene_box(make_box(
-        make_float3(-0.42f, kRoadHeight + 0.01f, z_center + (direction_sign * 0.34f)),
+        make_float3(x_origin - 0.42f, kRoadHeight + 0.01f, z_center + (direction_sign * 0.34f)),
         make_float3(0.18f, 0.01f, 0.46f),
         stripe_color
     ));
     push_scene_box(make_box(
-        make_float3(0.42f, kRoadHeight + 0.01f, z_center + (direction_sign * 0.34f)),
+        make_float3(x_origin + 0.42f, kRoadHeight + 0.01f, z_center + (direction_sign * 0.34f)),
         make_float3(0.18f, 0.01f, 0.46f),
         stripe_color
     ));
@@ -699,14 +957,30 @@ static void push_crosswalk_x(float x_center, float z_origin) {
     }
 }
 
-static void push_crosswalk_z(float z_center) {
+static void push_crosswalk_z(float x_origin, float z_center) {
     for (int stripe_index = -3; stripe_index <= 3; ++stripe_index) {
         push_scene_box(make_box(
-            make_float3((float)stripe_index * 1.45f, kRoadHeight + 0.01f, z_center),
+            make_float3(x_origin + ((float)stripe_index * 1.45f), kRoadHeight + 0.01f, z_center),
             make_float3(0.42f, 0.01f, 0.85f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
     }
+}
+
+static void build_block_lot_surfaces(const MDTBBlockDescriptor *block) {
+    const MDTBFloat4 lot_color = make_float4(0.54f, 0.49f, 0.42f, 1.0f);
+
+    push_scene_box(make_box(
+        make_float3(block->origin.x - 35.0f, kSidewalkHeight * 0.5f, block->origin.z),
+        make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
+        lot_color
+    ));
+
+    push_scene_box(make_box(
+        make_float3(block->origin.x + 35.0f, kSidewalkHeight * 0.5f, block->origin.z),
+        make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
+        lot_color
+    ));
 }
 
 static void build_world_surfaces(void) {
@@ -714,7 +988,6 @@ static void build_world_surfaces(void) {
     const MDTBFloat4 road_color = make_float4(0.17f, 0.17f, 0.19f, 1.0f);
     const MDTBFloat4 curb_color = make_float4(0.74f, 0.74f, 0.73f, 1.0f);
     const MDTBFloat4 sidewalk_color = make_float4(0.62f, 0.62f, 0.59f, 1.0f);
-    const MDTBFloat4 lot_color = make_float4(0.54f, 0.49f, 0.42f, 1.0f);
 
     push_scene_box(make_box(
         make_float3(0.0f, 0.0f, 0.0f),
@@ -722,24 +995,32 @@ static void build_world_surfaces(void) {
         soil_color
     ));
 
-    push_scene_box(make_box(
-        make_float3(0.0f, kRoadHeight * 0.5f, 0.0f),
-        make_float3(kRoadHalfWidth, kRoadHeight * 0.5f, kPlayableHalfLength + 4.0f),
-        road_color
-    ));
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const float x_origin = kBlockLayout[index].origin.x;
 
-    for (int side = -1; side <= 1; side += 2) {
-        push_scene_box(make_box(
-            make_float3((float)side * 6.08f, 0.09f, 0.0f),
-            make_float3(0.20f, 0.09f, kPlayableHalfLength + 4.0f),
-            curb_color
-        ));
+        if (layout_has_prior_x(index)) {
+            continue;
+        }
 
         push_scene_box(make_box(
-            make_float3((float)side * 9.18f, kSidewalkHeight * 0.5f, 0.0f),
-            make_float3(2.82f, kSidewalkHeight * 0.5f, kPlayableHalfLength + 4.0f),
-            sidewalk_color
+            make_float3(x_origin, kRoadHeight * 0.5f, 0.0f),
+            make_float3(kRoadHalfWidth, kRoadHeight * 0.5f, kPlayableHalfLength + 4.0f),
+            road_color
         ));
+
+        for (int side = -1; side <= 1; side += 2) {
+            push_scene_box(make_box(
+                make_float3(x_origin + ((float)side * 6.08f), 0.09f, 0.0f),
+                make_float3(0.20f, 0.09f, kPlayableHalfLength + 4.0f),
+                curb_color
+            ));
+
+            push_scene_box(make_box(
+                make_float3(x_origin + ((float)side * 9.18f), kSidewalkHeight * 0.5f, 0.0f),
+                make_float3(2.82f, kSidewalkHeight * 0.5f, kPlayableHalfLength + 4.0f),
+                sidewalk_color
+            ));
+        }
     }
 
     for (size_t index = 0u; index < scene_layout_count(); ++index) {
@@ -768,62 +1049,69 @@ static void build_world_surfaces(void) {
                 sidewalk_color
             ));
         }
-
-    }
-
-    for (size_t index = 0u; index < scene_layout_count(); ++index) {
-        const float x_origin = kBlockLayout[index].origin.x;
-        const float z_origin = kBlockLayout[index].origin.z;
-
-        push_scene_box(make_box(
-            make_float3(x_origin - 35.0f, kSidewalkHeight * 0.5f, z_origin),
-            make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
-            lot_color
-        ));
-
-        push_scene_box(make_box(
-            make_float3(x_origin + 35.0f, kSidewalkHeight * 0.5f, z_origin),
-            make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
-            lot_color
-        ));
     }
 }
 
 static void build_road_markings(void) {
     const MDTBFloat4 stripe_color = make_float4(0.89f, 0.82f, 0.20f, 1.0f);
 
-    for (int segment = -5; segment <= 5; ++segment) {
-        const float center = (float)segment * 20.0f;
-        int inside_intersection = 0;
+    for (size_t layout_index = 0u; layout_index < scene_layout_count(); ++layout_index) {
+        const float x_origin = kBlockLayout[layout_index].origin.x;
 
-        for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
-            if (fabsf(center - kBlockLayout[block_index].origin.z) <= kIntersectionClear) {
-                inside_intersection = 1;
-                break;
-            }
+        if (layout_has_prior_x(layout_index)) {
+            continue;
         }
 
-        if (!inside_intersection) {
-            for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
-                push_scene_box(make_box(
-                    make_float3(0.0f, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
-                    make_float3(0.13f, 0.01f, 1.2f),
-                    stripe_color
-                ));
+        for (int segment = -6; segment <= 6; ++segment) {
+            const float center = (float)segment * 20.0f;
+            int inside_intersection = 0;
+
+            for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+                if (fabsf(x_origin - kBlockLayout[block_index].origin.x) > 0.01f) {
+                    continue;
+                }
+
+                if (fabsf(center - kBlockLayout[block_index].origin.z) <= kIntersectionClear) {
+                    inside_intersection = 1;
+                    break;
+                }
+            }
+
+            if (!inside_intersection) {
+                for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
+                    push_scene_box(make_box(
+                        make_float3(x_origin, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
+                        make_float3(0.13f, 0.01f, 1.2f),
+                        stripe_color
+                    ));
+                }
             }
         }
     }
 
-    for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
-        if (layout_has_prior_z(block_index)) {
+    for (size_t layout_index = 0u; layout_index < scene_layout_count(); ++layout_index) {
+        const float z_origin = kBlockLayout[layout_index].origin.z;
+
+        if (layout_has_prior_z(layout_index)) {
             continue;
         }
 
-        const float z_origin = kBlockLayout[block_index].origin.z;
-
-        for (int segment = -4; segment <= 4; ++segment) {
+        for (int segment = -6; segment <= 6; ++segment) {
             const float center_x = (float)segment * 24.0f;
-            if (fabsf(center_x) <= kIntersectionClear) {
+            int inside_intersection = 0;
+
+            for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+                if (fabsf(z_origin - kBlockLayout[block_index].origin.z) > 0.01f) {
+                    continue;
+                }
+
+                if (fabsf(center_x - kBlockLayout[block_index].origin.x) <= kIntersectionClear) {
+                    inside_intersection = 1;
+                    break;
+                }
+            }
+
+            if (inside_intersection) {
                 continue;
             }
 
@@ -835,37 +1123,42 @@ static void build_road_markings(void) {
                 ));
             }
         }
+    }
 
-        push_crosswalk_x(-kCrosswalkOffset, z_origin);
-        push_crosswalk_x(kCrosswalkOffset, z_origin);
-        push_crosswalk_z(z_origin - kCrosswalkOffset);
-        push_crosswalk_z(z_origin + kCrosswalkOffset);
+    for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+        const float x_origin = kBlockLayout[block_index].origin.x;
+        const float z_origin = kBlockLayout[block_index].origin.z;
+
+        push_crosswalk_x(x_origin - kCrosswalkOffset, z_origin);
+        push_crosswalk_x(x_origin + kCrosswalkOffset, z_origin);
+        push_crosswalk_z(x_origin, z_origin - kCrosswalkOffset);
+        push_crosswalk_z(x_origin, z_origin + kCrosswalkOffset);
 
         push_scene_box(make_box(
-            make_float3(0.0f, kRoadHeight + 0.01f, z_origin - 6.65f),
+            make_float3(x_origin, kRoadHeight + 0.01f, z_origin - 6.65f),
             make_float3(4.65f, 0.01f, 0.12f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(0.0f, kRoadHeight + 0.01f, z_origin + 6.65f),
+            make_float3(x_origin, kRoadHeight + 0.01f, z_origin + 6.65f),
             make_float3(4.65f, 0.01f, 0.12f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(-6.65f, kRoadHeight + 0.01f, z_origin),
+            make_float3(x_origin - 6.65f, kRoadHeight + 0.01f, z_origin),
             make_float3(0.12f, 0.01f, 4.65f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(6.65f, kRoadHeight + 0.01f, z_origin),
+            make_float3(x_origin + 6.65f, kRoadHeight + 0.01f, z_origin),
             make_float3(0.12f, 0.01f, 4.65f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
 
-        push_lane_arrow_z(z_origin - 18.5f, -1.0f);
-        push_lane_arrow_z(z_origin + 18.5f, 1.0f);
-        push_lane_arrow_x(-18.5f, z_origin, -1.0f);
-        push_lane_arrow_x(18.5f, z_origin, 1.0f);
+        push_lane_arrow_z(x_origin, z_origin - 18.5f, -1.0f);
+        push_lane_arrow_z(x_origin, z_origin + 18.5f, 1.0f);
+        push_lane_arrow_x(x_origin - 18.5f, z_origin, -1.0f);
+        push_lane_arrow_x(x_origin + 18.5f, z_origin, 1.0f);
     }
 }
 
@@ -927,57 +1220,57 @@ static void build_side_buildings(const MDTBBlockDescriptor *block, int x_sign) {
     push_planter(block->origin.x + ((float)x_sign * 9.4f), block->origin.z + 14.2f, 0.58f);
 }
 
-static void build_intersection_props(float z_origin) {
-    push_signal_pole(-8.9f, z_origin - 8.9f);
-    push_signal_pole(8.9f, z_origin - 8.9f);
-    push_signal_pole(-8.9f, z_origin + 8.9f);
-    push_signal_pole(8.9f, z_origin + 8.9f);
+static void build_intersection_props(const MDTBBlockDescriptor *block) {
+    push_signal_pole(block->origin.x - 8.9f, block->origin.z - 8.9f);
+    push_signal_pole(block->origin.x + 8.9f, block->origin.z - 8.9f);
+    push_signal_pole(block->origin.x - 8.9f, block->origin.z + 8.9f);
+    push_signal_pole(block->origin.x + 8.9f, block->origin.z + 8.9f);
 
-    push_planter(-10.2f, z_origin - 10.2f, 0.56f);
-    push_planter(10.2f, z_origin - 10.2f, 0.56f);
-    push_planter(-10.2f, z_origin + 10.2f, 0.56f);
-    push_planter(10.2f, z_origin + 10.2f, 0.56f);
+    push_planter(block->origin.x - 10.2f, block->origin.z - 10.2f, 0.56f);
+    push_planter(block->origin.x + 10.2f, block->origin.z - 10.2f, 0.56f);
+    push_planter(block->origin.x - 10.2f, block->origin.z + 10.2f, 0.56f);
+    push_planter(block->origin.x + 10.2f, block->origin.z + 10.2f, 0.56f);
 
     push_prop(
-        make_float3(11.4f, 1.15f, z_origin - 16.0f),
+        offset_point(block->origin, 11.4f, 1.15f, -16.0f),
         make_float3(0.12f, 1.15f, 1.35f),
         make_float4(0.28f, 0.29f, 0.32f, 1.0f),
         1
     );
     push_prop(
-        make_float3(10.8f, 2.15f, z_origin - 16.0f),
+        offset_point(block->origin, 10.8f, 2.15f, -16.0f),
         make_float3(0.82f, 0.16f, 1.55f),
         make_float4(0.56f, 0.61f, 0.68f, 1.0f),
         0
     );
     push_prop(
-        make_float3(10.8f, 1.05f, z_origin - 16.0f),
+        offset_point(block->origin, 10.8f, 1.05f, -16.0f),
         make_float3(0.65f, 0.55f, 1.15f),
         make_float4(0.70f, 0.72f, 0.75f, 1.0f),
         1
     );
 
     push_prop(
-        make_float3(-16.0f, 0.55f, z_origin + 11.1f),
+        offset_point(block->origin, -16.0f, 0.55f, 11.1f),
         make_float3(1.55f, 0.55f, 0.34f),
         make_float4(0.79f, 0.25f, 0.19f, 1.0f),
         1
     );
     push_prop(
-        make_float3(16.0f, 0.55f, z_origin - 11.1f),
+        offset_point(block->origin, 16.0f, 0.55f, -11.1f),
         make_float3(1.55f, 0.55f, 0.34f),
         make_float4(0.23f, 0.49f, 0.67f, 1.0f),
         1
     );
 
-    push_bollard(-11.9f, z_origin - 7.4f, 0.92f);
-    push_bollard(-11.9f, z_origin + 7.4f, 0.92f);
-    push_bollard(11.9f, z_origin - 7.4f, 0.92f);
-    push_bollard(11.9f, z_origin + 7.4f, 0.92f);
-    push_bollard(-7.4f, z_origin - 11.9f, 0.92f);
-    push_bollard(7.4f, z_origin - 11.9f, 0.92f);
-    push_bollard(-7.4f, z_origin + 11.9f, 0.92f);
-    push_bollard(7.4f, z_origin + 11.9f, 0.92f);
+    push_bollard(block->origin.x - 11.9f, block->origin.z - 7.4f, 0.92f);
+    push_bollard(block->origin.x - 11.9f, block->origin.z + 7.4f, 0.92f);
+    push_bollard(block->origin.x + 11.9f, block->origin.z - 7.4f, 0.92f);
+    push_bollard(block->origin.x + 11.9f, block->origin.z + 7.4f, 0.92f);
+    push_bollard(block->origin.x - 7.4f, block->origin.z - 11.9f, 0.92f);
+    push_bollard(block->origin.x + 7.4f, block->origin.z - 11.9f, 0.92f);
+    push_bollard(block->origin.x - 7.4f, block->origin.z + 11.9f, 0.92f);
+    push_bollard(block->origin.x + 7.4f, block->origin.z + 11.9f, 0.92f);
 }
 
 static void build_intersection_dynamic_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
@@ -1138,16 +1431,100 @@ static void build_mixed_use_frontage(const MDTBBlockDescriptor *block) {
     push_low_fence_run_z(x_origin - 49.0f, z_origin + 28.4f, z_origin + 45.8f);
 }
 
+static void build_service_court_annex(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    const float x_origin = block->origin.x;
+    const float z_origin = block->origin.z;
+    const MDTBFloat4 service_lane_color = make_float4(0.24f, 0.26f, 0.28f, 1.0f);
+    const MDTBFloat4 stripe_color = make_float4(0.88f, 0.85f, 0.63f, 1.0f);
+
+    push_scene_box(make_box(
+        make_float3(x_origin - 29.4f, kSidewalkHeight + 0.02f, z_origin - 28.8f),
+        make_float3(10.4f, 0.02f, 5.2f),
+        service_lane_color
+    ));
+
+    for (int stripe_index = 0; stripe_index < 3; ++stripe_index) {
+        push_scene_box(make_box(
+            make_float3(x_origin - 35.6f + ((float)stripe_index * 4.2f), kSidewalkHeight + 0.03f, z_origin - 28.8f),
+            make_float3(1.25f, 0.01f, 0.08f),
+            stripe_color
+        ));
+    }
+
+    push_building(
+        make_float3(x_origin - 40.2f, kSidewalkHeight + 2.35f, z_origin - 31.0f),
+        make_float3(4.8f, 2.35f, 6.4f),
+        make_float4(0.48f, 0.41f, 0.34f, 1.0f)
+    );
+    push_prop(
+        make_float3(x_origin - 33.8f, kSidewalkHeight + 2.18f, z_origin - 28.8f),
+        make_float3(2.1f, 0.14f, 3.1f),
+        make_float4(0.74f, 0.46f, 0.22f, 1.0f),
+        0
+    );
+    push_prop(
+        make_float3(x_origin - 34.1f, kSidewalkHeight + 1.1f, z_origin - 23.6f),
+        make_float3(0.14f, 1.1f, 1.4f),
+        make_float4(0.31f, 0.33f, 0.35f, 1.0f),
+        1
+    );
+    push_prop(
+        make_float3(x_origin - 26.6f, 0.72f, z_origin - 31.6f),
+        make_float3(0.68f, 0.72f, 1.2f),
+        make_float4(0.26f, 0.39f, 0.46f, 1.0f),
+        1
+    );
+    push_prop(
+        make_float3(x_origin - 26.6f, 1.52f, z_origin - 31.6f),
+        make_float3(0.76f, 0.08f, 1.28f),
+        make_float4(0.44f, 0.56f, 0.62f, 1.0f),
+        0
+    );
+    push_trash_bin(x_origin - 28.8f, z_origin - 24.7f);
+    push_bench(x_origin - 22.4f, z_origin - 24.1f);
+
+    for (int bollard = 0; bollard < 4; ++bollard) {
+        push_bollard(x_origin - 35.8f + ((float)bollard * 2.6f), z_origin - 22.8f, 0.92f);
+    }
+
+    push_interest_point(make_float3(x_origin - 30.2f, kSidewalkHeight, z_origin - 27.9f), 5.5f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(x_origin - 23.8f, kSidewalkHeight, z_origin - 28.2f), 5.8f, MDTBInterestPointVehicleSpawn, block_index);
+    push_interest_point(make_float3(x_origin - 38.4f, kSidewalkHeight, z_origin - 30.8f), 7.5f, MDTBInterestPointLandmark, block_index);
+
+    push_dynamic_prop(
+        offset_point(block->origin, -33.8f, 2.18f, -28.8f),
+        make_float3(0.94f, 0.16f, 0.08f),
+        make_float4(0.92f, 0.55f, 0.23f, 1.0f),
+        0.5f,
+        MDTBDynamicPropNeon,
+        block_index
+    );
+    push_dynamic_prop(
+        offset_point(block->origin, -26.6f, 1.92f, -31.6f),
+        make_float3(0.36f, 0.26f, 0.08f),
+        make_float4(0.76f, 0.84f, 0.90f, 1.0f),
+        1.0f,
+        MDTBDynamicPropWindowGlow,
+        block_index
+    );
+}
+
 static void build_mixed_use_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
-    build_mixed_use_frontage(block);
+    build_intersection_props(block);
+    build_frontage_for_block(block);
 
     push_corner_store_landmark(block->origin.x + 39.0f, block->origin.z - 34.8f);
     push_billboard(block->origin.x + 46.0f, block->origin.z + 16.0f, 4.9f, 1.25f, 1, make_float4(0.22f, 0.54f, 0.72f, 1.0f));
     push_billboard(block->origin.x - 28.0f, block->origin.z + 34.0f, 5.3f, 1.35f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
     push_parked_car(block->origin.x - 38.0f, block->origin.z + 34.4f, 1.15f, 2.15f, make_float4(0.27f, 0.43f, 0.61f, 1.0f));
     push_parked_car(block->origin.x + 35.4f, block->origin.z - 35.6f, 1.18f, 2.25f, make_float4(0.63f, 0.37f, 0.22f, 1.0f));
+
+    if (block->frontage_template == MDTBFrontageTemplateServiceSpur) {
+        build_service_court_annex(block, block_index);
+    }
 
     push_interest_point(make_float3(block->origin.x, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
     push_interest_point(make_float3(block->origin.x - 10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
@@ -1156,6 +1533,8 @@ static void build_mixed_use_block(const MDTBBlockDescriptor *block, uint32_t blo
     push_interest_point(make_float3(block->origin.x + 39.0f, kSidewalkHeight, block->origin.z - 34.8f), 8.0f, MDTBInterestPointLandmark, block_index);
     push_interest_point(make_float3(block->origin.x - 12.0f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
     push_interest_point(make_float3(block->origin.x + 18.0f, kSidewalkHeight, block->origin.z - 2.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    build_hotspot_hooks(block, block_index);
+    build_vehicle_handoff_hooks(block, block_index);
 
     push_dynamic_prop(
         offset_point(block->origin, -21.8f, 2.08f, -16.0f),
@@ -1224,10 +1603,11 @@ static void build_mixed_use_block(const MDTBBlockDescriptor *block, uint32_t blo
 }
 
 static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
-    build_intersection_props(block->origin.z);
-    build_hub_frontage(block);
+    build_intersection_props(block);
+    build_frontage_for_block(block);
     build_hub_dynamic_props(block, block_index);
 
     push_corner_store_landmark(-42.0f, block->origin.z - 17.2f);
@@ -1247,6 +1627,8 @@ static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_ind
     push_interest_point(make_float3(-14.4f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
     push_interest_point(make_float3(42.0f, kSidewalkHeight, block->origin.z - 17.2f), 8.0f, MDTBInterestPointLandmark, block_index);
     push_interest_point(make_float3(35.0f, kSidewalkHeight, block->origin.z + 35.0f), 8.0f, MDTBInterestPointLandmark, block_index);
+    build_hotspot_hooks(block, block_index);
+    build_vehicle_handoff_hooks(block, block_index);
 }
 
 static void build_residential_frontage(const MDTBBlockDescriptor *block) {
@@ -1274,11 +1656,97 @@ static void build_residential_frontage(const MDTBBlockDescriptor *block) {
     push_low_fence_run_z(48.5f, z_origin + 29.0f, z_origin + 46.0f);
 }
 
+static void build_service_spur_frontage(const MDTBBlockDescriptor *block) {
+    const float x_origin = block->origin.x;
+    const float z_origin = block->origin.z;
+
+    push_store_awning_x(x_origin - 23.0f, z_origin - 13.4f, 3.1f, 1.0f);
+    push_store_awning_x(x_origin + 6.5f, z_origin - 13.0f, 4.3f, 1.0f);
+    push_store_awning_x(x_origin + 29.8f, z_origin + 13.3f, 2.8f, -1.0f);
+    push_bus_shelter(x_origin + 18.6f, z_origin + 16.2f);
+    push_newsstand(x_origin - 8.8f, z_origin - 10.8f, 1);
+    push_newsstand(x_origin + 22.8f, z_origin + 10.8f, 1);
+    push_trash_bin(x_origin - 26.4f, z_origin + 10.7f);
+    push_trash_bin(x_origin + 10.8f, z_origin - 10.9f);
+    push_bench(x_origin - 14.6f, z_origin + 10.3f);
+    push_bench(x_origin + 16.6f, z_origin - 10.4f);
+    push_planter(x_origin - 31.4f, z_origin - 12.1f, 0.64f);
+    push_planter(x_origin + 35.0f, z_origin + 12.0f, 0.54f);
+    push_prop(make_float3(x_origin + 2.8f, kSidewalkHeight + 2.18f, z_origin - 13.0f), make_float3(2.5f, 0.18f, 0.20f), make_float4(0.92f, 0.71f, 0.24f, 1.0f), 0);
+    push_prop(make_float3(x_origin + 29.8f, kSidewalkHeight + 2.18f, z_origin + 13.1f), make_float3(1.68f, 0.18f, 0.20f), make_float4(0.33f, 0.68f, 0.82f, 1.0f), 0);
+    push_prop(make_float3(x_origin - 28.2f, 1.18f, z_origin + 12.8f), make_float3(0.14f, 1.18f, 1.18f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 28.9f, 2.18f, z_origin + 12.8f), make_float3(1.22f, 0.12f, 1.36f), make_float4(0.76f, 0.81f, 0.84f, 1.0f), 0);
+
+    push_low_fence_run_x(z_origin - 46.2f, x_origin + 26.8f, x_origin + 48.4f);
+    push_low_fence_run_z(x_origin + 48.4f, z_origin - 46.2f, z_origin - 26.8f);
+    push_low_fence_run_x(z_origin + 45.8f, x_origin - 49.2f, x_origin - 30.0f);
+    push_low_fence_run_z(x_origin - 49.2f, z_origin + 29.0f, z_origin + 45.8f);
+}
+
+static void build_frontage_for_block(const MDTBBlockDescriptor *block) {
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            build_residential_frontage(block);
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            build_mixed_use_frontage(block);
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            build_service_spur_frontage(block);
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            build_hub_frontage(block);
+            break;
+    }
+}
+
+static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            push_interest_point(offset_point(block->origin, 11.2f, kSidewalkHeight, -16.2f), 8.5f, MDTBInterestPointHotspot, block_index);
+            push_interest_point(offset_point(block->origin, -41.6f, kSidewalkHeight, 15.0f), 8.5f, MDTBInterestPointHotspot, block_index);
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            push_interest_point(offset_point(block->origin, -21.8f, kSidewalkHeight, -16.0f), 8.0f, MDTBInterestPointHotspot, block_index);
+            push_interest_point(offset_point(block->origin, 39.0f, kSidewalkHeight, -34.8f), 8.5f, MDTBInterestPointHotspot, block_index);
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            push_interest_point(offset_point(block->origin, -30.2f, kSidewalkHeight, -27.9f), 8.0f, MDTBInterestPointHotspot, block_index);
+            push_interest_point(offset_point(block->origin, 29.8f, kSidewalkHeight, 13.3f), 8.0f, MDTBInterestPointHotspot, block_index);
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            push_interest_point(offset_point(block->origin, -42.0f, kSidewalkHeight, -13.2f), 8.5f, MDTBInterestPointHotspot, block_index);
+            push_interest_point(offset_point(block->origin, 35.0f, kSidewalkHeight, 35.0f), 8.5f, MDTBInterestPointHotspot, block_index);
+            break;
+    }
+}
+
+static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            push_vehicle_anchor(offset_point(block->origin, 24.0f, kRoadHeight, -2.2f), kPi * 0.5f, block_index, MDTBVehicleKindCoupe, MDTBVehicleParkingStateCurbside, MDTBRoadAxisEastWest, -2.2f);
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            push_vehicle_anchor(offset_point(block->origin, -24.0f, kRoadHeight, 2.2f), -(kPi * 0.5f), block_index, MDTBVehicleKindMoped, MDTBVehicleParkingStateCurbside, MDTBRoadAxisEastWest, 2.2f);
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            push_vehicle_anchor(offset_point(block->origin, 2.2f, kRoadHeight, -24.0f), 0.0f, block_index, MDTBVehicleKindCoupe, MDTBVehicleParkingStateService, MDTBRoadAxisNorthSouth, 2.2f);
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            push_vehicle_anchor(offset_point(block->origin, -2.2f, kRoadHeight, 24.0f), kPi, block_index, MDTBVehicleKindSedan, MDTBVehicleParkingStateCurbside, MDTBRoadAxisNorthSouth, -2.2f);
+            break;
+    }
+}
+
 static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
-    build_intersection_props(block->origin.z);
-    build_residential_frontage(block);
+    build_intersection_props(block);
+    build_frontage_for_block(block);
     build_residential_dynamic_props(block, block_index);
 
     push_billboard(-24.0f, block->origin.z - 42.0f, 4.8f, 1.25f, 0, make_float4(0.36f, 0.63f, 0.29f, 1.0f));
@@ -1292,6 +1760,8 @@ static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t b
     push_interest_point(make_float3(11.2f, kSidewalkHeight, block->origin.z - 16.2f), 8.0f, MDTBInterestPointLandmark, block_index);
     push_interest_point(make_float3(-41.6f, kSidewalkHeight, block->origin.z + 15.0f), 8.0f, MDTBInterestPointLandmark, block_index);
     push_interest_point(make_float3(35.8f, kSidewalkHeight, block->origin.z + 35.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    build_hotspot_hooks(block, block_index);
+    build_vehicle_handoff_hooks(block, block_index);
 }
 
 static void build_scene(void) {
@@ -1299,8 +1769,11 @@ static void build_scene(void) {
     g_collision_box_count = 0u;
     g_block_count = 0u;
     g_road_link_count = 0u;
+    g_vehicle_anchor_count = 0u;
     g_interest_point_count = 0u;
     g_dynamic_prop_count = 0u;
+    g_population_profile_count = 0u;
+    clear_scene_scope();
 
     build_world_surfaces();
     build_road_markings();
@@ -1312,6 +1785,10 @@ static void build_scene(void) {
     for (size_t index = 0u; index < scene_layout_count(); ++index) {
         const MDTBBlockDescriptor block = kBlockLayout[index];
         push_block_descriptor(block);
+        if (index < (sizeof(kPopulationProfileLayout) / sizeof(kPopulationProfileLayout[0]))) {
+            push_population_profile(kPopulationProfileLayout[index]);
+        }
+        set_scene_scope((uint32_t)index, MDTBSceneLayerBlockOwned);
 
         switch (block.kind) {
             case MDTBBlockKindResidential:
@@ -1325,6 +1802,8 @@ static void build_scene(void) {
                 build_hub_block(&block, (uint32_t)index);
                 break;
         }
+
+        clear_scene_scope();
     }
 
     g_scene_initialized = 1;
@@ -1338,8 +1817,17 @@ static void ensure_scene_initialized(void) {
 
 static MDTBGroundInfo ground_info(float x, float z) {
     MDTBGroundInfo info;
-    float distance_to_road = fmaxf(fabsf(x) - kRoadHalfWidth, 0.0f);
-    int on_road = fabsf(x) <= kRoadHalfWidth;
+    float distance_to_road = 1000000.0f;
+    int on_road = 0;
+
+    for (size_t index = 0u; index < scene_layout_count(); ++index) {
+        const float x_distance = fmaxf(fabsf(x - kBlockLayout[index].origin.x) - kRoadHalfWidth, 0.0f);
+        distance_to_road = fminf(distance_to_road, x_distance);
+
+        if (fabsf(x - kBlockLayout[index].origin.x) <= kRoadHalfWidth) {
+            on_road = 1;
+        }
+    }
 
     for (size_t index = 0u; index < scene_layout_count(); ++index) {
         const float corridor_distance = fmaxf(fabsf(z - kBlockLayout[index].origin.z) - kRoadHalfWidth, 0.0f);
@@ -1391,12 +1879,39 @@ static MDTBFloat3 normalize_flat(MDTBFloat3 value) {
     return make_float3(value.x / length, 0.0f, value.z / length);
 }
 
+static MDTBFloat3 vehicle_forward_flat(float yaw) {
+    return normalize_flat(view_forward(yaw, 0.0f));
+}
+
+static MDTBFloat3 vehicle_right_flat(float yaw) {
+    return make_float3(cosf(yaw), 0.0f, sinf(yaw));
+}
+
 static MDTBFloat3 actor_focus_position(const MDTBEngineState *state) {
     return make_float3(
         state->actor_position.x,
         state->actor_ground_height + kEyeHeight,
         state->actor_position.z
     );
+}
+
+static MDTBFloat3 vehicle_seat_position(const MDTBEngineState *state) {
+    const MDTBVehicleTuning *tuning = vehicle_tuning_for_kind(state->active_vehicle_kind);
+    const MDTBFloat3 forward = vehicle_forward_flat(state->active_vehicle_heading);
+    const MDTBFloat3 right = vehicle_right_flat(state->active_vehicle_heading);
+    return make_float3(
+        state->active_vehicle_position.x + (forward.x * tuning->seat_forward) + (right.x * tuning->seat_side),
+        state->active_vehicle_position.y + tuning->seat_height,
+        state->active_vehicle_position.z + (forward.z * tuning->seat_forward) + (right.z * tuning->seat_side)
+    );
+}
+
+static MDTBFloat3 player_focus_position(const MDTBEngineState *state) {
+    if (state->traversal_mode == MDTBTraversalModeVehicle) {
+        return vehicle_seat_position(state);
+    }
+
+    return actor_focus_position(state);
 }
 
 static float surface_speed_multiplier(uint32_t surface_kind) {
@@ -1414,39 +1929,7 @@ static float surface_speed_multiplier(uint32_t surface_kind) {
 }
 
 static float resolve_collision_axis(float fixed_value, float current, float proposed, int is_x_axis) {
-    float resolved = proposed;
-
-    for (size_t index = 0u; index < g_collision_box_count; ++index) {
-        const MDTBBox *box = &g_collision_boxes[index];
-        const float min_x = box->center.x - box->half_extents.x - kPlayerRadius - kCollisionGap;
-        const float max_x = box->center.x + box->half_extents.x + kPlayerRadius + kCollisionGap;
-        const float min_z = box->center.z - box->half_extents.z - kPlayerRadius - kCollisionGap;
-        const float max_z = box->center.z + box->half_extents.z + kPlayerRadius + kCollisionGap;
-
-        if (is_x_axis) {
-            if (fixed_value <= min_z || fixed_value >= max_z) {
-                continue;
-            }
-
-            if (resolved > current && current <= min_x && resolved > min_x && resolved < max_x) {
-                resolved = min_x;
-            } else if (resolved < current && current >= max_x && resolved < max_x && resolved > min_x) {
-                resolved = max_x;
-            }
-        } else {
-            if (fixed_value <= min_x || fixed_value >= max_x) {
-                continue;
-            }
-
-            if (resolved > current && current <= min_z && resolved > min_z && resolved < max_z) {
-                resolved = min_z;
-            } else if (resolved < current && current >= max_z && resolved < max_z && resolved > min_z) {
-                resolved = max_z;
-            }
-        }
-    }
-
-    return resolved;
+    return resolve_collision_axis_with_radius(fixed_value, current, proposed, is_x_axis, kPlayerRadius);
 }
 
 static MDTBFloat3 resolve_third_person_camera(MDTBFloat3 focus, MDTBFloat3 desired) {
@@ -1483,73 +1966,135 @@ static MDTBFloat3 resolve_third_person_camera(MDTBFloat3 focus, MDTBFloat3 desir
     return resolved;
 }
 
-void mdtb_engine_init(MDTBEngineState *state) {
-    if (state == NULL) {
+static void sync_active_vehicle_anchor(const MDTBEngineState *state) {
+    if (state == NULL || state->active_vehicle_anchor_index >= g_vehicle_anchor_count) {
         return;
     }
 
-    ensure_scene_initialized();
-    memset(state, 0, sizeof(*state));
-    state->actor_position.x = -9.0f;
-    state->actor_position.z = 26.0f;
-    state->actor_ground_height = kSidewalkHeight;
-    state->actor_position.y = state->actor_ground_height;
-    state->camera.yaw = 0.18f;
-    state->camera.pitch = -0.10f;
-    state->camera.mode = MDTBCameraModeFirstPerson;
-    state->active_block_index = MDTBIndexNone;
-    state->active_link_index = MDTBIndexNone;
-    state->target_yaw = state->camera.yaw;
-    state->target_pitch = state->camera.pitch;
-    state->actor_heading = state->camera.yaw;
-    state->surface_kind = MDTBSurfaceSidewalk;
-    state->camera.focus_position = actor_focus_position(state);
-    state->camera.position = state->camera.focus_position;
-    update_runtime_activity(state);
+    g_vehicle_anchors[state->active_vehicle_anchor_index].position = state->active_vehicle_position;
+    g_vehicle_anchors[state->active_vehicle_anchor_index].yaw = state->active_vehicle_heading;
+    g_vehicle_anchors[state->active_vehicle_anchor_index].block_index = nearest_block_index_for_position(state->active_vehicle_position);
+    if (state->active_link_index < g_road_link_count) {
+        const MDTBRoadLink *link = &g_road_links[state->active_link_index];
+        g_vehicle_anchors[state->active_vehicle_anchor_index].lane_axis = link->axis;
+        if (link->axis == MDTBRoadAxisNorthSouth) {
+            g_vehicle_anchors[state->active_vehicle_anchor_index].lane_offset = state->active_vehicle_position.x - link->midpoint.x;
+        } else {
+            g_vehicle_anchors[state->active_vehicle_anchor_index].lane_offset = state->active_vehicle_position.z - link->midpoint.z;
+        }
+        g_vehicle_anchors[state->active_vehicle_anchor_index].parking_state =
+            state->surface_kind == MDTBSurfaceRoad || state->surface_kind == MDTBSurfaceCurb ?
+            MDTBVehicleParkingStateCurbside :
+            MDTBVehicleParkingStateService;
+    } else {
+        g_vehicle_anchors[state->active_vehicle_anchor_index].parking_state =
+            state->surface_kind == MDTBSurfaceLot ? MDTBVehicleParkingStateService : MDTBVehicleParkingStateCurbside;
+    }
 }
 
-void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
+static void enter_vehicle_from_anchor(MDTBEngineState *state, uint32_t anchor_index) {
+    MDTBGroundInfo ground;
+    const MDTBVehicleTuning *tuning;
+
+    if (state == NULL || anchor_index >= g_vehicle_anchor_count) {
+        return;
+    }
+
+    ground = ground_info(g_vehicle_anchors[anchor_index].position.x, g_vehicle_anchors[anchor_index].position.z);
+
+    state->traversal_mode = MDTBTraversalModeVehicle;
+    state->active_vehicle_anchor_index = anchor_index;
+    state->active_vehicle_kind = g_vehicle_anchors[anchor_index].kind;
+    state->active_vehicle_position = g_vehicle_anchors[anchor_index].position;
+    state->active_vehicle_position.y = ground.height;
+    state->active_vehicle_heading = g_vehicle_anchors[anchor_index].yaw;
+    state->active_vehicle_speed = 0.0f;
+    state->actor_velocity = make_float3(0.0f, 0.0f, 0.0f);
+    state->actor_position = state->active_vehicle_position;
+    state->actor_ground_height = ground.height;
+    state->surface_kind = ground.surface_kind;
+    state->actor_heading = state->active_vehicle_heading;
+    state->target_yaw = state->active_vehicle_heading;
+    tuning = vehicle_tuning_for_kind(state->active_vehicle_kind);
+    state->target_pitch = clampf(state->target_pitch, tuning->first_person_pitch_min, tuning->first_person_pitch_max);
+    state->active_vehicle_surface_grip = vehicle_surface_grip_multiplier(ground.surface_kind);
+    state->active_vehicle_lane_error = 0.0f;
+    state->active_vehicle_collision_pulse = 0.0f;
+    sync_active_vehicle_anchor(state);
+}
+
+static MDTBFloat3 resolve_vehicle_exit_position(const MDTBEngineState *state) {
+    const MDTBVehicleTuning *tuning = vehicle_tuning_for_kind(state->active_vehicle_kind);
+    const MDTBFloat3 forward = vehicle_forward_flat(state->active_vehicle_heading);
+    const MDTBFloat3 right = vehicle_right_flat(state->active_vehicle_heading);
+    const MDTBFloat3 base = state->active_vehicle_position;
+    const MDTBFloat3 candidates[] = {
+        make_float3(base.x + (right.x * tuning->exit_side_distance), base.y, base.z + (right.z * tuning->exit_side_distance)),
+        make_float3(base.x - (right.x * tuning->exit_side_distance), base.y, base.z - (right.z * tuning->exit_side_distance)),
+        make_float3(base.x - (forward.x * tuning->exit_rear_distance), base.y, base.z - (forward.z * tuning->exit_rear_distance)),
+    };
+
+    for (size_t index = 0u; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+        MDTBFloat3 candidate = candidates[index];
+        const MDTBGroundInfo ground = ground_info(candidate.x, candidate.z);
+        candidate.y = ground.height;
+
+        if (!position_overlaps_collision(candidate, kPlayerRadius)) {
+            return candidate;
+        }
+    }
+
+    return make_float3(base.x - (forward.x * fmaxf(1.4f, tuning->exit_rear_distance - 0.4f)), ground_info(base.x, base.z).height, base.z - (forward.z * fmaxf(1.4f, tuning->exit_rear_distance - 0.4f)));
+}
+
+static void exit_vehicle_to_ground(MDTBEngineState *state) {
+    MDTBFloat3 exit_position;
+    MDTBGroundInfo ground;
+
     if (state == NULL) {
         return;
     }
 
-    ensure_scene_initialized();
-    const float dt = clampf(input.delta_time, 0.0f, 0.1f);
-    const float turn_speed = 1.75f;
-    const float look_speed = 1.0f;
-    const float mouse_turn_speed = 0.0044f;
-    const float mouse_look_speed = 0.0032f;
+    exit_position = resolve_vehicle_exit_position(state);
+    ground = ground_info(exit_position.x, exit_position.z);
+    exit_position.y = ground.height;
+
+    state->traversal_mode = MDTBTraversalModeOnFoot;
+    state->actor_position = exit_position;
+    state->actor_ground_height = ground.height;
+    state->actor_velocity = make_float3(0.0f, 0.0f, 0.0f);
+    state->actor_heading = state->active_vehicle_heading;
+    state->surface_kind = ground.surface_kind;
+    state->camera.move_speed = 0.0f;
+    state->active_vehicle_speed = 0.0f;
+    state->active_vehicle_anchor_index = MDTBIndexNone;
+    state->target_yaw = state->actor_heading;
+    state->target_pitch = clampf(state->target_pitch, -0.52f, 0.38f);
+    state->active_vehicle_surface_grip = 0.0f;
+    state->active_vehicle_lane_error = 0.0f;
+    state->active_vehicle_collision_pulse = 0.0f;
+}
+
+static void step_on_foot_movement(MDTBEngineState *state, MDTBInputFrame input, float dt) {
     const MDTBGroundInfo current_ground = ground_info(state->actor_position.x, state->actor_position.z);
     const float traversal_scale = surface_speed_multiplier(current_ground.surface_kind);
     const float base_speed = (input.buttons & MDTBInputSprint) != 0u ? 10.5f : 6.45f;
     const float max_speed = base_speed * traversal_scale;
-    const float clamped_look_dx = clampf(input.look_delta_x, -80.0f, 80.0f);
-    const float clamped_look_dy = clampf(input.look_delta_y, -80.0f, 80.0f);
-
-    if ((input.buttons & MDTBInputToggleCamera) != 0u) {
-        state->camera.mode = state->camera.mode == MDTBCameraModeFirstPerson ? MDTBCameraModeThirdPerson : MDTBCameraModeFirstPerson;
-    }
-
-    state->target_yaw += clamped_look_dx * mouse_turn_speed;
-    state->target_yaw += ((input.buttons & MDTBInputTurnLeft) != 0u ? -turn_speed : 0.0f) * dt;
-    state->target_yaw += ((input.buttons & MDTBInputTurnRight) != 0u ? turn_speed : 0.0f) * dt;
-    state->target_yaw = wrap_angle(state->target_yaw);
-
-    state->target_pitch += -clamped_look_dy * mouse_look_speed;
-    state->target_pitch += ((input.buttons & MDTBInputLookUp) != 0u ? look_speed : 0.0f) * dt;
-    state->target_pitch += ((input.buttons & MDTBInputLookDown) != 0u ? -look_speed : 0.0f) * dt;
-    state->target_pitch = clampf(state->target_pitch, -0.52f, 0.38f);
-
-    state->camera.yaw = approach_angle(state->camera.yaw, state->target_yaw, 12.5f, dt);
-    state->camera.pitch = approachf(state->camera.pitch, state->target_pitch, 10.0f, dt);
-
     const float forward_x = sinf(state->target_yaw);
     const float forward_z = -cosf(state->target_yaw);
     const float right_x = cosf(state->target_yaw);
     const float right_z = sinf(state->target_yaw);
-
     float desired_velocity_x = 0.0f;
     float desired_velocity_z = 0.0f;
+    float proposed_x;
+    float proposed_z;
+    float resolved_x;
+    float resolved_z;
+    float clamped_x;
+    float clamped_z;
+    float move_length;
+    MDTBGroundInfo ground;
+    const float ground_follow_speed = current_ground.surface_kind == MDTBSurfaceCurb ? 16.0f : 24.0f;
 
     if ((input.buttons & MDTBInputMoveForward) != 0u) {
         desired_velocity_x += forward_x;
@@ -1571,7 +2116,7 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
         desired_velocity_z -= right_z;
     }
 
-    const float move_length = sqrtf((desired_velocity_x * desired_velocity_x) + (desired_velocity_z * desired_velocity_z));
+    move_length = sqrtf((desired_velocity_x * desired_velocity_x) + (desired_velocity_z * desired_velocity_z));
     if (move_length > 0.001f) {
         desired_velocity_x = (desired_velocity_x / move_length) * max_speed;
         desired_velocity_z = (desired_velocity_z / move_length) * max_speed;
@@ -1587,69 +2132,330 @@ void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
         state->actor_heading = approach_angle(state->actor_heading, state->camera.yaw, 5.5f, dt);
     }
 
-    float proposed_x = state->actor_position.x + (state->actor_velocity.x * dt);
-    float proposed_z = state->actor_position.z + (state->actor_velocity.z * dt);
+    proposed_x = state->actor_position.x + (state->actor_velocity.x * dt);
+    proposed_z = state->actor_position.z + (state->actor_velocity.z * dt);
 
-    const float resolved_x = resolve_collision_axis(state->actor_position.z, state->actor_position.x, proposed_x, 1);
-    const float clamped_x = clampf(resolved_x, -kPlayableHalfWidth, kPlayableHalfWidth);
+    resolved_x = resolve_collision_axis(state->actor_position.z, state->actor_position.x, proposed_x, 1);
+    clamped_x = clampf(resolved_x, -kPlayableHalfWidth, kPlayableHalfWidth);
     if (fabsf(clamped_x - proposed_x) > 0.0001f) {
         state->actor_velocity.x = 0.0f;
     }
     state->actor_position.x = clamped_x;
 
-    const float resolved_z = resolve_collision_axis(state->actor_position.x, state->actor_position.z, proposed_z, 0);
-    const float clamped_z = clampf(resolved_z, -kPlayableHalfLength, kPlayableHalfLength);
+    resolved_z = resolve_collision_axis(state->actor_position.x, state->actor_position.z, proposed_z, 0);
+    clamped_z = clampf(resolved_z, -kPlayableHalfLength, kPlayableHalfLength);
     if (fabsf(clamped_z - proposed_z) > 0.0001f) {
         state->actor_velocity.z = 0.0f;
     }
     state->actor_position.z = clamped_z;
 
-    const MDTBGroundInfo ground = ground_info(state->actor_position.x, state->actor_position.z);
-    const float ground_follow_speed = ground.surface_kind == MDTBSurfaceCurb ? 16.0f : 24.0f;
+    ground = ground_info(state->actor_position.x, state->actor_position.z);
     state->actor_ground_height = approachf(state->actor_ground_height, ground.height, ground_follow_speed, dt);
     state->actor_position.y = state->actor_ground_height;
     state->surface_kind = ground.surface_kind;
     state->camera.move_speed = sqrtf((state->actor_velocity.x * state->actor_velocity.x) + (state->actor_velocity.z * state->actor_velocity.z));
+}
+
+static void step_vehicle_movement(MDTBEngineState *state, MDTBInputFrame input, float dt) {
+    const MDTBVehicleTuning *tuning = vehicle_tuning_for_kind(state->active_vehicle_kind);
+    const MDTBGroundInfo current_ground = ground_info(state->active_vehicle_position.x, state->active_vehicle_position.z);
+    const float grip = vehicle_surface_grip_multiplier(current_ground.surface_kind);
+    const float throttle = ((input.buttons & MDTBInputMoveForward) != 0u ? 1.0f : 0.0f) - ((input.buttons & MDTBInputMoveBackward) != 0u ? 1.0f : 0.0f);
+    const float steer_input =
+        ((input.buttons & MDTBInputMoveRight) != 0u ? 1.0f : 0.0f) -
+        ((input.buttons & MDTBInputMoveLeft) != 0u ? 1.0f : 0.0f) +
+        ((input.buttons & MDTBInputTurnRight) != 0u ? 0.75f : 0.0f) -
+        ((input.buttons & MDTBInputTurnLeft) != 0u ? 0.75f : 0.0f);
+    const float max_forward_speed = tuning->max_forward_speed * grip;
+    const float max_reverse_speed = tuning->max_reverse_speed * (0.72f + (grip * 0.28f));
+    const float target_speed = throttle > 0.0f ? max_forward_speed : (throttle < 0.0f ? -max_reverse_speed : 0.0f);
+    const float approach_rate = throttle == 0.0f ?
+        tuning->coast_drag_rate + ((1.0f - grip) * 2.2f) :
+        ((throttle < 0.0f && state->active_vehicle_speed > 0.2f) ? tuning->brake_rate : tuning->acceleration_rate);
+    const float speed_ratio = clampf(fabsf(state->active_vehicle_speed) / fmaxf(tuning->max_forward_speed, 0.01f), 0.0f, 1.0f);
+    const float steer_rate = tuning->steer_rate * (0.60f + ((1.0f - speed_ratio) * 0.55f)) * (0.62f + (grip * 0.38f));
+    const float steer_direction = state->active_vehicle_speed < -0.2f ? -0.45f : 1.0f;
+    MDTBFloat3 forward;
+    float proposed_x;
+    float proposed_z;
+    float resolved_x;
+    float resolved_z;
+    float clamped_x;
+    float clamped_z;
+    MDTBGroundInfo ground;
+    int collided = 0;
+
+    state->active_vehicle_collision_pulse = approachf(state->active_vehicle_collision_pulse, 0.0f, 6.5f, dt);
+    state->active_vehicle_surface_grip = grip;
+    state->active_vehicle_speed = approachf(state->active_vehicle_speed, target_speed, approach_rate, dt);
+    if (throttle == 0.0f && fabsf(state->active_vehicle_speed) < 0.12f) {
+        state->active_vehicle_speed = 0.0f;
+    }
+
+    if (state->active_link_index < g_road_link_count) {
+        const MDTBRoadLink *link = &g_road_links[state->active_link_index];
+        const float lane_heading = vehicle_lane_heading_for_axis(link->axis, state->active_vehicle_heading);
+        state->active_vehicle_heading = approach_angle(state->active_vehicle_heading, lane_heading, kVehicleLaneAssistStrength * grip, dt);
+    }
+
+    if (fabsf(steer_input) > 0.001f) {
+        state->active_vehicle_heading = wrap_angle(state->active_vehicle_heading + (steer_input * steer_rate * steer_direction * dt));
+    }
+
+    forward = vehicle_forward_flat(state->active_vehicle_heading);
+    proposed_x = state->active_vehicle_position.x + (forward.x * state->active_vehicle_speed * dt);
+    proposed_z = state->active_vehicle_position.z + (forward.z * state->active_vehicle_speed * dt);
+
+    resolved_x = resolve_collision_axis_with_radius(state->active_vehicle_position.z, state->active_vehicle_position.x, proposed_x, 1, tuning->collision_radius);
+    clamped_x = clampf(resolved_x, -kPlayableHalfWidth, kPlayableHalfWidth);
+    if (fabsf(clamped_x - proposed_x) > 0.0001f) {
+        collided = 1;
+    }
+    state->active_vehicle_position.x = clamped_x;
+
+    resolved_z = resolve_collision_axis_with_radius(state->active_vehicle_position.x, state->active_vehicle_position.z, proposed_z, 0, tuning->collision_radius);
+    clamped_z = clampf(resolved_z, -kPlayableHalfLength, kPlayableHalfLength);
+    if (fabsf(clamped_z - proposed_z) > 0.0001f) {
+        collided = 1;
+    }
+    state->active_vehicle_position.z = clamped_z;
+
+    if (collided) {
+        state->active_vehicle_speed *= -0.08f;
+        state->active_vehicle_collision_pulse = fmaxf(state->active_vehicle_collision_pulse, 1.0f);
+    }
+
+    ground = ground_info(state->active_vehicle_position.x, state->active_vehicle_position.z);
+    state->active_vehicle_position.y = ground.height;
+    state->active_vehicle_surface_grip = vehicle_surface_grip_multiplier(ground.surface_kind);
+
+    if (ground.surface_kind != MDTBSurfaceRoad && fabsf(state->active_vehicle_speed) > 0.4f) {
+        state->active_vehicle_collision_pulse = fmaxf(
+            state->active_vehicle_collision_pulse,
+            clampf((1.0f - state->active_vehicle_surface_grip) * (0.24f + speed_ratio * 0.36f), 0.0f, 0.65f)
+        );
+    }
+
+    if (state->active_link_index < g_road_link_count) {
+        const MDTBRoadLink *link = &g_road_links[state->active_link_index];
+        const float desired_lane_offset = vehicle_lane_offset_for_heading(link->axis, state->active_vehicle_heading, tuning->travel_lane_offset);
+        if (link->axis == MDTBRoadAxisNorthSouth) {
+            const float desired_x = link->midpoint.x + desired_lane_offset;
+            const float corrected_x = resolve_collision_axis_with_radius(
+                state->active_vehicle_position.z,
+                state->active_vehicle_position.x,
+                approachf(state->active_vehicle_position.x, desired_x, kVehicleLanePullStrength * grip, dt),
+                1,
+                tuning->collision_radius
+            );
+            state->active_vehicle_lane_error = fabsf(corrected_x - desired_x);
+            state->active_vehicle_position.x = corrected_x;
+        } else {
+            const float desired_z = link->midpoint.z + desired_lane_offset;
+            const float corrected_z = resolve_collision_axis_with_radius(
+                state->active_vehicle_position.x,
+                state->active_vehicle_position.z,
+                approachf(state->active_vehicle_position.z, desired_z, kVehicleLanePullStrength * grip, dt),
+                0,
+                tuning->collision_radius
+            );
+            state->active_vehicle_lane_error = fabsf(corrected_z - desired_z);
+            state->active_vehicle_position.z = corrected_z;
+        }
+    } else {
+        state->active_vehicle_lane_error = 0.0f;
+    }
+
+    state->actor_position = state->active_vehicle_position;
+    state->actor_ground_height = ground.height;
+    state->surface_kind = ground.surface_kind;
+    state->actor_heading = state->active_vehicle_heading;
+    state->camera.move_speed = fabsf(state->active_vehicle_speed);
+    sync_active_vehicle_anchor(state);
+}
+
+void mdtb_engine_init(MDTBEngineState *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    ensure_scene_initialized();
+    memset(state, 0, sizeof(*state));
+    state->actor_position.x = -9.0f;
+    state->actor_position.z = 26.0f;
+    state->actor_ground_height = kSidewalkHeight;
+    state->actor_position.y = state->actor_ground_height;
+    state->camera.yaw = 0.18f;
+    state->camera.pitch = -0.10f;
+    state->camera.mode = MDTBCameraModeFirstPerson;
+    state->active_block_index = MDTBIndexNone;
+    state->active_link_index = MDTBIndexNone;
+    state->target_yaw = state->camera.yaw;
+    state->target_pitch = state->camera.pitch;
+    state->actor_heading = state->camera.yaw;
+    state->surface_kind = MDTBSurfaceSidewalk;
+    state->traversal_mode = MDTBTraversalModeOnFoot;
+    state->active_vehicle_anchor_index = MDTBIndexNone;
+    state->nearby_vehicle_anchor_index = MDTBIndexNone;
+    state->active_vehicle_kind = MDTBVehicleKindSedan;
+    state->active_vehicle_position = make_float3(0.0f, kRoadHeight, 0.0f);
+    state->active_vehicle_heading = 0.0f;
+    state->active_vehicle_speed = 0.0f;
+    state->active_vehicle_surface_grip = 0.0f;
+    state->active_vehicle_lane_error = 0.0f;
+    state->active_vehicle_collision_pulse = 0.0f;
+    state->camera.focus_position = player_focus_position(state);
+    state->camera.position = state->camera.focus_position;
+    update_runtime_activity(state);
+}
+
+void mdtb_engine_step(MDTBEngineState *state, MDTBInputFrame input) {
+    if (state == NULL) {
+        return;
+    }
+
+    ensure_scene_initialized();
+    const float dt = clampf(input.delta_time, 0.0f, 0.1f);
+    const float turn_speed = 1.75f;
+    const float look_speed = 1.0f;
+    const float mouse_turn_speed = 0.0044f;
+    const float mouse_look_speed = 0.0032f;
+    const MDTBVehicleTuning *active_vehicle_tuning = vehicle_tuning_for_kind(state->active_vehicle_kind);
+    const float clamped_look_dx = clampf(input.look_delta_x, -80.0f, 80.0f);
+    const float clamped_look_dy = clampf(input.look_delta_y, -80.0f, 80.0f);
+    const float min_pitch = state->traversal_mode == MDTBTraversalModeVehicle ? active_vehicle_tuning->first_person_pitch_min : -0.52f;
+    const float max_pitch = state->traversal_mode == MDTBTraversalModeVehicle ? active_vehicle_tuning->first_person_pitch_max : 0.38f;
+
+    if ((input.buttons & MDTBInputToggleCamera) != 0u) {
+        state->camera.mode = state->camera.mode == MDTBCameraModeFirstPerson ? MDTBCameraModeThirdPerson : MDTBCameraModeFirstPerson;
+    }
+
+    state->target_yaw += clamped_look_dx * mouse_turn_speed;
+    state->target_yaw += ((input.buttons & MDTBInputTurnLeft) != 0u ? -turn_speed : 0.0f) * dt;
+    state->target_yaw += ((input.buttons & MDTBInputTurnRight) != 0u ? turn_speed : 0.0f) * dt;
+    state->target_yaw = wrap_angle(state->target_yaw);
+
+    state->target_pitch += -clamped_look_dy * mouse_look_speed;
+    state->target_pitch += ((input.buttons & MDTBInputLookUp) != 0u ? look_speed : 0.0f) * dt;
+    state->target_pitch += ((input.buttons & MDTBInputLookDown) != 0u ? -look_speed : 0.0f) * dt;
+    state->target_pitch = clampf(state->target_pitch, min_pitch, max_pitch);
+
+    if (state->traversal_mode == MDTBTraversalModeVehicle && state->camera.mode == MDTBCameraModeFirstPerson) {
+        const float relative_yaw = clampf(wrap_angle(state->target_yaw - state->active_vehicle_heading), -active_vehicle_tuning->first_person_yaw_limit, active_vehicle_tuning->first_person_yaw_limit);
+        state->target_yaw = wrap_angle(state->active_vehicle_heading + relative_yaw);
+    } else if (state->traversal_mode == MDTBTraversalModeVehicle && state->camera.mode == MDTBCameraModeThirdPerson) {
+        state->target_yaw = approach_angle(state->target_yaw, state->active_vehicle_heading, 3.0f, dt);
+    }
+
+    state->camera.yaw = approach_angle(state->camera.yaw, state->target_yaw, 12.5f, dt);
+    state->camera.pitch = approachf(state->camera.pitch, state->target_pitch, 10.0f, dt);
+
+    if (state->traversal_mode == MDTBTraversalModeVehicle) {
+        step_vehicle_movement(state, input, dt);
+    } else {
+        step_on_foot_movement(state, input, dt);
+    }
+
     update_runtime_activity(state);
 
-    const MDTBFloat3 actor_focus = actor_focus_position(state);
+    if ((input.buttons & MDTBInputUse) != 0u) {
+        if (state->traversal_mode == MDTBTraversalModeOnFoot) {
+            if (state->nearby_vehicle_anchor_index < g_vehicle_anchor_count) {
+                enter_vehicle_from_anchor(state, state->nearby_vehicle_anchor_index);
+                update_runtime_activity(state);
+            }
+        } else if (fabsf(state->active_vehicle_speed) <= 1.4f) {
+            exit_vehicle_to_ground(state);
+            update_runtime_activity(state);
+        }
+    }
 
-    if (state->camera.mode == MDTBCameraModeFirstPerson) {
-        MDTBFloat3 camera_target = actor_focus;
-        camera_target.y += sinf(state->elapsed_time * 8.5f) * fminf(state->camera.move_speed / 10.0f, 1.0f) * 0.025f;
-        state->camera.focus_position = actor_focus;
-        state->camera.position.x = camera_target.x;
-        state->camera.position.z = camera_target.z;
-        state->camera.position.y = approachf(state->camera.position.y, camera_target.y, 18.0f, dt);
-    } else {
+    if (state->traversal_mode == MDTBTraversalModeVehicle) {
+        const MDTBFloat3 vehicle_focus = player_focus_position(state);
         const MDTBFloat3 flat_forward = view_forward(state->camera.yaw, 0.0f);
-        const MDTBFloat3 actor_forward = view_forward(state->actor_heading, 0.0f);
+        const MDTBFloat3 vehicle_forward = vehicle_forward_flat(state->active_vehicle_heading);
         const MDTBFloat3 shoulder_right = make_float3(cosf(state->camera.yaw), 0.0f, sinf(state->camera.yaw));
-        const float speed_ratio = fminf(state->camera.move_speed / 9.0f, 1.0f);
-        const float movement_bias = clampf(state->camera.move_speed / 3.0f, 0.0f, 1.0f);
-        const MDTBFloat3 lead_direction = normalize_flat(lerp_float3(flat_forward, actor_forward, movement_bias));
-        const float lead = 0.55f + (speed_ratio * 1.05f);
+        const float speed_ratio = fminf(state->camera.move_speed / fmaxf(active_vehicle_tuning->max_forward_speed, 0.01f), 1.0f);
+        const float bump = state->active_vehicle_collision_pulse;
 
-        const MDTBFloat3 focus_target = make_float3(
-            actor_focus.x + (lead_direction.x * lead),
-            actor_focus.y + 0.34f + (speed_ratio * 0.18f),
-            actor_focus.z + (lead_direction.z * lead)
-        );
+        if (state->camera.mode == MDTBCameraModeFirstPerson) {
+            state->camera.focus_position = approach_float3(
+                state->camera.focus_position,
+                make_float3(
+                    vehicle_focus.x + (vehicle_forward.x * 2.8f),
+                    vehicle_focus.y + 0.06f + (bump * 0.08f),
+                    vehicle_focus.z + (vehicle_forward.z * 2.8f)
+                ),
+                12.0f,
+                dt
+            );
+            state->camera.position = approach_float3(
+                state->camera.position,
+                make_float3(
+                    vehicle_focus.x - (shoulder_right.x * bump * 0.14f),
+                    vehicle_focus.y + (bump * 0.04f),
+                    vehicle_focus.z - (shoulder_right.z * bump * 0.14f)
+                ),
+                16.0f,
+                dt
+            );
+        } else {
+            const MDTBFloat3 lead_direction = normalize_flat(lerp_float3(flat_forward, vehicle_forward, 0.55f));
+            const MDTBFloat3 focus_target = make_float3(
+                state->active_vehicle_position.x + (lead_direction.x * (1.6f + speed_ratio * 1.1f)),
+                state->active_vehicle_position.y + active_vehicle_tuning->seat_height + 0.10f + (speed_ratio * 0.12f) + (bump * 0.10f),
+                state->active_vehicle_position.z + (lead_direction.z * (1.6f + speed_ratio * 1.1f))
+            );
+            MDTBFloat3 desired_camera;
 
-        state->camera.focus_position = approach_float3(state->camera.focus_position, focus_target, 10.0f, dt);
+            state->camera.focus_position = approach_float3(state->camera.focus_position, focus_target, 9.0f, dt);
 
-        const float chase_distance = 6.6f + (speed_ratio * 1.35f);
-        const float shoulder_offset = 1.18f;
-        const float camera_height = 1.18f + (speed_ratio * 0.22f) + (fmaxf(-state->camera.pitch, 0.0f) * 0.65f);
+            desired_camera = make_float3(
+                state->camera.focus_position.x - (flat_forward.x * (active_vehicle_tuning->third_person_distance + speed_ratio * 1.2f)) + (shoulder_right.x * active_vehicle_tuning->third_person_side),
+                state->camera.focus_position.y + active_vehicle_tuning->third_person_height + (fmaxf(-state->camera.pitch, 0.0f) * 0.55f) + (bump * 0.18f),
+                state->camera.focus_position.z - (flat_forward.z * (active_vehicle_tuning->third_person_distance + speed_ratio * 1.2f)) + (shoulder_right.z * active_vehicle_tuning->third_person_side)
+            );
 
-        MDTBFloat3 desired_camera = make_float3(
-            state->camera.focus_position.x - (flat_forward.x * chase_distance) + (shoulder_right.x * shoulder_offset),
-            state->camera.focus_position.y + camera_height,
-            state->camera.focus_position.z - (flat_forward.z * chase_distance) + (shoulder_right.z * shoulder_offset)
-        );
+            desired_camera = resolve_third_person_camera(state->camera.focus_position, desired_camera);
+            state->camera.position = approach_float3(state->camera.position, desired_camera, 7.6f, dt);
+        }
+    } else {
+        const MDTBFloat3 actor_focus = player_focus_position(state);
 
-        desired_camera = resolve_third_person_camera(state->camera.focus_position, desired_camera);
-        state->camera.position = approach_float3(state->camera.position, desired_camera, 8.5f, dt);
+        if (state->camera.mode == MDTBCameraModeFirstPerson) {
+            MDTBFloat3 camera_target = actor_focus;
+            camera_target.y += sinf(state->elapsed_time * 8.5f) * fminf(state->camera.move_speed / 10.0f, 1.0f) * 0.025f;
+            state->camera.focus_position = actor_focus;
+            state->camera.position.x = camera_target.x;
+            state->camera.position.z = camera_target.z;
+            state->camera.position.y = approachf(state->camera.position.y, camera_target.y, 18.0f, dt);
+        } else {
+            const MDTBFloat3 flat_forward = view_forward(state->camera.yaw, 0.0f);
+            const MDTBFloat3 actor_forward = view_forward(state->actor_heading, 0.0f);
+            const MDTBFloat3 shoulder_right = make_float3(cosf(state->camera.yaw), 0.0f, sinf(state->camera.yaw));
+            const float speed_ratio = fminf(state->camera.move_speed / 9.0f, 1.0f);
+            const float movement_bias = clampf(state->camera.move_speed / 3.0f, 0.0f, 1.0f);
+            const MDTBFloat3 lead_direction = normalize_flat(lerp_float3(flat_forward, actor_forward, movement_bias));
+            const float lead = 0.55f + (speed_ratio * 1.05f);
+            MDTBFloat3 desired_camera;
+
+            const MDTBFloat3 focus_target = make_float3(
+                actor_focus.x + (lead_direction.x * lead),
+                actor_focus.y + 0.34f + (speed_ratio * 0.18f),
+                actor_focus.z + (lead_direction.z * lead)
+            );
+
+            state->camera.focus_position = approach_float3(state->camera.focus_position, focus_target, 10.0f, dt);
+
+            desired_camera = make_float3(
+                state->camera.focus_position.x - (flat_forward.x * (6.6f + speed_ratio * 1.35f)) + (shoulder_right.x * 1.18f),
+                state->camera.focus_position.y + 1.18f + (speed_ratio * 0.22f) + (fmaxf(-state->camera.pitch, 0.0f) * 0.65f),
+                state->camera.focus_position.z - (flat_forward.z * (6.6f + speed_ratio * 1.35f)) + (shoulder_right.z * 1.18f)
+            );
+
+            desired_camera = resolve_third_person_camera(state->camera.focus_position, desired_camera);
+            state->camera.position = approach_float3(state->camera.position, desired_camera, 8.5f, dt);
+        }
     }
 
     state->elapsed_time += dt;
@@ -1667,7 +2473,24 @@ void mdtb_engine_copy_boxes(MDTBBox *boxes, size_t count) {
     }
 
     const size_t copy_count = count < g_scene_box_count ? count : g_scene_box_count;
-    memcpy(boxes, g_scene_boxes, copy_count * sizeof(MDTBBox));
+    for (size_t index = 0u; index < copy_count; ++index) {
+        boxes[index] = g_scene_boxes[index].box;
+    }
+}
+
+size_t mdtb_engine_scene_box_count(void) {
+    ensure_scene_initialized();
+    return g_scene_box_count;
+}
+
+void mdtb_engine_copy_scene_boxes(MDTBSceneBox *boxes, size_t count) {
+    ensure_scene_initialized();
+    if (boxes == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_scene_box_count ? count : g_scene_box_count;
+    memcpy(boxes, g_scene_boxes, copy_count * sizeof(MDTBSceneBox));
 }
 
 size_t mdtb_engine_block_count(void) {
@@ -1700,6 +2523,21 @@ void mdtb_engine_copy_road_links(MDTBRoadLink *links, size_t count) {
     memcpy(links, g_road_links, copy_count * sizeof(MDTBRoadLink));
 }
 
+size_t mdtb_engine_vehicle_anchor_count(void) {
+    ensure_scene_initialized();
+    return g_vehicle_anchor_count;
+}
+
+void mdtb_engine_copy_vehicle_anchors(MDTBVehicleAnchor *anchors, size_t count) {
+    ensure_scene_initialized();
+    if (anchors == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_vehicle_anchor_count ? count : g_vehicle_anchor_count;
+    memcpy(anchors, g_vehicle_anchors, copy_count * sizeof(MDTBVehicleAnchor));
+}
+
 size_t mdtb_engine_interest_point_count(void) {
     ensure_scene_initialized();
     return g_interest_point_count;
@@ -1728,4 +2566,19 @@ void mdtb_engine_copy_dynamic_props(MDTBDynamicProp *props, size_t count) {
 
     const size_t copy_count = count < g_dynamic_prop_count ? count : g_dynamic_prop_count;
     memcpy(props, g_dynamic_props, copy_count * sizeof(MDTBDynamicProp));
+}
+
+size_t mdtb_engine_population_profile_count(void) {
+    ensure_scene_initialized();
+    return g_population_profile_count;
+}
+
+void mdtb_engine_copy_population_profiles(MDTBPopulationProfile *profiles, size_t count) {
+    ensure_scene_initialized();
+    if (profiles == NULL || count == 0u) {
+        return;
+    }
+
+    const size_t copy_count = count < g_population_profile_count ? count : g_population_profile_count;
+    memcpy(profiles, g_population_profiles, copy_count * sizeof(MDTBPopulationProfile));
 }

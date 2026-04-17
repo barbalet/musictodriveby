@@ -16,10 +16,10 @@ Please plan for the cycles needed to create this game allowing for 100 cycles or
 
 ### Current Cycle 
 
-8
+12
 
-Cycle 7 was completed on April 16, 2026.
-See `docs/cycles/cycle-7.md` for the cycle report.
+Cycle 11 was completed on April 16, 2026.
+See `docs/cycles/cycle-11.md` for the cycle report.
 
 ### Cycle Plan
 
@@ -201,7 +201,7 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - Open `MusicToDriveBy.xcodeproj` in Xcode and run the `MusicToDriveBy` scheme on `My Mac`
 - Click inside the game view to capture mouse look, and press `Esc` to release it again.
 
-The current prototype is a macOS graybox two-block neighborhood slice with an explicit road link between authored blocks, runtime active-block evaluation in the C engine, chunk-aware dynamic activation in the renderer, and placeholder pedestrians and vehicles spawned from authored hook points in nearby blocks. Use the on-screen overlay for controls, graph state, and activation metadata.
+The current prototype is a macOS graybox four-block neighborhood slice with two authored streaming chunks, frontage-template-driven block variants, hotspot hooks, route-aware placeholder traffic, and staged sedan, coupe, and moped handoffs that now share early lane-guidance and parking-state rules with the ambient traffic pass. Use the on-screen overlay for controls, graph state, chunk visibility, staged vehicle prompts, grip and lane feedback, and active block metadata.
 
 ### Any questions ###
 

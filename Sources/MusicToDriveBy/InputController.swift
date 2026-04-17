@@ -14,9 +14,16 @@ final class InputController {
     private(set) var isMouseLookEnabled = false
 
     func handleKeyDown(_ keyCode: UInt16, isARepeat: Bool) {
-        if !isARepeat, keyCode == 8 || keyCode == 48 {
-            transientButtons |= UInt32(MDTBInputToggleCamera)
-            return
+        if !isARepeat {
+            if keyCode == 8 || keyCode == 48 {
+                transientButtons |= UInt32(MDTBInputToggleCamera)
+                return
+            }
+
+            if keyCode == 3 {
+                transientButtons |= UInt32(MDTBInputUse)
+                return
+            }
         }
 
         setKey(keyCode, isPressed: true)
