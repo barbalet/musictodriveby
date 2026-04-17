@@ -118,6 +118,26 @@ typedef struct {
     uint32_t active_block_index;
     uint32_t nearby_block_count;
     uint32_t active_link_index;
+    uint32_t territory_faction;
+    uint32_t territory_phase;
+    float territory_presence;
+    float territory_heat;
+    float territory_reentry_timer;
+    uint32_t territory_entry_mode;
+    float territory_watch_timer;
+    float territory_front_watch;
+    float territory_deep_watch;
+    MDTBFloat3 territory_patrol_position;
+    float territory_patrol_heading;
+    uint32_t territory_patrol_state;
+    float territory_patrol_alert;
+    MDTBFloat3 territory_inner_position;
+    float territory_inner_heading;
+    uint32_t territory_inner_state;
+    float territory_inner_alert;
+    uint32_t territory_commit_state;
+    float territory_commit_timer;
+    float territory_commit_progress;
     uint32_t active_pedestrian_spawn_count;
     uint32_t active_vehicle_spawn_count;
     uint32_t traversal_mode;
@@ -195,6 +215,9 @@ typedef struct {
     MDTBFloat3 street_incident_position;
     float street_incident_level;
     float street_incident_timer;
+    MDTBFloat3 street_recovery_position;
+    float street_recovery_level;
+    float street_recovery_timer;
     float combat_hostile_attack_cooldown;
     float combat_hostile_attack_windup;
     MDTBFloat3 combat_hostile_last_shot_from;
@@ -365,6 +388,42 @@ enum {
     MDTBWitnessStateInvestigate = 1,
     MDTBWitnessStateFlee = 2,
     MDTBWitnessStateCooldown = 3,
+};
+
+enum {
+    MDTBTerritoryFactionNone = 0,
+    MDTBTerritoryFactionCourtSet = 1,
+};
+
+enum {
+    MDTBTerritoryPhaseNone = 0,
+    MDTBTerritoryPhaseBoundary = 1,
+    MDTBTerritoryPhaseClaimed = 2,
+    MDTBTerritoryPhaseHot = 3,
+};
+
+enum {
+    MDTBTerritoryEntryNone = 0,
+    MDTBTerritoryEntryOnFoot = 1,
+    MDTBTerritoryEntryVehicle = 2,
+};
+
+enum {
+    MDTBTerritoryPatrolIdle = 0,
+    MDTBTerritoryPatrolWatch = 1,
+    MDTBTerritoryPatrolHandoff = 2,
+    MDTBTerritoryPatrolCooldown = 3,
+    MDTBTerritoryPatrolScreen = 4,
+    MDTBTerritoryPatrolClear = 5,
+    MDTBTerritoryPatrolReform = 6,
+    MDTBTerritoryPatrolBrace = 7,
+};
+
+enum {
+    MDTBTerritoryCommitNone = 0,
+    MDTBTerritoryCommitWindow = 1,
+    MDTBTerritoryCommitActive = 2,
+    MDTBTerritoryCommitComplete = 3,
 };
 
 void mdtb_engine_init(MDTBEngineState *state);

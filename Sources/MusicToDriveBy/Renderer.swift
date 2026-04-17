@@ -687,19 +687,48 @@ final class Renderer: NSObject, MTKViewDelegate {
         for blockIndex in visibleBlockIndices.sorted() where blockIndex < blocks.count {
             let block = blocks[blockIndex]
             let profile = populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles)
-            vertices.append(contentsOf: makeDistrictAmbientVertices(block: block, profile: profile, elapsedTime: elapsedTime))
+            let incidentInfluence = incidentReactionIntensity(position: block.origin, state: state)
+            let coolInfluence = streetCoolInfluence(position: block.origin, state: state)
+            vertices.append(
+                contentsOf: makeDistrictAmbientVertices(
+                    block: block,
+                    profile: profile,
+                    elapsedTime: elapsedTime,
+                    incidentInfluence: incidentInfluence,
+                    normalizationInfluence: coolInfluence
+                )
+            )
         }
 
         for dynamicProp in dynamicProps where visibleBlockIndices.contains(Int(dynamicProp.blockIndex)) {
             vertices.append(contentsOf: makeDynamicPropVertices(dynamicProp, elapsedTime: elapsedTime))
         }
 
-        if activeLinkIndex < roadLinks.count {
+        for (linkIndex, link) in roadLinks.enumerated() {
+            guard Int(link.fromBlockIndex) < blocks.count, Int(link.toBlockIndex) < blocks.count else {
+                continue
+            }
+
+            guard visibleBlockIndices.contains(Int(link.fromBlockIndex)) || visibleBlockIndices.contains(Int(link.toBlockIndex)) else {
+                continue
+            }
+
+            let incidentInfluence = roadLinkIncidentInfluence(link: link, blocks: blocks, state: state)
+            let coolInfluence = streetCoolInfluence(position: link.midpoint, state: state)
+            let isActiveLink = activeLinkIndex == UInt32(linkIndex)
+
+            guard isActiveLink || incidentInfluence > 0.12 || coolInfluence > 0.10 else {
+                continue
+            }
+
             vertices.append(
                 contentsOf: makeRoadLinkPulseVertices(
-                    link: roadLinks[Int(activeLinkIndex)],
+                    link: link,
                     blocks: blocks,
-                    elapsedTime: elapsedTime
+                    elapsedTime: elapsedTime + Float(linkIndex) * 0.18,
+                    incidentInfluence: incidentInfluence,
+                    normalizationInfluence: coolInfluence,
+                    isActiveLink: isActiveLink
                 )
             )
         }
@@ -1020,9 +1049,19 @@ final class Renderer: NSObject, MTKViewDelegate {
         return makeWorldBoxVertices(center: center, halfExtents: dynamicProp.halfExtents, yaw: yaw, color: color)
     }
 
-    private static func makeDistrictAmbientVertices(block: SceneBlock, profile: ScenePopulationProfile, elapsedTime: Float) -> [Vertex] {
+    private static func makeDistrictAmbientVertices(block: SceneBlock, profile: ScenePopulationProfile, elapsedTime: Float, incidentInfluence: Float, normalizationInfluence: Float) -> [Vertex] {
         let energy = max(profile.ambientEnergy, 0.25)
         let baseColor = districtAmbientColor(for: block)
+        let spillColor = blendedColor(
+            baseColor,
+            SIMD4<Float>(1.0, 0.62, 0.24, 1.0),
+            amount: min(max(incidentInfluence * 0.58, 0.0), 0.58)
+        )
+        let normalizeColor = blendedColor(
+            spillColor,
+            SIMD4<Float>(0.42, 0.86, 0.94, 1.0),
+            amount: min(max(normalizationInfluence * 0.52, 0.0), 0.52)
+        )
         let pulse = 0.74 + (sin((elapsedTime * (1.2 + energy)) + Float(block.variant) * 0.5) * 0.14 * energy)
         var vertices: [Vertex] = []
 
@@ -1032,30 +1071,35 @@ final class Renderer: NSObject, MTKViewDelegate {
                     center: SIMD3<Float>(block.origin.x + 6.0, block.origin.y + 2.26, block.origin.z - 13.0),
                     halfExtents: SIMD3<Float>(2.8, 0.12, 0.08),
                     yaw: 0.0,
-                    color: animatedColor(baseColor, intensity: pulse)
+                    color: animatedColor(normalizeColor, intensity: pulse + incidentInfluence * 0.10)
                 )
             )
         }
 
         if (block.tagMask & UInt32(MDTBBlockTagTransit)) != 0 {
-            let transitColor = animatedColor(baseColor, intensity: 0.82 + energy * 0.18)
+            let transitColor = animatedColor(normalizeColor, intensity: 0.82 + energy * 0.18 + incidentInfluence * 0.08)
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x - 10.2, block.origin.y + 1.3, block.origin.z - 10.2), halfExtents: SIMD3<Float>(0.12, 0.90, 0.12), yaw: 0.0, color: transitColor))
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x + 10.2, block.origin.y + 1.3, block.origin.z + 10.2), halfExtents: SIMD3<Float>(0.12, 0.90, 0.12), yaw: 0.0, color: transitColor))
         }
 
         if (block.tagMask & UInt32(MDTBBlockTagResidential)) != 0 {
-            let porchColor = animatedColor(SIMD4<Float>(0.92, 0.80, 0.48, 1.0), intensity: 0.70 + energy * 0.20)
+            let porchBase = blendedColor(
+                SIMD4<Float>(0.92, 0.80, 0.48, 1.0),
+                SIMD4<Float>(1.0, 0.64, 0.30, 1.0),
+                amount: min(max(incidentInfluence * 0.44, 0.0), 0.44)
+            )
+            let porchColor = animatedColor(porchBase, intensity: 0.70 + energy * 0.20 + normalizationInfluence * 0.06)
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x + 38.2, block.origin.y + 2.0, block.origin.z + 33.8), halfExtents: SIMD3<Float>(0.86, 0.10, 0.10), yaw: 0.0, color: porchColor))
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x - 41.6, block.origin.y + 3.0, block.origin.z + 15.0), halfExtents: SIMD3<Float>(1.2, 0.10, 0.10), yaw: 0.0, color: porchColor))
         }
 
         if (block.tagMask & UInt32(MDTBBlockTagCourt)) != 0 {
-            let courtColor = animatedColor(baseColor, intensity: 0.66 + energy * 0.18)
+            let courtColor = animatedColor(normalizeColor, intensity: 0.66 + energy * 0.18 + incidentInfluence * 0.08)
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x + 34.8, block.origin.y + 0.08, block.origin.z + 35.0), halfExtents: SIMD3<Float>(5.2, 0.03, 0.10), yaw: 0.0, color: courtColor))
         }
 
         if (profile.styleFlags & UInt32(MDTBPopulationStyleThroughTraffic)) != 0 {
-            let laneColor = animatedColor(baseColor, intensity: 0.68 + energy * 0.14)
+            let laneColor = animatedColor(normalizeColor, intensity: 0.68 + energy * 0.14 + incidentInfluence * 0.10)
             vertices.append(contentsOf: makeWorldBoxVertices(center: SIMD3<Float>(block.origin.x, block.origin.y + 0.06, block.origin.z), halfExtents: SIMD3<Float>(0.10, 0.03, 6.4), yaw: .pi * 0.5, color: laneColor))
         }
 
@@ -1459,6 +1503,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
+    private static func blendedColor(_ lhs: SIMD4<Float>, _ rhs: SIMD4<Float>, amount: Float) -> SIMD4<Float> {
+        let t = min(max(amount, 0.0), 1.0)
+        return lhs + ((rhs - lhs) * t)
+    }
+
     private static func makePedestrianPlaceholderVertices(position: SIMD3<Float>, heading: Float, elapsedTime: Float, tint: SIMD4<Float>) -> [Vertex] {
         let gaitPhase = elapsedTime * 3.2
         let stride = sin(gaitPhase) * 0.11
@@ -1564,7 +1613,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         return vertices
     }
 
-    private static func makeRoadLinkPulseVertices(link: SceneRoadLink, blocks: [SceneBlock], elapsedTime: Float) -> [Vertex] {
+    private static func makeRoadLinkPulseVertices(link: SceneRoadLink, blocks: [SceneBlock], elapsedTime: Float, incidentInfluence: Float, normalizationInfluence: Float, isActiveLink: Bool) -> [Vertex] {
         guard Int(link.fromBlockIndex) < blocks.count, Int(link.toBlockIndex) < blocks.count else {
             return []
         }
@@ -1573,8 +1622,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         let end = blocks[Int(link.toBlockIndex)].origin
         let yaw: Float = link.axis == UInt32(MDTBRoadAxisNorthSouth) ? 0.0 : (.pi * 0.5)
         let pulse = 0.70 + (sin(elapsedTime * 2.6) * 0.18)
-        let baseColor = SIMD4<Float>(0.24, pulse, 0.90, 1.0)
+        let baseColor: SIMD4<Float>
         var vertices: [Vertex] = []
+
+        if incidentInfluence >= normalizationInfluence && incidentInfluence > 0.08 {
+            baseColor = animatedColor(
+                SIMD4<Float>(1.0, 0.62, 0.24, 1.0),
+                intensity: pulse + incidentInfluence * (isActiveLink ? 0.30 : 0.20)
+            )
+        } else if normalizationInfluence > 0.08 {
+            baseColor = animatedColor(
+                SIMD4<Float>(0.36, 0.88, 0.94, 1.0),
+                intensity: 0.72 + normalizationInfluence * (isActiveLink ? 0.22 : 0.14)
+            )
+        } else {
+            baseColor = SIMD4<Float>(0.24, pulse, 0.90, 1.0)
+        }
 
         for step in 1 ... 3 {
             let t = Float(step) / 4.0
@@ -1582,7 +1645,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             vertices.append(
                 contentsOf: makeWorldBoxVertices(
                     center: SIMD3<Float>(position.x, 0.18, position.z),
-                    halfExtents: SIMD3<Float>(0.18, 0.05, 1.35),
+                    halfExtents: SIMD3<Float>(0.18 + incidentInfluence * 0.04, 0.05, 1.35 + incidentInfluence * 0.12 + normalizationInfluence * 0.06),
                     yaw: yaw,
                     color: baseColor
                 )
@@ -1672,6 +1735,41 @@ final class Renderer: NSObject, MTKViewDelegate {
         let witnessAlert = min(max(state.witness_alert, 0.0), 1.0)
         let bystanderAlert = min(max(state.bystander_alert, 0.0), 1.0)
         let streetIncidentLevel = min(max(state.street_incident_level, 0.0), 1.0)
+        let territoryClaimed =
+            state.territory_faction == UInt32(MDTBTerritoryFactionCourtSet) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseNone)
+        let territoryHot = state.territory_phase == UInt32(MDTBTerritoryPhaseHot)
+        let territoryDeepWatch = min(max(state.territory_deep_watch, 0.0), 1.0)
+        let territoryWatchTimer = min(max(state.territory_watch_timer / 4.2, 0.0), 1.0)
+        let territoryPatrolPosition = SIMD3<Float>(
+            state.territory_patrol_position.x,
+            state.territory_patrol_position.y,
+            state.territory_patrol_position.z
+        )
+        let territoryPatrolHeading = state.territory_patrol_heading
+        let territoryPatrolAlert = min(max(state.territory_patrol_alert, 0.0), 1.0)
+        let territoryPatrolState = state.territory_patrol_state
+        let territoryPatrolBrace = state.territory_patrol_state == UInt32(MDTBTerritoryPatrolBrace) && territoryPatrolAlert > 0.12
+        let territoryPatrolClear = state.territory_patrol_state == UInt32(MDTBTerritoryPatrolClear) && territoryPatrolAlert > 0.12
+        let territoryInnerPosition = SIMD3<Float>(
+            state.territory_inner_position.x,
+            state.territory_inner_position.y,
+            state.territory_inner_position.z
+        )
+        let territoryInnerHeading = state.territory_inner_heading
+        let territoryInnerAlert = min(max(state.territory_inner_alert, 0.0), 1.0)
+        let territoryInnerState = state.territory_inner_state
+        let territoryInnerVisual = max(
+            territoryDeepWatch,
+            territoryInnerAlert + (territoryInnerState == UInt32(MDTBTerritoryPatrolHandoff) ? 0.08 : 0.0)
+        )
+        let territoryEntryClamp = Self.territoryEntryClamped(state: state)
+        let territoryCommitState = state.territory_commit_state
+        let territoryCommitTimer = max(state.territory_commit_timer, 0.0)
+        let territoryCommitProgress = min(max(state.territory_commit_progress, 0.0), 1.0)
+        let territoryCommitWindow = territoryCommitState == UInt32(MDTBTerritoryCommitWindow) && territoryCommitTimer > 0.05
+        let territoryCommitActive = territoryCommitState == UInt32(MDTBTerritoryCommitActive) && territoryCommitProgress > 0.01
+        let territoryCommitComplete = territoryCommitState == UInt32(MDTBTerritoryCommitComplete) && territoryCommitTimer > 0.05
         let playerInCover = state.combat_player_in_cover != 0
         let focusOccluded = state.combat_focus_occluded != 0
         let playerDamagePulse = min(max(state.player_damage_pulse, 0.0), 1.0)
@@ -1781,6 +1879,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let hostileRight = SIMD3<Float>(cos(hostileHeading), 0.0, sin(hostileHeading))
         let witnessRight = SIMD3<Float>(cos(witnessHeading), 0.0, sin(witnessHeading))
         let bystanderRight = SIMD3<Float>(cos(bystanderHeading), 0.0, sin(bystanderHeading))
+        let territoryPatrolRight = SIMD3<Float>(cos(territoryPatrolHeading), 0.0, sin(territoryPatrolHeading))
+        let territoryPatrolForward = SIMD3<Float>(sin(territoryPatrolHeading), 0.0, cos(territoryPatrolHeading))
+        let territoryInnerRight = SIMD3<Float>(cos(territoryInnerHeading), 0.0, sin(territoryInnerHeading))
+        let territoryInnerForward = SIMD3<Float>(sin(territoryInnerHeading), 0.0, cos(territoryInnerHeading))
         let hitFlashActive = (state.melee_attack_connected != 0 && state.melee_attack_phase == UInt32(MDTBMeleeAttackStrike))
             || (state.firearm_last_shot_hit != 0 && state.firearm_last_shot_timer > 0.0)
 
@@ -1837,6 +1939,227 @@ final class Renderer: NSObject, MTKViewDelegate {
                 yaw: elapsedTime * 1.1,
                 color: color
             ))
+        }
+
+        func appendTerritoryPatrolActor() {
+            let pulse = 0.76 + (sin(elapsedTime * 5.0) * 0.14)
+            let bodyColor: SIMD4<Float>
+            let accentColor: SIMD4<Float>
+            let ringColor: SIMD4<Float>
+            let screenActive = territoryPatrolState == UInt32(MDTBTerritoryPatrolScreen)
+            let clearActive = territoryPatrolState == UInt32(MDTBTerritoryPatrolClear)
+            let reformActive = territoryPatrolState == UInt32(MDTBTerritoryPatrolReform)
+            let braceActive = territoryPatrolState == UInt32(MDTBTerritoryPatrolBrace)
+
+            switch territoryPatrolState {
+            case UInt32(MDTBTerritoryPatrolHandoff):
+                bodyColor = SIMD4<Float>(0.40 + territoryPatrolAlert * 0.20, 0.18, 0.18, 1.0)
+                accentColor = SIMD4<Float>(1.0, 0.54 + territoryPatrolAlert * 0.18, 0.22, 1.0)
+                ringColor = SIMD4<Float>(0.96, 0.40 + territoryPatrolAlert * 0.18, 0.18, 0.24 + territoryPatrolAlert * 0.18)
+            case UInt32(MDTBTerritoryPatrolBrace):
+                bodyColor = SIMD4<Float>(0.38 + territoryPatrolAlert * 0.18, 0.20, 0.16, 1.0)
+                accentColor = SIMD4<Float>(1.0, 0.68 + territoryPatrolAlert * 0.14, 0.24, 1.0)
+                ringColor = SIMD4<Float>(1.0, 0.54 + territoryPatrolAlert * 0.14, 0.20, 0.22 + territoryPatrolAlert * 0.18)
+            case UInt32(MDTBTerritoryPatrolReform):
+                bodyColor = SIMD4<Float>(0.28 + territoryPatrolAlert * 0.14, 0.22, 0.18, 1.0)
+                accentColor = SIMD4<Float>(0.94, 0.72, 0.28 + territoryPatrolAlert * 0.08, 1.0)
+                ringColor = SIMD4<Float>(0.78, 0.58 + territoryPatrolAlert * 0.10, 0.24, 0.16 + territoryPatrolAlert * 0.12)
+            case UInt32(MDTBTerritoryPatrolClear):
+                bodyColor = SIMD4<Float>(0.30 + territoryPatrolAlert * 0.14, 0.22, 0.18, 1.0)
+                accentColor = SIMD4<Float>(0.92, 0.74, 0.30 + territoryPatrolAlert * 0.10, 1.0)
+                ringColor = SIMD4<Float>(0.76, 0.54 + territoryPatrolAlert * 0.12, 0.22, 0.16 + territoryPatrolAlert * 0.12)
+            case UInt32(MDTBTerritoryPatrolScreen):
+                bodyColor = SIMD4<Float>(0.34 + territoryPatrolAlert * 0.18, 0.20, 0.18, 1.0)
+                accentColor = SIMD4<Float>(1.0, 0.66 + territoryPatrolAlert * 0.14, 0.22, 1.0)
+                ringColor = SIMD4<Float>(0.98, 0.48 + territoryPatrolAlert * 0.16, 0.18, 0.22 + territoryPatrolAlert * 0.18)
+            case UInt32(MDTBTerritoryPatrolWatch):
+                bodyColor = SIMD4<Float>(0.28 + territoryPatrolAlert * 0.16, 0.20, 0.20, 1.0)
+                accentColor = SIMD4<Float>(0.94, 0.56 + territoryPatrolAlert * 0.16, 0.28, 1.0)
+                ringColor = SIMD4<Float>(0.82, 0.34 + territoryPatrolAlert * 0.14, 0.20, 0.16 + territoryPatrolAlert * 0.14)
+            case UInt32(MDTBTerritoryPatrolCooldown):
+                bodyColor = SIMD4<Float>(0.26, 0.24, 0.28 + territoryPatrolAlert * 0.12, 1.0)
+                accentColor = SIMD4<Float>(0.72, 0.62, 0.40 + territoryPatrolAlert * 0.12, 1.0)
+                ringColor = SIMD4<Float>(0.56, 0.48, 0.30, 0.10 + territoryPatrolAlert * 0.10)
+            default:
+                bodyColor = SIMD4<Float>(0.22, 0.22, 0.24, 1.0)
+                accentColor = SIMD4<Float>(0.58, 0.44, 0.30, 1.0)
+                ringColor = SIMD4<Float>(0.38, 0.24, 0.16, 0.08 + territoryPatrolAlert * 0.08)
+            }
+
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(territoryPatrolPosition.x, territoryPatrolPosition.y + 0.05, territoryPatrolPosition.z),
+                halfExtents: SIMD3<Float>(0.26 + territoryPatrolAlert * 0.12, 0.02, 0.26 + territoryPatrolAlert * 0.12),
+                yaw: 0.0,
+                color: ringColor
+            ))
+            vertices.append(contentsOf: makePedestrianPlaceholderVertices(
+                position: territoryPatrolPosition,
+                heading: territoryPatrolHeading,
+                elapsedTime: elapsedTime + 0.12 + territoryPatrolAlert * 0.22,
+                tint: bodyColor
+            ))
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: territoryPatrolPosition,
+                localCenter: SIMD3<Float>(clearActive ? 0.14 : ((reformActive || braceActive) ? 0.08 : 0.0), 0.98, screenActive ? -0.24 : (braceActive ? -0.20 : (clearActive ? -0.08 : (reformActive ? -0.12 : -0.15)))),
+                halfExtents: SIMD3<Float>((screenActive || braceActive) ? 0.18 : ((clearActive || reformActive) ? 0.12 : 0.14), 0.16 + ((screenActive || braceActive) ? 0.02 : 0.0), 0.05),
+                bodyYaw: territoryPatrolHeading,
+                partYaw: territoryPatrolHeading,
+                color: accentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: territoryPatrolPosition + (territoryPatrolRight * 0.24) + SIMD3<Float>(0.0, 0.92, 0.0),
+                halfExtents: SIMD3<Float>(0.08, 0.06, 0.06),
+                yaw: territoryPatrolHeading,
+                color: animatedColor(accentColor, intensity: pulse + territoryPatrolAlert * 0.16)
+            ))
+
+            if screenActive {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: territoryPatrolPosition + (territoryPatrolForward * 0.28) + SIMD3<Float>(0.0, 0.78, 0.0),
+                    halfExtents: SIMD3<Float>(0.50 + territoryPatrolAlert * 0.18, 0.04, 0.06),
+                    yaw: territoryPatrolHeading,
+                    color: animatedColor(accentColor, intensity: 0.82 + territoryPatrolAlert * 0.16)
+                ))
+            } else if braceActive {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: territoryPatrolPosition + (territoryPatrolForward * 0.24) + SIMD3<Float>(0.0, 0.78, 0.0),
+                    halfExtents: SIMD3<Float>(0.42 + territoryPatrolAlert * 0.16, 0.04, 0.06),
+                    yaw: territoryPatrolHeading,
+                    color: animatedColor(accentColor, intensity: 0.84 + territoryPatrolAlert * 0.16)
+                ))
+            } else if reformActive {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: territoryPatrolPosition + (territoryPatrolForward * 0.16) + SIMD3<Float>(0.0, 0.76, 0.0),
+                    halfExtents: SIMD3<Float>(0.32 + territoryPatrolAlert * 0.12, 0.04, 0.05),
+                    yaw: territoryPatrolHeading,
+                    color: animatedColor(accentColor, intensity: 0.78 + territoryPatrolAlert * 0.12)
+                ))
+            } else if clearActive {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: territoryPatrolPosition + (territoryPatrolRight * 0.34) + SIMD3<Float>(0.0, 0.74, 0.0),
+                    halfExtents: SIMD3<Float>(0.10, 0.04, 0.32 + territoryPatrolAlert * 0.12),
+                    yaw: territoryPatrolHeading,
+                    color: animatedColor(accentColor, intensity: 0.78 + territoryPatrolAlert * 0.14)
+                ))
+            }
+
+            if territoryPatrolAlert > 0.08 || territoryPatrolState == UInt32(MDTBTerritoryPatrolHandoff) {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(territoryPatrolPosition.x, territoryPatrolPosition.y + 2.10, territoryPatrolPosition.z),
+                    halfExtents: SIMD3<Float>(0.10 + territoryPatrolAlert * 0.08, 0.05, 0.10 + territoryPatrolAlert * 0.08),
+                    yaw: elapsedTime * 1.5,
+                    color: animatedColor(accentColor, intensity: 0.88 + territoryPatrolAlert * 0.18)
+                ))
+            }
+        }
+
+        func appendTerritoryPresenceMarker(position: SIMD3<Float>, heading: Float, right: SIMD3<Float>, forward: SIMD3<Float>, watch: Float, state: UInt32, isDeep: Bool) {
+            guard territoryClaimed || watch > 0.08 else {
+                return
+            }
+
+            let watchPulse = 0.76 + (sin(elapsedTime * (isDeep ? 4.8 : 5.4)) * 0.14)
+            let bodyColor: SIMD4<Float>
+            let accentColor: SIMD4<Float>
+            let ringColor: SIMD4<Float>
+            let accentCenter: SIMD3<Float>
+            let accentHalfExtents: SIMD3<Float>
+
+            switch state {
+            case UInt32(MDTBTerritoryPatrolHandoff):
+                bodyColor = SIMD4<Float>(0.28 + watch * 0.26 + (territoryHot ? 0.10 : 0.0), 0.16 + watch * 0.08, 0.16 + watch * 0.08, 1.0)
+                accentColor = SIMD4<Float>(1.0, 0.58 + watch * 0.20, 0.20, 1.0)
+                ringColor = SIMD4<Float>(0.94, 0.40 + watch * 0.22, 0.18, 0.22 + watch * 0.18 + territoryWatchTimer * 0.08)
+                accentCenter = SIMD3<Float>(0.0, 0.98, isDeep ? -0.22 : -0.18)
+                accentHalfExtents = SIMD3<Float>(isDeep ? 0.18 : 0.16, 0.17, 0.05)
+            case UInt32(MDTBTerritoryPatrolBrace):
+                bodyColor = SIMD4<Float>(0.30 + watch * 0.18, 0.18 + watch * 0.08, 0.16, 1.0)
+                accentColor = SIMD4<Float>(1.0, 0.72, 0.24 + watch * 0.08, 1.0)
+                ringColor = SIMD4<Float>(0.94, 0.60, 0.22, 0.18 + watch * 0.14 + territoryWatchTimer * 0.06)
+                accentCenter = SIMD3<Float>(0.0, 0.98, isDeep ? -0.18 : -0.16)
+                accentHalfExtents = SIMD3<Float>(isDeep ? 0.18 : 0.15, 0.16, 0.05)
+            case UInt32(MDTBTerritoryPatrolReform):
+                bodyColor = SIMD4<Float>(0.24 + watch * 0.16, 0.20 + watch * 0.08, 0.20, 1.0)
+                accentColor = SIMD4<Float>(0.86, 0.70, 0.30 + watch * 0.08, 1.0)
+                ringColor = SIMD4<Float>(0.72, 0.56, 0.24, 0.14 + watch * 0.12 + territoryWatchTimer * 0.06)
+                accentCenter = SIMD3<Float>(0.0, 0.96, isDeep ? -0.14 : -0.12)
+                accentHalfExtents = SIMD3<Float>(isDeep ? 0.16 : 0.12, 0.15, 0.05)
+            case UInt32(MDTBTerritoryPatrolCooldown):
+                bodyColor = SIMD4<Float>(0.22 + watch * 0.10, 0.18 + watch * 0.08, 0.22 + watch * 0.12, 1.0)
+                accentColor = SIMD4<Float>(0.72, 0.64, 0.44 + watch * 0.08, 1.0)
+                ringColor = SIMD4<Float>(0.56, 0.48, 0.30, 0.10 + watch * 0.10 + territoryWatchTimer * 0.06)
+                accentCenter = SIMD3<Float>(0.0, 0.96, -0.08)
+                accentHalfExtents = SIMD3<Float>(0.12, 0.14, 0.04)
+            default:
+                bodyColor = SIMD4<Float>(
+                    0.18 + watch * 0.28 + (territoryHot ? 0.12 : 0.0),
+                    0.14 + watch * 0.12,
+                    0.16 + watch * 0.08,
+                    1.0
+                )
+                accentColor = SIMD4<Float>(
+                    0.94,
+                    0.52 + watch * 0.22,
+                    0.18 + watch * 0.10,
+                    1.0
+                )
+                ringColor = SIMD4<Float>(
+                    0.90,
+                    0.34 + watch * 0.26,
+                    0.18,
+                    0.18 + watch * 0.16 + territoryWatchTimer * 0.10
+                )
+                accentCenter = SIMD3<Float>(0.0, 0.98, isDeep ? -0.10 : -0.15)
+                accentHalfExtents = SIMD3<Float>(isDeep ? 0.18 : 0.14, isDeep ? 0.15 : 0.16, 0.05)
+            }
+
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(position.x, position.y + 0.05, position.z),
+                halfExtents: SIMD3<Float>(0.26 + watch * 0.12, 0.02, 0.26 + watch * 0.12),
+                yaw: 0.0,
+                color: ringColor
+            ))
+            vertices.append(contentsOf: makePedestrianPlaceholderVertices(
+                position: position,
+                heading: heading,
+                elapsedTime: elapsedTime + (isDeep ? 0.62 : 0.24) + watch * 0.32,
+                tint: bodyColor
+            ))
+            vertices.append(contentsOf: makeActorPartVertices(
+                position: position,
+                localCenter: accentCenter,
+                halfExtents: accentHalfExtents,
+                bodyYaw: heading,
+                partYaw: heading,
+                color: accentColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: position + (right * 0.24) + SIMD3<Float>(0.0, 0.92, 0.0),
+                halfExtents: SIMD3<Float>(0.08, 0.06, 0.06),
+                yaw: heading,
+                color: animatedColor(accentColor, intensity: watchPulse + watch * 0.16)
+            ))
+
+            if state == UInt32(MDTBTerritoryPatrolHandoff) ||
+                state == UInt32(MDTBTerritoryPatrolBrace) ||
+                state == UInt32(MDTBTerritoryPatrolReform) ||
+                (isDeep && watch > 0.18) {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: position + (forward * (isDeep ? 0.22 : 0.16)) + SIMD3<Float>(0.0, 0.82, 0.0),
+                    halfExtents: SIMD3<Float>(isDeep ? 0.18 : 0.14, 0.04, 0.06),
+                    yaw: heading,
+                    color: animatedColor(accentColor, intensity: 0.80 + watch * 0.16)
+                ))
+            }
+
+            if watch > 0.10 {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(position.x, position.y + 2.14, position.z),
+                    halfExtents: SIMD3<Float>(0.10 + watch * 0.08, 0.05, 0.10 + watch * 0.08),
+                    yaw: elapsedTime * (isDeep ? 1.4 : 1.7),
+                    color: animatedColor(accentColor, intensity: 0.88 + watch * 0.18)
+                ))
+            }
         }
 
         if state.traversal_mode == UInt32(MDTBTraversalModeOnFoot) {
@@ -1928,6 +2251,78 @@ final class Renderer: NSObject, MTKViewDelegate {
                     color: SIMD4<Float>(0.96, 0.60, 0.22, 0.16 + streetIncidentLevel * 0.12)
                 ))
             }
+        }
+
+        appendTerritoryPatrolActor()
+        appendTerritoryPresenceMarker(
+            position: territoryInnerPosition,
+            heading: territoryInnerHeading,
+            right: territoryInnerRight,
+            forward: territoryInnerForward,
+            watch: territoryInnerVisual,
+            state: territoryInnerState,
+            isDeep: true
+        )
+
+        if territoryClaimed && territoryInnerVisual > 0.10 {
+            let corridorMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.5)
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(corridorMidpoint.x, corridorMidpoint.y + 0.04, corridorMidpoint.z),
+                halfExtents: SIMD3<Float>(
+                    (territoryPatrolBrace ? 0.16 : (territoryEntryClamp ? 0.14 : 0.10)) + territoryInnerVisual * 0.04,
+                    0.02,
+                    (territoryPatrolClear ? 0.48 : (territoryPatrolBrace ? 0.44 : 0.58)) + territoryInnerVisual * (territoryPatrolClear ? 0.18 : (territoryPatrolBrace ? 0.16 : 0.22))
+                ),
+                yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                color: territoryPatrolBrace
+                    ? SIMD4<Float>(1.0, 0.68 + territoryInnerVisual * 0.10, 0.24, 0.20 + territoryInnerVisual * 0.12)
+                    : territoryEntryClamp
+                    ? SIMD4<Float>(0.96, 0.54 + territoryInnerVisual * 0.14, 0.20, 0.18 + territoryInnerVisual * 0.12)
+                    : (territoryPatrolClear
+                        ? SIMD4<Float>(0.82, 0.58 + territoryInnerVisual * 0.10, 0.26, 0.14 + territoryInnerVisual * 0.10)
+                        : SIMD4<Float>(0.86, 0.34 + territoryInnerVisual * 0.18, 0.16, 0.12 + territoryInnerVisual * 0.10))
+            ))
+
+            if territoryEntryClamp {
+                let clampMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.32)
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(clampMidpoint.x, clampMidpoint.y + 0.08, clampMidpoint.z),
+                    halfExtents: SIMD3<Float>(0.10 + territoryInnerVisual * 0.04, 0.03, 0.28 + territoryInnerVisual * 0.10),
+                    yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                    color: SIMD4<Float>(1.0, 0.70, 0.24, 0.18 + territoryInnerVisual * 0.10)
+                ))
+            }
+        }
+
+        if territoryCommitWindow || territoryCommitActive || territoryCommitComplete {
+            let commitAnchor = territoryClaimed && territoryInnerVisual > 0.10
+                ? territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * (territoryCommitComplete ? 0.74 : (territoryCommitActive ? 0.58 : 0.34)))
+                : territoryPatrolPosition + (territoryPatrolForward * (territoryCommitWindow ? 0.18 : 0.30))
+            let commitColor: SIMD4<Float> = territoryCommitComplete
+                ? SIMD4<Float>(0.76, 0.96, 0.42, 0.60)
+                : (territoryCommitActive
+                    ? SIMD4<Float>(1.0, 0.78, 0.26, 0.56)
+                    : SIMD4<Float>(0.96, 0.62, 0.22, 0.46))
+            let commitPulse = 0.80 + (sin(elapsedTime * (territoryCommitComplete ? 4.8 : 6.2)) * 0.16)
+
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 0.04, commitAnchor.z),
+                halfExtents: SIMD3<Float>(0.20 + territoryCommitProgress * 0.16, 0.02, 0.20 + territoryCommitProgress * 0.16),
+                yaw: 0.0,
+                color: animatedColor(commitColor, intensity: commitPulse)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 1.20, commitAnchor.z),
+                halfExtents: SIMD3<Float>(0.08 + territoryCommitProgress * 0.04, 0.30 + territoryCommitProgress * 0.12, 0.08 + territoryCommitProgress * 0.04),
+                yaw: elapsedTime * 1.4,
+                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.14, 1.0), commitColor.z, 0.52), intensity: 0.90 + territoryCommitProgress * 0.12)
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 2.02, commitAnchor.z),
+                halfExtents: SIMD3<Float>(0.10 + territoryCommitProgress * 0.08, 0.05, 0.10 + territoryCommitProgress * 0.08),
+                yaw: elapsedTime * 2.0,
+                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.18, 1.0), min(commitColor.z + 0.06, 1.0), 0.66), intensity: 0.92 + territoryCommitProgress * 0.14)
+            ))
         }
 
         vertices.append(contentsOf: makeWorldBoxVertices(
@@ -2566,7 +2961,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let blockIndex = Int(state.active_block_index)
         let block = blocks[blockIndex]
         let profile = populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles)
-        return "\(blockKindLabel(block.kind)) / \(districtLabel(block.district)) / \(tagLabel(block.tagMask)) / \(frontageTemplateLabel(block.frontageTemplate)) / \(chunkLabel(block.chunkIndex)) / \(profileSummary(profile)) / r \(formatScalar(block.activationRadius))"
+        let territoryTail = territoryStatusSummary(state: state).map { " / \($0)" } ?? ""
+        return "\(blockKindLabel(block.kind)) / \(districtLabel(block.district)) / \(tagLabel(block.tagMask)) / \(frontageTemplateLabel(block.frontageTemplate)) / \(chunkLabel(block.chunkIndex)) / \(profileSummary(profile))\(territoryTail) / r \(formatScalar(block.activationRadius))"
     }
 
     private static func nearestInterestPointSummary(for position: SIMD3<Float>, interestPoints: [SceneInterestPoint], blocks: [SceneBlock]) -> String {
@@ -2637,6 +3033,86 @@ final class Renderer: NSObject, MTKViewDelegate {
             (state.witness_state != UInt32(MDTBWitnessStateIdle) ? 0.10 : 0.0) +
             (state.bystander_state != UInt32(MDTBWitnessStateIdle) ? 0.12 : 0.0)
         return min(max((1.0 - (distance / reactionRadius)) * (incidentLevel + civilianBoost), 0.0), 1.0)
+    }
+
+    private static func streetNormalizingIntensity(state: MDTBEngineState) -> Float {
+        let civiliansAgitated =
+            state.witness_state == UInt32(MDTBWitnessStateInvestigate) ||
+            state.witness_state == UInt32(MDTBWitnessStateFlee) ||
+            state.bystander_state == UInt32(MDTBWitnessStateInvestigate) ||
+            state.bystander_state == UInt32(MDTBWitnessStateFlee)
+        let searchActive =
+            state.combat_hostile_search_timer > 0.0 ||
+            state.combat_hostile_attack_windup > 0.0 ||
+            state.combat_hostile_last_shot_timer > 0.0 ||
+            state.firearm_last_shot_timer > 0.0
+
+        guard state.street_incident_timer > 0.0,
+              state.street_incident_level > 0.08,
+              !searchActive,
+              !civiliansAgitated else {
+            return 0.0
+        }
+
+        return min(max(state.street_incident_level, 0.0), 1.0)
+    }
+
+    private static func streetNormalizingInfluence(position: SIMD3<Float>, state: MDTBEngineState) -> Float {
+        let normalizeIntensity = streetNormalizingIntensity(state: state)
+        guard normalizeIntensity > 0.0 else {
+            return 0.0
+        }
+
+        return min(incidentReactionIntensity(position: position, state: state) * (0.72 + normalizeIntensity * 0.24), 1.0)
+    }
+
+    private static func streetRecoveryIntensity(state: MDTBEngineState) -> Float {
+        let recoveryLevel = min(max(state.street_recovery_level, 0.0), 1.0)
+        guard state.street_incident_timer <= 0.0,
+              state.street_recovery_timer > 0.0,
+              recoveryLevel > 0.04 else {
+            return 0.0
+        }
+
+        return min(recoveryLevel * 0.88 + min(max(state.street_recovery_timer / 5.0, 0.0), 0.22), 1.0)
+    }
+
+    private static func streetRecoveryInfluence(position: SIMD3<Float>, state: MDTBEngineState) -> Float {
+        let recoveryIntensity = streetRecoveryIntensity(state: state)
+        guard recoveryIntensity > 0.0 else {
+            return 0.0
+        }
+
+        let recoveryPosition = SIMD3<Float>(
+            state.street_recovery_position.x,
+            state.street_recovery_position.y,
+            state.street_recovery_position.z
+        )
+        let recoveryRadius: Float = 8.0 + recoveryIntensity * 18.0
+        let distance = sqrt(distanceSquared(position, recoveryPosition))
+        guard distance < recoveryRadius else {
+            return 0.0
+        }
+
+        let civilianBoost: Float = Float(civilianResponseSourceCount(state: state)) * 0.04
+        return min(max((1.0 - (distance / recoveryRadius)) * (recoveryIntensity + civilianBoost), 0.0), 1.0)
+    }
+
+    private static func streetCoolInfluence(position: SIMD3<Float>, state: MDTBEngineState) -> Float {
+        max(
+            streetNormalizingInfluence(position: position, state: state),
+            streetRecoveryInfluence(position: position, state: state)
+        )
+    }
+
+    private static func roadLinkIncidentInfluence(link: SceneRoadLink, blocks: [SceneBlock], state: MDTBEngineState) -> Float {
+        guard Int(link.fromBlockIndex) < blocks.count, Int(link.toBlockIndex) < blocks.count else {
+            return 0.0
+        }
+
+        let midpoint = link.midpoint
+        let civilianBoost = Float(civilianResponseSourceCount(state: state)) * 0.06
+        return min(incidentReactionIntensity(position: midpoint, state: state) + civilianBoost, 1.0)
     }
 
     private static func distanceSquared(_ lhs: SIMD3<Float>, _ rhs: SIMD3<Float>) -> Float {
@@ -2952,6 +3428,30 @@ final class Renderer: NSObject, MTKViewDelegate {
         let isResetting = state.player_reset_timer > 0.0
         let streetIncidentActive = state.street_incident_timer > 0.0 && state.street_incident_level > 0.08
         let searchActive = state.combat_hostile_search_timer > 0.0
+        let recoveryActive = streetRecoveryIntensity(state: state) > 0.08
+        let territoryClaimed =
+            state.territory_faction != UInt32(MDTBTerritoryFactionNone) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseNone)
+        let territoryHot = state.territory_phase == UInt32(MDTBTerritoryPhaseHot)
+        let territoryVehicleEntry = state.territory_entry_mode == UInt32(MDTBTerritoryEntryVehicle)
+        let territorySkimming = territorySkimmingLine(state: state)
+        let territoryDeeper = territoryPushingDeeper(state: state)
+        let territoryWatch = territoryWatchIntensity(state: state)
+        let territoryPatrolWatch = territoryPatrolWatchActive(state: state)
+        let territoryPatrolScreen = territoryPatrolScreening(state: state)
+        let territoryPatrolClear = territoryPatrolClearing(state: state)
+        let territoryPatrolReform = territoryPatrolReforming(state: state)
+        let territoryPatrolBrace = territoryPatrolHardening(state: state)
+        let territoryPatrolHandoff = state.territory_patrol_state == UInt32(MDTBTerritoryPatrolHandoff)
+        let territoryInnerWatch = territoryInnerWatchActive(state: state)
+        let territoryEntryClamp = territoryEntryClamped(state: state)
+        let territoryCommitWindowOpen = territoryCommitWindowActive(state: state)
+        let territoryCommitLive = territoryCommitActive(state: state)
+        let territoryCommitResolved = territoryCommitComplete(state: state)
+        let territoryCommitProgress = min(max(state.territory_commit_progress, 0.0), 1.0)
+        let lookoutTitle = territoryClaimed
+            ? "\(territoryFactionLabel(state.territory_faction)) lookout \(anchorLabel)"
+            : "Lookout \(anchorLabel)"
         let isCritical = isResetting || state.player_health <= 35.0 || (state.combat_hostile_attack_windup > 0.0 && state.combat_player_in_cover == 0)
         let systemStatus = systemicHUDStatus(state: state, trafficHazard: trafficHazard)
 
@@ -2967,26 +3467,139 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         if isResetting {
             title = "Lane Reset"
-            subtitle = "Regroup before stepping back into the pocket"
+            subtitle = territoryHot ? "Regroup before stepping back into a burned block" : "Regroup before stepping back into the pocket"
             healthDetail = "Encounter recenter \(formatScalar(state.player_reset_timer))s"
             encounterTitle = "Lookout reset"
             encounterDetail = "Green window in \(formatScalar(state.player_reset_timer))s"
         } else if isVehicleMode {
-            title = searchActive ? "Vehicle Escape" : "Vehicle Reset"
-            subtitle = searchActive
-                ? (streetIncidentActive
+            title = searchActive
+                ? "Vehicle Escape"
+                : (territoryCommitResolved
+                    ? "Line Broken"
+                    : (territoryCommitLive
+                        ? "Vehicle Commit"
+                        : (!territoryClaimed && territoryPatrolWatch
+                            ? (territoryCommitWindowOpen ? "Commit Window" : (territoryPatrolBrace ? "Vehicle Hardening" : (territoryPatrolReform ? "Vehicle Reforming" : (territoryPatrolScreen ? "Vehicle Screened" : "Vehicle Watched"))))
+                            : (territoryClaimed && territoryWatch > 0.12
+                                ? (territoryDeeper ? "Vehicle Push" : (territoryPatrolBrace ? "Vehicle Hardening" : (territoryPatrolReform ? "Vehicle Reforming" : "Vehicle Line")))
+                                : "Vehicle Reset"))))
+            if searchActive {
+                subtitle = streetIncidentActive
                     ? "The lane spilled into the street while the lookout checks your exit"
-                    : "The lookout is searching your exit point while you stay mobile")
-                : (state.combat_hostile_reacquire_timer > 0.0
-                    ? "Lookout is cooling off while you stay mobile"
-                    : "Weapons are stowed while you drive")
+                    : "The lookout is searching your exit point while you stay mobile"
+            } else if territoryCommitResolved {
+                subtitle = "You drove through the hardened edge and broke the line"
+            } else if territoryCommitLive {
+                subtitle = "Stay through the break while the line gives way"
+            } else if territoryHot {
+                subtitle = "The block remembers the last pass while you stay mobile"
+            } else if !territoryClaimed && territoryPatrolWatch {
+                subtitle = territoryCommitWindowOpen
+                    ? "Push through the hardened line before it settles"
+                    : (territoryPatrolHandoff
+                        ? "The sidewalk runner is turning your vehicle toward the lane"
+                        : (territoryPatrolBrace
+                            ? "The runner is locking the vehicle line back down"
+                            : (territoryPatrolReform
+                            ? "The runner is reforming the vehicle line after the clear"
+                            : (territoryPatrolScreen
+                            ? "The sidewalk runner is screening the vehicle at the lane mouth"
+                            : "A court-set runner is reading the vehicle before the line"))))
+            } else if territoryClaimed && territoryWatch > 0.12 {
+                if territoryCommitLive {
+                    subtitle = "Stay through the break while the line gives way"
+                } else if territoryCommitResolved {
+                    subtitle = "You drove through the hardened edge and broke the line"
+                } else if territorySkimming {
+                    subtitle = territoryPatrolBrace
+                        ? "Runner and post are hardening the vehicle line back into clamp"
+                        : territoryEntryClamp
+                        ? "Runner and post are clamping the vehicle line from opposite angles"
+                        : (territoryPatrolReform
+                            ? "The runner is reforming the vehicle line while the post eases back in"
+                            : (territoryPatrolScreen
+                            ? "The runner is screening the vehicle line while the post stays deeper"
+                            : "Rolling the court-set line while the front hold clocks you"))
+                } else {
+                    subtitle = territoryPatrolClear && territoryInnerWatch
+                        ? "Runner cleared the line while the inner post keeps the vehicle boxed in"
+                        : "Vehicle push is drawing the inner post inside claimed turf"
+                }
+            } else if recoveryActive {
+                subtitle = "The block is reopening while you stay mobile"
+            } else if state.combat_hostile_reacquire_timer > 0.0 {
+                subtitle = "Lookout is cooling off while you stay mobile"
+            } else {
+                subtitle = "Weapons are stowed while you drive"
+            }
             healthDetail = state.player_health < 100.0 ? "Pulled back / \(formatScalar(state.player_health))hp" : "Pulled back from the lane"
-            encounterTitle = "Lookout holding \(anchorLabel)"
+            encounterTitle = territoryCommitWindowOpen || territoryCommitLive || territoryCommitResolved
+                ? "Line objective"
+                : (!territoryClaimed && territoryPatrolWatch
+                    ? (territoryPatrolBrace ? "Court-set hardening" : (territoryPatrolReform ? "Court-set reform" : (territoryPatrolScreen ? "Court-set screen" : "Court-set patrol")))
+                    : (territoryClaimed && territoryWatch > 0.12
+                        ? (territoryDeeper && territoryInnerWatch
+                            ? (territoryPatrolClear ? "Court-set clear" : "Court-set bodies")
+                            : (territoryPatrolBrace
+                                ? "Court-set hardening"
+                                : (territoryEntryClamp
+                                ? "Court-set clamp"
+                                : (territorySkimming && territoryPatrolReform
+                                    ? "Court-set reform"
+                                    : (territorySkimming && territoryPatrolScreen
+                                    ? "Court-set screen"
+                                    : "\(territoryFactionLabel(state.territory_faction)) holds"))))
+                        )
+                        : (territoryClaimed ? "\(territoryFactionLabel(state.territory_faction)) hold" : "Lookout holding \(anchorLabel)")))
             if searchActive {
                 let reacquireTail = state.combat_hostile_reacquire_timer > 0.0
                     ? " / reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s after you step out"
                     : ""
                 encounterDetail = "Search \(formatScalar(state.combat_hostile_search_timer))s\(reacquireTail)"
+            } else if territoryCommitResolved {
+                encounterDetail = "Complete / settle \(formatScalar(state.territory_commit_timer))s"
+            } else if territoryCommitLive {
+                encounterDetail = "Commit \(formatScalar(territoryCommitProgress)) / \(formatScalar(state.territory_commit_timer))s"
+            } else if !territoryClaimed && territoryPatrolWatch {
+                if territoryCommitWindowOpen {
+                    encounterDetail = "Window \(formatScalar(state.territory_commit_timer))s / brace \(formatScalar(state.territory_patrol_alert))"
+                } else if territoryPatrolHandoff {
+                    encounterDetail = "Handoff \(formatScalar(state.territory_patrol_alert)) / line closing"
+                } else if territoryPatrolBrace {
+                    encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / line locking"
+                } else if territoryPatrolReform {
+                    encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
+                } else if territoryPatrolScreen {
+                    encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / entry pinched"
+                } else {
+                    encounterDetail = "Sidewalk watch \(formatScalar(state.territory_patrol_alert))"
+                }
+            } else if territoryClaimed && territoryWatch > 0.12 {
+                if territoryCommitResolved {
+                    encounterDetail = "Complete / settle \(formatScalar(state.territory_commit_timer))s"
+                } else if territoryCommitLive {
+                    encounterDetail = "Commit \(formatScalar(territoryCommitProgress)) / \(formatScalar(state.territory_commit_timer))s"
+                } else if territoryDeeper && territoryInnerWatch {
+                    if territoryPatrolClear {
+                        encounterDetail = "Clear \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                    } else if territoryPatrolReform {
+                        encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                    } else {
+                        encounterDetail = "Runner \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                    }
+                } else if territoryPatrolBrace {
+                    encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                } else if territoryEntryClamp {
+                    encounterDetail = "Clamp \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                } else if territorySkimming && territoryPatrolReform {
+                    encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                } else if territorySkimming && territoryPatrolScreen {
+                    encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / line pinched"
+                } else if territoryDeeper {
+                    encounterDetail = "Front \(formatScalar(state.territory_front_watch)) / deep \(formatScalar(state.territory_deep_watch))"
+                } else {
+                    encounterDetail = "Front hold \(formatScalar(state.territory_front_watch)) / watch \(formatScalar(state.territory_watch_timer))s"
+                }
             } else {
                 encounterDetail = state.combat_hostile_reacquire_timer > 0.0
                     ? "Reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s after you step out"
@@ -2996,18 +3609,130 @@ final class Renderer: NSObject, MTKViewDelegate {
             title = "Incoming Fire"
             subtitle = "Break the angle from \(anchorLabel) or fire first"
             healthDetail = state.combat_player_in_cover != 0 ? "Cover is still holding" : "Open lane / move now"
-            encounterTitle = "Lookout \(anchorLabel)"
+            encounterTitle = lookoutTitle
             encounterDetail = "Firing in \(formatScalar(state.combat_hostile_attack_windup))s"
         } else if searchActive {
             title = state.combat_player_in_cover != 0 ? "Search Window" : "Hostile Searching"
-            subtitle = state.witness_state == UInt32(MDTBWitnessStateFlee) || streetIncidentActive
+            subtitle = territoryHot
+                ? "You came back hot and the block is reading your re-entry"
+                : (state.witness_state == UInt32(MDTBWitnessStateFlee) || streetIncidentActive
                 ? "You broke the angle, but the street is still reacting around the lane"
-                : "The lookout is checking your last seen position instead of firing blind"
+                : "The lookout is checking your last seen position instead of firing blind")
             healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
                 ? "Recovery window \(formatScalar(state.player_recovery_delay))s"
                 : (state.combat_player_in_cover != 0 ? "Cover bought a short window" : "Stay mobile and re-enter on your terms")
-            encounterTitle = "Lookout \(anchorLabel)"
+            encounterTitle = lookoutTitle
             encounterDetail = "Search \(formatScalar(state.combat_hostile_search_timer))s around last seen position"
+        } else if !territoryClaimed && territoryPatrolWatch && !streetIncidentActive {
+            title = territoryCommitWindowOpen ? "Commit Window" : (territoryPatrolBrace ? "Line Hardening" : (territoryPatrolReform ? "Line Reforming" : (territoryPatrolScreen ? "Entry Challenged" : "Sidewalk Watched")))
+            subtitle = territoryCommitWindowOpen
+                ? "Push through the hardened line before it settles"
+                : (territoryPatrolHandoff
+                    ? "The sidewalk runner is turning the lane toward the lookout"
+                    : (territoryPatrolBrace
+                        ? "The runner is locking the line back down"
+                        : (territoryPatrolReform
+                        ? "The runner is reforming the line after the clear"
+                        : (territoryPatrolScreen
+                        ? "The sidewalk runner is stepping across the lane mouth"
+                        : "A court-set runner is posted outside the lane mouth"))))
+            healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                ? "Recovery in \(formatScalar(state.player_recovery_delay))s"
+                : "Pressure is building before you cross the line"
+            encounterTitle = territoryCommitWindowOpen ? "Line objective" : (territoryPatrolBrace ? "Court-set hardening" : (territoryPatrolReform ? "Court-set reform" : (territoryPatrolScreen ? "Court-set screen" : "Court-set patrol")))
+            if territoryCommitWindowOpen {
+                encounterDetail = "Window \(formatScalar(state.territory_commit_timer))s / brace \(formatScalar(state.territory_patrol_alert))"
+            } else if territoryPatrolHandoff {
+                encounterDetail = "Handoff \(formatScalar(state.territory_patrol_alert)) / lane mouth closing"
+            } else if territoryPatrolBrace {
+                encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / line locking"
+            } else if territoryPatrolReform {
+                encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
+            } else if territoryPatrolScreen {
+                encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / lane mouth pinched"
+            } else {
+                encounterDetail = "Sidewalk watch \(formatScalar(state.territory_patrol_alert))"
+            }
+        } else if territoryClaimed && territoryWatch > 0.12 && !streetIncidentActive {
+            title = territoryCommitResolved
+                ? "Line Broken"
+                : (territoryCommitLive
+                    ? "Hold The Pocket"
+                    : (territorySkimming
+                        ? (territoryPatrolBrace ? "Territory Hardening" : (territoryEntryClamp ? "Territory Clamp" : (territoryPatrolReform ? "Territory Reforming" : (territoryPatrolScreen ? "Territory Screen" : "Territory Line"))))
+                        : "Claimed Block"))
+            subtitle = territoryCommitResolved
+                ? "You pushed through the hardened edge"
+                : (territoryCommitLive
+                    ? "Stay through the break while the line gives way"
+                    : (territorySkimming
+                        ? (territoryVehicleEntry
+                            ? (territoryPatrolBrace
+                                ? "Runner and post are hardening the vehicle line back into clamp"
+                                : (territoryEntryClamp
+                                ? "Runner and post are clamping the vehicle line before the lane clears"
+                                : (territoryPatrolReform
+                                    ? "The runner is reforming the vehicle line while the post eases back in"
+                                    : (territoryPatrolScreen
+                                    ? "The runner is screening the vehicle at the line while the post stays deeper"
+                                    : "The front hold is still reading your vehicle at the lane mouth"))))
+                            : (territoryPatrolBrace
+                                ? "Runner and post are hardening the edge back into clamp"
+                                : (territoryEntryClamp
+                                ? "Runner and post are clamping the entry from opposite angles"
+                                : (territoryPatrolReform
+                                    ? "The runner is reforming the edge while the post eases back toward support"
+                                    : (territoryPatrolScreen
+                                    ? "The runner is screening the entry before the handoff opens"
+                                    : "The front hold is reading you on foot at the lane mouth")))))
+                        : (territoryVehicleEntry
+                            ? (territoryPatrolClear && territoryInnerWatch
+                                ? "Runner cleared the line while the inner post owns the vehicle handoff"
+                                : "Vehicle push is drawing the inner post inside claimed turf")
+                            : (territoryPatrolClear && territoryInnerWatch
+                                ? "Runner cleared the line while the inner post owns the pocket"
+                                : "Deeper push into claimed turf is waking the inner post"))))
+            healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                ? "Recovery in \(formatScalar(state.player_recovery_delay))s"
+                : "Pressure is building before the lane breaks open"
+            encounterTitle = territoryCommitLive || territoryCommitResolved
+                ? "Line objective"
+                : (territoryDeeper && territoryInnerWatch
+                    ? (territoryPatrolClear ? "Court-set clear" : "Court-set bodies")
+                    : (territoryPatrolBrace
+                        ? "Court-set hardening"
+                        : (territoryEntryClamp
+                        ? "Court-set clamp"
+                        : (territorySkimming && territoryPatrolReform
+                            ? "Court-set reform"
+                            : (territorySkimming && territoryPatrolScreen
+                            ? "Court-set screen"
+                            : "\(territoryFactionLabel(state.territory_faction)) holds")))))
+            if territoryCommitResolved {
+                encounterDetail = "Complete / settle \(formatScalar(state.territory_commit_timer))s"
+            } else if territoryCommitLive {
+                encounterDetail = "Commit \(formatScalar(territoryCommitProgress)) / \(formatScalar(state.territory_commit_timer))s"
+            } else if territoryDeeper && territoryInnerWatch {
+                if territoryPatrolClear {
+                    encounterDetail = "Clear \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                } else if territoryPatrolReform {
+                    encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                } else {
+                    encounterDetail = "Runner \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+                }
+            } else if territoryPatrolBrace {
+                encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+            } else if territoryEntryClamp {
+                encounterDetail = "Clamp \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+            } else if territorySkimming && territoryPatrolReform {
+                encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / post \(formatScalar(state.territory_inner_alert))"
+            } else if territorySkimming && territoryPatrolScreen {
+                encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / line pinched"
+            } else if territoryDeeper {
+                encounterDetail = "Front \(formatScalar(state.territory_front_watch)) / deep \(formatScalar(state.territory_deep_watch))"
+            } else {
+                encounterDetail = "Front hold \(formatScalar(state.territory_front_watch)) / watch \(formatScalar(state.territory_watch_timer))s"
+            }
         } else if state.combat_player_in_cover != 0 {
             title = "Cover Holding"
             subtitle = state.combat_hostile_reacquire_timer > 0.0
@@ -3016,15 +3741,33 @@ final class Renderer: NSObject, MTKViewDelegate {
             healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
                 ? "Recovery in \(formatScalar(state.player_recovery_delay))s"
                 : "Cover holding"
-            encounterTitle = "Lookout \(anchorLabel)"
+            encounterTitle = lookoutTitle
             encounterDetail = state.combat_hostile_reacquire_timer > 0.0
                 ? "Reacquire \(formatScalar(state.combat_hostile_reacquire_timer))s"
                 : "Pressure broken on this angle"
+        } else if recoveryActive {
+            title = "Street Reopening"
+            subtitle = territoryHot
+                ? "The territory is cooling, but the block still remembers you"
+                : (state.combat_hostile_reacquire_timer > 0.0
+                ? "The lookout is reset, but the block is still settling"
+                : "Traffic and civilians are finding their default rhythm again")
+            healthDetail = state.player_health < 100.0
+                ? (state.player_recovery_delay > 0.0
+                    ? "Recovery \(formatScalar(state.player_recovery_delay))s / block settling"
+                    : "Recovering while the block settles")
+                : "Lane quiet / block settling"
+            encounterTitle = lookoutTitle
+            encounterDetail = state.combat_hostile_reacquire_timer > 0.0
+                ? "Reacquire tail \(formatScalar(state.combat_hostile_reacquire_timer))s"
+                : "Threat broken / watch the street reset"
         } else {
             title = state.player_health <= 45.0 ? "Under Pressure" : "Combat Lane Live"
-            subtitle = state.combat_hostile_reacquire_timer > 0.0
+            subtitle = territoryHot
+                ? "You came back into a burned block / move before it locks in"
+                : (state.combat_hostile_reacquire_timer > 0.0
                 ? "The lookout is sliding to a new firing angle"
-                : "Move between cover so the lane does not flatten out"
+                : "Move between cover so the lane does not flatten out")
             if state.player_health < 100.0 && state.player_recovery_delay > 0.0 {
                 healthDetail = "Recovery in \(formatScalar(state.player_recovery_delay))s"
             } else if state.player_health < 100.0 {
@@ -3032,7 +3775,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             } else {
                 healthDetail = "Open lane"
             }
-            encounterTitle = "Lookout \(anchorLabel)"
+            encounterTitle = lookoutTitle
             if state.combat_hostile_last_shot_timer > 0.0 {
                 encounterDetail = state.combat_hostile_last_shot_hit != 0 ? "Last burst landed" : "Last burst splashed cover"
             } else if state.combat_hostile_reacquire_timer > 0.0 {
@@ -3101,8 +3844,67 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private static func combatInteractionPrompt(state: MDTBEngineState) -> String? {
+        let territoryClaimed =
+            state.territory_faction != UInt32(MDTBTerritoryFactionNone) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseNone)
+        let territoryName = territoryFactionLabel(state.territory_faction)
+        let territoryVehicleEntry = state.territory_entry_mode == UInt32(MDTBTerritoryEntryVehicle)
+        let territorySkimming = territorySkimmingLine(state: state)
+        let territoryDeeper = territoryPushingDeeper(state: state)
+        let territoryWatch = territoryWatchIntensity(state: state)
+        let territoryPatrolWatch = territoryPatrolWatchActive(state: state)
+        let territoryPatrolScreen = territoryPatrolScreening(state: state)
+        let territoryPatrolClear = territoryPatrolClearing(state: state)
+        let territoryPatrolReform = territoryPatrolReforming(state: state)
+        let territoryPatrolBrace = territoryPatrolHardening(state: state)
+        let territoryPatrolHandoff = state.territory_patrol_state == UInt32(MDTBTerritoryPatrolHandoff)
+        let territoryInnerWatch = territoryInnerWatchActive(state: state)
+        let territoryEntryClamp = territoryEntryClamped(state: state)
+        let territoryCommitWindowOpen = territoryCommitWindowActive(state: state)
+        let territoryCommitLive = territoryCommitActive(state: state)
+        let territoryCommitResolved = territoryCommitComplete(state: state)
+
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
             guard state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponNone) else {
+                if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
+                    return "hot \(territoryName) block / vehicle re-entry is being read fast"
+                }
+                if !territoryClaimed && territoryPatrolWatch {
+                    return territoryPatrolHandoff
+                        ? "court-set runner is turning the vehicle toward the lane before the line"
+                        : (territoryPatrolBrace
+                            ? "court-set line is hardening again / step back in and the vehicle clamp locks up"
+                            : (territoryPatrolReform
+                            ? "court-set line is reforming after the clear / feint in again and the vehicle screen closes back up"
+                            : (territoryPatrolScreen
+                            ? "court-set runner is screening the vehicle at the lane mouth / the line is pinching"
+                            : "court-set runner is posted on the sidewalk ahead / the vehicle is being read early")))
+                }
+                if territoryClaimed && territoryWatch > 0.12 {
+                    if territoryDeeper {
+                        return territoryPatrolClear && territoryInnerWatch
+                            ? "inside \(territoryName) turf / runner cleared the line while the inner post owns the handoff"
+                            : (territoryInnerWatch
+                            ? "vehicle pushed deeper into \(territoryName) turf / inner post is taking the handoff"
+                            : "vehicle pushed deeper into \(territoryName) turf / deep watch is building inside")
+                    }
+                    if territorySkimming || territoryVehicleEntry {
+                        return territoryPatrolBrace
+                            ? "rolling the \(territoryName) line / runner and post are locking the vehicle edge back into clamp"
+                            : territoryEntryClamp
+                            ? "rolling the \(territoryName) line / runner and post are clamping the vehicle from opposite angles"
+                            : (territoryPatrolReform
+                                ? "rolling the \(territoryName) line / runner is reforming the edge while the post eases back toward support"
+                                : (territoryPatrolScreen
+                            ? "rolling the \(territoryName) line / the runner is screening the vehicle before handoff"
+                            : "rolling the \(territoryName) line / front hold is clocking the vehicle"
+                            ))
+                    }
+                    return "inside \(territoryName) turf / the block is reading the vehicle pass"
+                }
+                if state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary) {
+                    return "rolling the \(territoryName) line / stay moving or rearm at the lane pickups"
+                }
                 return nil
             }
             if state.equipped_weapon_kind == UInt32(MDTBEquippedWeaponPistol) {
@@ -3117,6 +3919,18 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         if let pickupPrompt = pickupPrompt(state: state) {
             return pickupPrompt
+        }
+
+        if territoryCommitResolved {
+            return "line broken / hold the pocket or pull out on your terms"
+        }
+
+        if territoryCommitLive {
+            return "push is counting / stay inside the pocket until the beat lands"
+        }
+
+        if territoryCommitWindowOpen {
+            return "hardened \(territoryName) line / push through now before the window settles"
         }
 
         let switchHint = weaponSwitchHint(state: state)
@@ -3178,6 +3992,43 @@ final class Renderer: NSObject, MTKViewDelegate {
         default:
             if state.melee_weapon_owned != 0 || state.firearm_owned != 0 {
                 return "press 1 or 2 to equip a weapon"
+            }
+            if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
+                return "burned \(territoryName) block / keep moving or rearm at the lane pickups"
+            }
+            if !territoryClaimed && territoryPatrolWatch {
+                return territoryPatrolHandoff
+                    ? "court-set runner is turning the lane inward before the line"
+                    : (territoryPatrolBrace
+                        ? "court-set line is hardening again / step back in and the clamp locks up"
+                        : (territoryPatrolReform
+                        ? "court-set line is reforming after the clear / step back in and the screen closes again"
+                        : (territoryPatrolScreen
+                        ? "court-set runner is screening the lane mouth / step in and the deeper post wakes"
+                        : "court-set runner is posted on the sidewalk ahead / the lane mouth is being watched")))
+            }
+            if state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary) || (territoryClaimed && territorySkimming && territoryWatch > 0.08) {
+                return territoryPatrolBrace
+                    ? "at the \(territoryName) line / runner and post are locking the edge back into clamp"
+                    : territoryEntryClamp
+                    ? "crossing the \(territoryName) line on foot / runner and post are clamping the entry before the line clears"
+                    : (territoryPatrolReform
+                        ? "at the \(territoryName) line / the runner is reforming the edge while the post eases back in"
+                        : (territoryPatrolScreen
+                    ? "crossing the \(territoryName) line on foot / runner is screening the entry before handoff"
+                    : "crossing the \(territoryName) line on foot / front hold is reading you before combat"
+                    ))
+            }
+            if territoryClaimed && territoryDeeper && territoryWatch > 0.12 {
+                return territoryPatrolClear && territoryInnerWatch
+                    ? "inside \(territoryName) turf / runner cleared the line while the inner post owns the pocket"
+                    : (territoryInnerWatch
+                    ? "inside \(territoryName) turf / the inner post is taking the handoff"
+                    : "inside \(territoryName) turf / deeper push is drawing a second set of eyes"
+                    )
+            }
+            if territoryClaimed {
+                return "inside \(territoryName) turf / the lookout will read you faster here"
             }
             return nil
         }
@@ -3364,8 +4215,241 @@ final class Renderer: NSObject, MTKViewDelegate {
         return count
     }
 
+    private static func territoryFactionLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryFactionCourtSet):
+            return "court-set"
+        default:
+            return "neutral"
+        }
+    }
+
+    private static func territoryPhaseLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryPhaseBoundary):
+            return "line"
+        case UInt32(MDTBTerritoryPhaseClaimed):
+            return "turf"
+        case UInt32(MDTBTerritoryPhaseHot):
+            return "burned"
+        default:
+            return "open"
+        }
+    }
+
+    private static func territoryEntryModeLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryEntryVehicle):
+            return "roll"
+        case UInt32(MDTBTerritoryEntryOnFoot):
+            return "foot"
+        default:
+            return "open"
+        }
+    }
+
+    private static func territoryPatrolStateLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryPatrolWatch):
+            return "watch"
+        case UInt32(MDTBTerritoryPatrolScreen):
+            return "screen"
+        case UInt32(MDTBTerritoryPatrolBrace):
+            return "brace"
+        case UInt32(MDTBTerritoryPatrolHandoff):
+            return "handoff"
+        case UInt32(MDTBTerritoryPatrolCooldown):
+            return "cool"
+        case UInt32(MDTBTerritoryPatrolClear):
+            return "clear"
+        case UInt32(MDTBTerritoryPatrolReform):
+            return "reform"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func territoryWatchIntensity(state: MDTBEngineState) -> Float {
+        max(state.territory_front_watch, state.territory_deep_watch)
+    }
+
+    private static func territoryPatrolWatchActive(state: MDTBEngineState) -> Bool {
+        let patrolState = state.territory_patrol_state
+        return (
+            patrolState == UInt32(MDTBTerritoryPatrolWatch) ||
+            patrolState == UInt32(MDTBTerritoryPatrolReform) ||
+            patrolState == UInt32(MDTBTerritoryPatrolBrace) ||
+            patrolState == UInt32(MDTBTerritoryPatrolScreen) ||
+            patrolState == UInt32(MDTBTerritoryPatrolHandoff)
+        ) && state.territory_patrol_alert > 0.12
+    }
+
+    private static func territoryPatrolScreening(state: MDTBEngineState) -> Bool {
+        state.territory_patrol_state == UInt32(MDTBTerritoryPatrolScreen) &&
+            state.territory_patrol_alert > 0.14
+    }
+
+    private static func territoryPatrolClearing(state: MDTBEngineState) -> Bool {
+        state.territory_patrol_state == UInt32(MDTBTerritoryPatrolClear) &&
+            state.territory_patrol_alert > 0.12
+    }
+
+    private static func territoryPatrolReforming(state: MDTBEngineState) -> Bool {
+        state.territory_patrol_state == UInt32(MDTBTerritoryPatrolReform) &&
+            state.territory_patrol_alert > 0.12
+    }
+
+    private static func territoryPatrolHardening(state: MDTBEngineState) -> Bool {
+        state.territory_patrol_state == UInt32(MDTBTerritoryPatrolBrace) &&
+            state.territory_patrol_alert > 0.12
+    }
+
+    private static func territoryCommitStateLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryCommitWindow):
+            return "window"
+        case UInt32(MDTBTerritoryCommitActive):
+            return "active"
+        case UInt32(MDTBTerritoryCommitComplete):
+            return "done"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func territoryCommitWindowActive(state: MDTBEngineState) -> Bool {
+        state.territory_commit_state == UInt32(MDTBTerritoryCommitWindow) &&
+            state.territory_commit_timer > 0.05
+    }
+
+    private static func territoryCommitActive(state: MDTBEngineState) -> Bool {
+        state.territory_commit_state == UInt32(MDTBTerritoryCommitActive) &&
+            state.territory_commit_progress > 0.01
+    }
+
+    private static func territoryCommitComplete(state: MDTBEngineState) -> Bool {
+        state.territory_commit_state == UInt32(MDTBTerritoryCommitComplete) &&
+            state.territory_commit_timer > 0.05
+    }
+
+    private static func territoryInnerWatchActive(state: MDTBEngineState) -> Bool {
+        let innerState = state.territory_inner_state
+        return (
+            innerState == UInt32(MDTBTerritoryPatrolWatch) ||
+            innerState == UInt32(MDTBTerritoryPatrolReform) ||
+            innerState == UInt32(MDTBTerritoryPatrolBrace) ||
+            innerState == UInt32(MDTBTerritoryPatrolHandoff)
+        ) && state.territory_inner_alert > 0.12
+    }
+
+    private static func territoryEntryClamped(state: MDTBEngineState) -> Bool {
+        territorySkimmingLine(state: state) &&
+            (territoryPatrolScreening(state: state) || territoryPatrolHardening(state: state)) &&
+            territoryInnerWatchActive(state: state) &&
+            state.territory_inner_alert > 0.12
+    }
+
+    private static func territorySkimmingLine(state: MDTBEngineState) -> Bool {
+        guard state.territory_faction != UInt32(MDTBTerritoryFactionNone) else {
+            return false
+        }
+
+        if state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary) {
+            return true
+        }
+
+        return state.territory_presence < 0.62 &&
+            state.territory_deep_watch <= (state.territory_front_watch + 0.08)
+    }
+
+    private static func territoryPushingDeeper(state: MDTBEngineState) -> Bool {
+        guard state.territory_faction != UInt32(MDTBTerritoryFactionNone) else {
+            return false
+        }
+
+        return !territorySkimmingLine(state: state) &&
+            (state.territory_presence >= 0.62 ||
+             state.territory_deep_watch > (state.territory_front_watch + 0.08))
+    }
+
+    private static func territoryStatusSummary(state: MDTBEngineState) -> String? {
+        guard state.territory_faction != UInt32(MDTBTerritoryFactionNone) ||
+                state.territory_heat > 0.05 ||
+                state.territory_reentry_timer > 0.0 ||
+                state.territory_patrol_state != UInt32(MDTBTerritoryPatrolIdle) ||
+                state.territory_patrol_alert > 0.05 ||
+                state.territory_inner_state != UInt32(MDTBTerritoryPatrolIdle) ||
+                state.territory_inner_alert > 0.05 else {
+            return nil
+        }
+
+        var parts: [String] = []
+
+        if state.territory_faction != UInt32(MDTBTerritoryFactionNone) {
+            parts.append(territoryFactionLabel(state.territory_faction))
+            parts.append(territoryPhaseLabel(state.territory_phase))
+            if state.territory_entry_mode != UInt32(MDTBTerritoryEntryNone) {
+                parts.append(territoryEntryModeLabel(state.territory_entry_mode))
+            }
+            if territorySkimmingLine(state: state) {
+                parts.append("edge")
+            } else if territoryPushingDeeper(state: state) {
+                parts.append("deep")
+            }
+        }
+
+        if state.territory_presence > 0.05 {
+            parts.append("p\(formatScalar(state.territory_presence))")
+        }
+
+        if state.territory_heat > 0.05 {
+            parts.append("h\(formatScalar(state.territory_heat))")
+        }
+
+        if state.territory_watch_timer > 0.0 {
+            parts.append("w\(formatScalar(state.territory_watch_timer))s")
+        }
+        if state.territory_front_watch > 0.05 {
+            parts.append("f\(formatScalar(state.territory_front_watch))")
+        }
+        if state.territory_deep_watch > 0.05 {
+            parts.append("d\(formatScalar(state.territory_deep_watch))")
+        }
+        if state.territory_reentry_timer > 0.0 {
+            parts.append("r\(formatScalar(state.territory_reentry_timer))s")
+        }
+        if state.territory_commit_state != UInt32(MDTBTerritoryCommitNone) || state.territory_commit_progress > 0.05 {
+            parts.append("commit")
+            parts.append(territoryCommitStateLabel(state.territory_commit_state))
+            if state.territory_commit_timer > 0.0 {
+                parts.append("t\(formatScalar(state.territory_commit_timer))s")
+            }
+            if state.territory_commit_progress > 0.05 {
+                parts.append("p\(formatScalar(state.territory_commit_progress))")
+            }
+        }
+        if state.territory_patrol_state != UInt32(MDTBTerritoryPatrolIdle) || state.territory_patrol_alert > 0.05 {
+            parts.append("patrol")
+            parts.append(territoryPatrolStateLabel(state.territory_patrol_state))
+            if state.territory_patrol_alert > 0.05 {
+                parts.append("a\(formatScalar(state.territory_patrol_alert))")
+            }
+        }
+        if state.territory_inner_state != UInt32(MDTBTerritoryPatrolIdle) || state.territory_inner_alert > 0.05 {
+            parts.append("post")
+            parts.append(territoryPatrolStateLabel(state.territory_inner_state))
+            if state.territory_inner_alert > 0.05 {
+                parts.append("a\(formatScalar(state.territory_inner_alert))")
+            }
+        }
+
+        return "terr " + parts.joined(separator: " ")
+    }
+
     private static func systemicPressureSummary(state: MDTBEngineState) -> String {
         var parts: [String] = []
+        let normalizing = streetNormalizingIntensity(state: state) > 0.12
+        let recovering = streetRecoveryIntensity(state: state) > 0.08
 
         if state.witness_state != UInt32(MDTBWitnessStateIdle) || state.witness_alert > 0.05 || state.witness_state_timer > 0.0 {
             parts.append(witnessStatusSummary(state: state))
@@ -3383,6 +4467,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             parts.append("incident \(formatScalar(state.street_incident_level)) \(formatScalar(state.street_incident_timer))s")
         }
 
+        if normalizing {
+            parts.append("normalizing")
+        }
+
+        if recovering {
+            parts.append("reopening \(formatScalar(state.street_recovery_timer))s")
+        }
+
+        if let territorySummary = territoryStatusSummary(state: state) {
+            parts.append(territorySummary)
+        }
+
         if parts.isEmpty {
             return "street calm"
         }
@@ -3398,6 +4494,152 @@ final class Renderer: NSObject, MTKViewDelegate {
         let incidentTimer = formatScalar(state.street_incident_timer)
         let bystanderTimer = formatScalar(state.bystander_state_timer)
         let civilianSources = civilianResponseSourceCount(state: state)
+        let normalizing = streetNormalizingIntensity(state: state) > 0.12
+        let recovering = streetRecoveryIntensity(state: state) > 0.08
+        let recoveryTimer = formatScalar(state.street_recovery_timer)
+        let territoryClaimed =
+            state.territory_faction != UInt32(MDTBTerritoryFactionNone) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseNone)
+        let territoryName = territoryFactionLabel(state.territory_faction)
+        let territoryTimer = formatScalar(state.territory_reentry_timer)
+        let territoryVehicleEntry = state.territory_entry_mode == UInt32(MDTBTerritoryEntryVehicle)
+        let territorySkimming = territorySkimmingLine(state: state)
+        let territoryDeeper = territoryPushingDeeper(state: state)
+        let territoryWatch = territoryWatchIntensity(state: state)
+        let territoryPatrolWatch = territoryPatrolWatchActive(state: state)
+        let territoryPatrolScreen = territoryPatrolScreening(state: state)
+        let territoryPatrolClear = territoryPatrolClearing(state: state)
+        let territoryPatrolReform = territoryPatrolReforming(state: state)
+        let territoryPatrolBrace = territoryPatrolHardening(state: state)
+        let territoryPatrolHandoff = state.territory_patrol_state == UInt32(MDTBTerritoryPatrolHandoff)
+        let territoryInnerWatch = territoryInnerWatchActive(state: state)
+        let territoryEntryClamp = territoryEntryClamped(state: state)
+        let territoryCommitWindowOpen = territoryCommitWindowActive(state: state)
+        let territoryCommitLive = territoryCommitActive(state: state)
+        let territoryCommitResolved = territoryCommitComplete(state: state)
+        let territoryCommitProgress = min(max(state.territory_commit_progress, 0.0), 1.0)
+
+        if normalizing {
+            return (
+                "Street normalizing",
+                civilianSources > 0
+                    ? "Civilians are settling while traffic returns to the lane \(incidentTimer)s"
+                    : "Traffic and civilian spillover are easing off the block \(incidentTimer)s"
+            )
+        }
+
+        if recovering {
+            return (
+                "Street reopening",
+                civilianSources > 0
+                    ? "Civilians are drifting back while traffic retakes the block \(recoveryTimer)s"
+                    : "Traffic is reopening the lane and nearby link \(recoveryTimer)s"
+            )
+        }
+
+        if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
+            return (
+                "Burned territory",
+                searchActive
+                    ? "\(territoryName) block remembers the last pass / lookout search \(searchTimer)s"
+                    : "You re-entered a hot \(territoryName) block / the lookout is already keyed up \(territoryTimer)s"
+            )
+        }
+
+        if territoryCommitResolved {
+            return (
+                "Line broken",
+                "You pushed through the hardened \(territoryName) edge / pocket settling \(formatScalar(state.territory_commit_timer))s"
+            )
+        }
+
+        if territoryCommitLive {
+            return (
+                "Commit live",
+                "Hold inside the pocket \(formatScalar(state.territory_commit_timer))s / progress \(formatScalar(territoryCommitProgress))"
+            )
+        }
+
+        if territoryCommitWindowOpen {
+            return (
+                "Commit window",
+                "Push through the hardened line before it settles \(formatScalar(state.territory_commit_timer))s"
+            )
+        }
+
+        if !territoryClaimed && territoryPatrolWatch && !incidentActive && !searchActive {
+            return (
+                territoryPatrolBrace ? "Line hardening" : (territoryPatrolReform ? "Line reforming" : (territoryPatrolScreen ? "Entry screened" : "Sidewalk watched")),
+                state.traversal_mode == UInt32(MDTBTraversalModeVehicle)
+                    ? (territoryPatrolHandoff
+                        ? "A court-set runner is turning the vehicle toward the lane before the line"
+                        : (territoryPatrolBrace
+                            ? "The runner is locking the vehicle line back down while the post steps up behind it"
+                            : (territoryPatrolReform
+                            ? "The runner is returning from clear and reforming the vehicle line at the lane mouth"
+                            : (territoryPatrolScreen
+                            ? "A court-set runner is screening the vehicle right at the lane mouth"
+                            : "A court-set runner is reading the vehicle outside the lane mouth"))))
+                    : (territoryPatrolHandoff
+                        ? "A court-set runner is turning the sidewalk approach into a lane handoff"
+                        : (territoryPatrolBrace
+                            ? "The runner is locking the line back down while the inner post completes the edge"
+                            : (territoryPatrolReform
+                            ? "The runner is returning from clear while the lane mouth closes back up"
+                            : (territoryPatrolScreen
+                            ? "A court-set runner is stepping across the lane mouth to screen the entry"
+                            : "A court-set runner is posted outside the lane mouth"))))
+            )
+        }
+
+        if territoryClaimed && territoryWatch > 0.12 && !incidentActive && !searchActive {
+            if territorySkimming {
+                return (
+                    territoryPatrolBrace ? "Territory hardening" : (territoryEntryClamp ? "Entry clamped" : (territoryPatrolReform ? "Territory reforming" : (territoryPatrolScreen ? "Territory screen" : "Territory line"))),
+                    territoryVehicleEntry
+                        ? (territoryPatrolBrace
+                            ? "Rolling the \(territoryName) line / runner and post are locking the vehicle edge back into clamp"
+                            : (territoryEntryClamp
+                            ? "Rolling the \(territoryName) line / runner and post are clamping the vehicle from opposite angles"
+                            : (territoryPatrolReform
+                                ? "Rolling the \(territoryName) line / the runner is reforming the edge while the post eases back toward support"
+                                : (territoryPatrolScreen
+                            ? "Rolling the \(territoryName) line / the runner is screening the vehicle before handoff"
+                            : "Rolling the \(territoryName) line / front hold is clocking the vehicle")
+                            )))
+                        : (territoryPatrolBrace
+                            ? "On foot at the \(territoryName) line / runner and post are locking the edge back into clamp"
+                            : (territoryEntryClamp
+                            ? "On foot at the \(territoryName) line / runner and post are clamping the entry"
+                            : (territoryPatrolReform
+                                ? "On foot at the \(territoryName) line / the runner is reforming the edge while the post eases back in"
+                                : (territoryPatrolScreen
+                            ? "On foot at the \(territoryName) line / the runner is screening the entry"
+                            : "On foot at the \(territoryName) line / front hold is reading the lane mouth")
+                            )))
+                )
+            }
+            if territoryDeeper {
+                return (
+                    "Claimed turf",
+                    territoryVehicleEntry
+                        ? (territoryPatrolClear && territoryInnerWatch
+                            ? "Runner cleared the line while the inner post owns the vehicle handoff"
+                            : (territoryInnerWatch
+                                ? "Vehicle push reached deeper \(territoryName) turf / inner post is taking the handoff"
+                                : "Vehicle push reached deeper \(territoryName) turf / deep watch is building inside"))
+                        : (territoryPatrolClear && territoryInnerWatch
+                            ? "Runner cleared the line while the inner post owns the pocket"
+                            : (territoryInnerWatch
+                                ? "Deeper push into \(territoryName) turf is waking the inner post"
+                                : "Deeper push into \(territoryName) turf is drawing a second set of eyes"))
+                )
+            }
+            return (
+                "Claimed block",
+                "Front and deep holds are reading the block before the fight opens"
+            )
+        }
 
         if civilianSources >= 2 && incidentActive {
             return (
@@ -3463,6 +4705,22 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
             if searchActive {
                 return ("Search active", "Lookout checking your last seen position \(searchTimer)s")
+            }
+            if state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary) {
+                return (
+                    "Territory line",
+                    territoryVehicleEntry
+                        ? "Vehicle is skimming the \(territoryName) line at the lane mouth"
+                        : "The \(territoryName) line starts at the lane mouth"
+                )
+            }
+            if territoryClaimed {
+                return (
+                    "Claimed block",
+                    territoryVehicleEntry
+                        ? "Vehicle is still inside \(territoryName) turf / the block is reading the pass"
+                        : "Inside \(territoryName) turf / the lookout reads you faster here"
+                )
             }
             if incidentActive {
                 return ("Street holding", "Traffic is still easing around the lane \(incidentTimer)s")
