@@ -6540,6 +6540,84 @@ static void push_planter(float x, float z, float size) {
     );
 }
 
+static void push_signal_head_visor_side_attachments(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 strap_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
+
+    push_prop(
+        make_float3(x - 0.074f, y + 0.028f, z + (facing_sign * 0.086f)),
+        make_float3(0.006f, 0.018f, 0.012f),
+        strap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.074f, y + 0.028f, z + (facing_sign * 0.086f)),
+        make_float3(0.006f, 0.018f, 0.012f),
+        strap_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.058f, y + 0.058f, z + (facing_sign * 0.080f)),
+        make_float3(0.010f, 0.008f, 0.010f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.058f, y + 0.058f, z + (facing_sign * 0.080f)),
+        make_float3(0.010f, 0.008f, 0.010f),
+        cap_color,
+        0
+    );
+}
+
+static void push_signal_head_visor_cap_seams(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.23f, 0.24f, 0.27f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.36f, 0.37f, 0.40f, 1.0f);
+
+    push_prop(
+        make_float3(x - 0.042f, y + 0.072f, z + (facing_sign * 0.118f)),
+        make_float3(0.006f, 0.010f, 0.008f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.042f, y + 0.072f, z + (facing_sign * 0.118f)),
+        make_float3(0.006f, 0.010f, 0.008f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.076f, z + (facing_sign * 0.112f)),
+        make_float3(0.018f, 0.006f, 0.010f),
+        cap_color,
+        0
+    );
+}
+
+static void push_signal_head_visor_underside_seam(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.13f, 0.14f, 0.16f, 1.0f);
+    const MDTBFloat4 tie_color = make_float4(0.22f, 0.23f, 0.26f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.048f, z + (facing_sign * 0.086f)),
+        make_float3(0.050f, 0.004f, 0.006f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.032f, y + 0.045f, z + (facing_sign * 0.092f)),
+        make_float3(0.006f, 0.006f, 0.005f),
+        tie_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.032f, y + 0.045f, z + (facing_sign * 0.092f)),
+        make_float3(0.006f, 0.006f, 0.005f),
+        tie_color,
+        0
+    );
+}
+
 static void push_signal_head_visor(float x, float y, float z, float facing_sign, MDTBFloat4 visor_color) {
     push_prop(
         make_float3(x, y + 0.07f, z + (facing_sign * 0.10f)),
@@ -6559,6 +6637,9 @@ static void push_signal_head_visor(float x, float y, float z, float facing_sign,
         scaled_color(visor_color, 0.92f),
         0
     );
+    push_signal_head_visor_underside_seam(x, y, z, facing_sign);
+    push_signal_head_visor_cap_seams(x, y, z, facing_sign);
+    push_signal_head_visor_side_attachments(x, y, z, facing_sign);
 }
 
 static void push_signal_head_face_weathering(float x, float y, float z, float facing_sign) {
@@ -6622,6 +6703,91 @@ static void push_signal_head_rear_detail(float x, float y, float z, float facing
     );
 }
 
+static void push_signal_head_rear_vent_hint(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 frame_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 slot_color = make_float4(0.13f, 0.14f, 0.16f, 1.0f);
+    const MDTBFloat4 lip_color = make_float4(0.36f, 0.37f, 0.40f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.18f, z - (facing_sign * 0.105f)),
+        make_float3(0.045f, 0.035f, 0.005f),
+        frame_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.192f, z - (facing_sign * 0.110f)),
+        make_float3(0.032f, 0.005f, 0.003f),
+        slot_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.172f, z - (facing_sign * 0.110f)),
+        make_float3(0.032f, 0.005f, 0.003f),
+        slot_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.205f, z - (facing_sign * 0.101f)),
+        make_float3(0.038f, 0.004f, 0.004f),
+        lip_color,
+        0
+    );
+}
+
+static void push_signal_head_rear_fastener_cluster(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 washer_color = make_float4(0.22f, 0.23f, 0.26f, 1.0f);
+    const MDTBFloat4 fastener_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
+
+    push_prop(
+        make_float3(x - 0.045f, y + 0.05f, z - (facing_sign * 0.112f)),
+        make_float3(0.010f, 0.010f, 0.004f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.045f, y + 0.05f, z - (facing_sign * 0.112f)),
+        make_float3(0.010f, 0.010f, 0.004f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.045f, y - 0.05f, z - (facing_sign * 0.112f)),
+        make_float3(0.010f, 0.010f, 0.004f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.045f, y - 0.05f, z - (facing_sign * 0.112f)),
+        make_float3(0.010f, 0.010f, 0.004f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.045f, y + 0.05f, z - (facing_sign * 0.116f)),
+        make_float3(0.005f, 0.005f, 0.003f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.045f, y + 0.05f, z - (facing_sign * 0.116f)),
+        make_float3(0.005f, 0.005f, 0.003f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.045f, y - 0.05f, z - (facing_sign * 0.116f)),
+        make_float3(0.005f, 0.005f, 0.003f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.045f, y - 0.05f, z - (facing_sign * 0.116f)),
+        make_float3(0.005f, 0.005f, 0.003f),
+        fastener_color,
+        0
+    );
+}
+
 static void push_signal_head_side_detail(float x, float y, float z, float facing_sign) {
     const MDTBFloat4 hinge_color = make_float4(0.26f, 0.27f, 0.30f, 1.0f);
     const MDTBFloat4 cap_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
@@ -6653,6 +6819,30 @@ static void push_signal_head_side_detail(float x, float y, float z, float facing
     );
 }
 
+static void push_signal_head_rear_coupling_clamp_breakup(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 clamp_color = make_float4(0.18f, 0.19f, 0.22f, 1.0f);
+    const MDTBFloat4 tab_color = make_float4(0.34f, 0.35f, 0.38f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.14f, z - (facing_sign * 0.118f)),
+        make_float3(0.022f, 0.028f, 0.004f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.022f, y + 0.14f, z - (facing_sign * 0.112f)),
+        make_float3(0.006f, 0.012f, 0.004f),
+        tab_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.022f, y + 0.14f, z - (facing_sign * 0.112f)),
+        make_float3(0.006f, 0.012f, 0.004f),
+        tab_color,
+        0
+    );
+}
+
 static void push_signal_head_rear_coupling(float x, float y, float z, float facing_sign) {
     const MDTBFloat4 conduit_color = make_float4(0.22f, 0.23f, 0.26f, 1.0f);
     const MDTBFloat4 collar_color = make_float4(0.36f, 0.37f, 0.40f, 1.0f);
@@ -6673,6 +6863,31 @@ static void push_signal_head_rear_coupling(float x, float y, float z, float faci
         make_float3(x, y + 0.14f, z - (facing_sign * 0.11f)),
         make_float3(0.035f, 0.02f, 0.008f),
         collar_color,
+        0
+    );
+    push_signal_head_rear_coupling_clamp_breakup(x, y, z, facing_sign);
+}
+
+static void push_signal_head_lower_lip_seam_hint(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.12f, 0.13f, 0.15f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.28f, 0.29f, 0.32f, 1.0f);
+
+    push_prop(
+        make_float3(x, y - 0.312f, z + (facing_sign * 0.010f)),
+        make_float3(0.050f, 0.004f, 0.006f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.040f, y - 0.311f, z + (facing_sign * 0.018f)),
+        make_float3(0.006f, 0.004f, 0.005f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.040f, y - 0.311f, z + (facing_sign * 0.018f)),
+        make_float3(0.006f, 0.004f, 0.005f),
+        cap_color,
         0
     );
 }
@@ -6699,6 +6914,139 @@ static void push_signal_head_lower_drain_lip(float x, float y, float z, float fa
         outlet_color,
         0
     );
+    push_signal_head_lower_lip_seam_hint(x, y, z, facing_sign);
+}
+
+static void push_signal_head_backplate_shim(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 shim_color = make_float4(0.26f, 0.27f, 0.30f, 1.0f);
+
+    push_prop(
+        make_float3(x - 0.11f, y, z - (facing_sign * 0.055f)),
+        make_float3(0.012f, 0.26f, 0.012f),
+        shim_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.11f, y, z - (facing_sign * 0.055f)),
+        make_float3(0.012f, 0.26f, 0.012f),
+        shim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.29f, z - (facing_sign * 0.055f)),
+        make_float3(0.08f, 0.012f, 0.012f),
+        scaled_color(shim_color, 1.04f),
+        0
+    );
+}
+
+static void push_signal_head_corner_fasteners(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 fastener_color = make_float4(0.40f, 0.41f, 0.44f, 1.0f);
+    const MDTBFloat4 washer_color = make_float4(0.22f, 0.23f, 0.26f, 1.0f);
+
+    push_prop(
+        make_float3(x - 0.095f, y + 0.24f, z + (facing_sign * 0.012f)),
+        make_float3(0.014f, 0.014f, 0.010f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.095f, y + 0.24f, z + (facing_sign * 0.012f)),
+        make_float3(0.014f, 0.014f, 0.010f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.095f, y - 0.24f, z + (facing_sign * 0.012f)),
+        make_float3(0.014f, 0.014f, 0.010f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.095f, y - 0.24f, z + (facing_sign * 0.012f)),
+        make_float3(0.014f, 0.014f, 0.010f),
+        washer_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.095f, y + 0.24f, z + (facing_sign * 0.020f)),
+        make_float3(0.008f, 0.008f, 0.006f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.095f, y + 0.24f, z + (facing_sign * 0.020f)),
+        make_float3(0.008f, 0.008f, 0.006f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.095f, y - 0.24f, z + (facing_sign * 0.020f)),
+        make_float3(0.008f, 0.008f, 0.006f),
+        fastener_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.095f, y - 0.24f, z + (facing_sign * 0.020f)),
+        make_float3(0.008f, 0.008f, 0.006f),
+        fastener_color,
+        0
+    );
+}
+
+static void push_signal_head_side_service_tab(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 tab_color = make_float4(0.23f, 0.24f, 0.27f, 1.0f);
+    const MDTBFloat4 latch_color = make_float4(0.37f, 0.38f, 0.41f, 1.0f);
+    const float side_sign = -facing_sign;
+
+    push_prop(
+        make_float3(x + (side_sign * 0.126f), y + 0.01f, z - (facing_sign * 0.006f)),
+        make_float3(0.008f, 0.10f, 0.014f),
+        tab_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (side_sign * 0.132f), y + 0.09f, z - (facing_sign * 0.004f)),
+        make_float3(0.010f, 0.012f, 0.010f),
+        latch_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (side_sign * 0.132f), y - 0.07f, z - (facing_sign * 0.004f)),
+        make_float3(0.010f, 0.012f, 0.010f),
+        latch_color,
+        0
+    );
+}
+
+static void push_signal_head_lens_baffle_spacers(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 spacer_color = make_float4(0.18f, 0.19f, 0.21f, 1.0f);
+    const MDTBFloat4 rail_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.11f, z + (facing_sign * 0.066f)),
+        make_float3(0.086f, 0.012f, 0.010f),
+        spacer_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.11f, z + (facing_sign * 0.066f)),
+        make_float3(0.086f, 0.012f, 0.010f),
+        spacer_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.086f, y, z + (facing_sign * 0.058f)),
+        make_float3(0.010f, 0.24f, 0.010f),
+        rail_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.086f, y, z + (facing_sign * 0.058f)),
+        make_float3(0.010f, 0.24f, 0.010f),
+        rail_color,
+        0
+    );
 }
 
 static void push_signal_head(float x, float y, float z, float facing_sign) {
@@ -6712,6 +7060,7 @@ static void push_signal_head(float x, float y, float z, float facing_sign) {
         backplate_color,
         0
     );
+    push_signal_head_backplate_shim(x, y, z, facing_sign);
     push_prop(
         make_float3(x, y, z),
         make_float3(0.12f, 0.30f, 0.06f),
@@ -6719,9 +7068,14 @@ static void push_signal_head(float x, float y, float z, float facing_sign) {
         0
     );
     push_signal_head_rear_detail(x, y, z, facing_sign);
+    push_signal_head_rear_vent_hint(x, y, z, facing_sign);
+    push_signal_head_rear_fastener_cluster(x, y, z, facing_sign);
     push_signal_head_side_detail(x, y, z, facing_sign);
     push_signal_head_rear_coupling(x, y, z, facing_sign);
     push_signal_head_lower_drain_lip(x, y, z, facing_sign);
+    push_signal_head_corner_fasteners(x, y, z, facing_sign);
+    push_signal_head_side_service_tab(x, y, z, facing_sign);
+    push_signal_head_lens_baffle_spacers(x, y, z, facing_sign);
     push_signal_head_face_weathering(x, y, z, facing_sign);
     push_prop(
         make_float3(x, y + 0.22f, z + (facing_sign * 0.08f)),
@@ -6776,6 +7130,60 @@ static void push_signal_head_mount_gasket(float x, float y, float z, float facin
     );
 }
 
+static void push_signal_head_mount_clamp_seams(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.58f, z - (facing_sign * 0.048f)),
+        make_float3(0.012f, 0.020f, 0.010f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.055f, y + 0.58f, z - (facing_sign * 0.042f)),
+        make_float3(0.010f, 0.014f, 0.010f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.055f, y + 0.58f, z - (facing_sign * 0.042f)),
+        make_float3(0.010f, 0.014f, 0.010f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.38f, z - (facing_sign * 0.040f)),
+        make_float3(0.012f, 0.020f, 0.010f),
+        scaled_color(seam_color, 1.04f),
+        0
+    );
+}
+
+static void push_signal_head_mount_brace_edge_breakup(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 edge_color = make_float4(0.19f, 0.20f, 0.23f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.33f, 0.34f, 0.37f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.48f, z - (facing_sign * 0.032f)),
+        make_float3(0.010f, 0.08f, 0.004f),
+        edge_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.54f, z - (facing_sign * 0.010f)),
+        make_float3(0.008f, 0.010f, 0.006f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.18f, z - (facing_sign * 0.112f)),
+        make_float3(0.022f, 0.010f, 0.004f),
+        edge_color,
+        0
+    );
+}
+
 static void push_signal_head_mount(float x, float y, float z, float facing_sign) {
     const MDTBFloat4 brace_color = make_float4(0.28f, 0.30f, 0.33f, 1.0f);
     const MDTBFloat4 clamp_color = make_float4(0.44f, 0.46f, 0.49f, 1.0f);
@@ -6804,6 +7212,8 @@ static void push_signal_head_mount(float x, float y, float z, float facing_sign)
         scaled_color(brace_color, 0.92f),
         0
     );
+    push_signal_head_mount_brace_edge_breakup(x, y, z, facing_sign);
+    push_signal_head_mount_clamp_seams(x, y, z, facing_sign);
     push_signal_head_mount_gasket(x, y, z, facing_sign);
 }
 
@@ -6839,6 +7249,24 @@ static void push_signal_arm_reinforcement(float x, float z, float arm_sign) {
         make_float3(x, 2.74f, z + (arm_sign * 0.36f)),
         make_float3(0.09f, 0.03f, 0.12f),
         scaled_color(collar_color, 1.04f),
+        0
+    );
+}
+
+static void push_signal_head_hanger_seam_hint(float x, float y, float z, float arm_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.18f, 0.19f, 0.22f, 1.0f);
+    const MDTBFloat4 collar_color = make_float4(0.34f, 0.35f, 0.38f, 1.0f);
+
+    push_prop(
+        make_float3(x, y, z - (arm_sign * 0.014f)),
+        make_float3(0.008f, 0.10f, 0.004f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.09f, z + (arm_sign * 0.006f)),
+        make_float3(0.010f, 0.010f, 0.006f),
+        collar_color,
         0
     );
 }
@@ -7031,6 +7459,9 @@ static void push_signal_pole(float x, float z) {
         scaled_color(arm_color, 0.92f),
         0
     );
+    push_signal_head_hanger_seam_hint(x, 2.28f, z + (arm_sign * 0.40f), arm_sign);
+    push_signal_head_hanger_seam_hint(x - 0.34f, 2.34f, z + (arm_sign * 1.02f), arm_sign);
+    push_signal_head_hanger_seam_hint(x + 0.34f, 2.34f, z + (arm_sign * 1.02f), arm_sign);
     push_prop(
         make_float3(x + 0.18f, 1.12f, z - (arm_sign * 0.12f)),
         make_float3(0.06f, 0.16f, 0.10f),
