@@ -6540,9 +6540,171 @@ static void push_planter(float x, float z, float size) {
     );
 }
 
+static void push_signal_head_visor(float x, float y, float z, float facing_sign, MDTBFloat4 visor_color) {
+    push_prop(
+        make_float3(x, y + 0.07f, z + (facing_sign * 0.10f)),
+        make_float3(0.08f, 0.015f, 0.035f),
+        visor_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.06f, y + 0.03f, z + (facing_sign * 0.10f)),
+        make_float3(0.015f, 0.04f, 0.03f),
+        scaled_color(visor_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x + 0.06f, y + 0.03f, z + (facing_sign * 0.10f)),
+        make_float3(0.015f, 0.04f, 0.03f),
+        scaled_color(visor_color, 0.92f),
+        0
+    );
+}
+
+static void push_signal_head_face_weathering(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 sun_fade_color = make_float4(0.29f, 0.30f, 0.33f, 1.0f);
+    const MDTBFloat4 grime_color = make_float4(0.15f, 0.16f, 0.18f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.12f, z + (facing_sign * 0.05f)),
+        make_float3(0.10f, 0.03f, 0.01f),
+        sun_fade_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.08f, z + (facing_sign * 0.05f)),
+        make_float3(0.09f, 0.02f, 0.01f),
+        scaled_color(grime_color, 1.04f),
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.24f, z + (facing_sign * 0.05f)),
+        make_float3(0.09f, 0.02f, 0.01f),
+        grime_color,
+        0
+    );
+}
+
+static void push_signal_head_rear_detail(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 seam_color = make_float4(0.16f, 0.17f, 0.19f, 1.0f);
+    const MDTBFloat4 panel_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 latch_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.12f, z - (facing_sign * 0.09f)),
+        make_float3(0.10f, 0.015f, 0.01f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.12f, z - (facing_sign * 0.09f)),
+        make_float3(0.10f, 0.015f, 0.01f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z - (facing_sign * 0.10f)),
+        make_float3(0.07f, 0.12f, 0.01f),
+        panel_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z - (facing_sign * 0.11f)),
+        make_float3(0.01f, 0.10f, 0.005f),
+        scaled_color(seam_color, 1.08f),
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.15f, z - (facing_sign * 0.11f)),
+        make_float3(0.02f, 0.02f, 0.005f),
+        latch_color,
+        0
+    );
+}
+
+static void push_signal_head_side_detail(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 hinge_color = make_float4(0.26f, 0.27f, 0.30f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.38f, 0.39f, 0.42f, 1.0f);
+    const float side_sign = facing_sign;
+
+    push_prop(
+        make_float3(x + (side_sign * 0.13f), y, z - (facing_sign * 0.03f)),
+        make_float3(0.01f, 0.16f, 0.015f),
+        hinge_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (side_sign * 0.135f), y + 0.12f, z - (facing_sign * 0.03f)),
+        make_float3(0.015f, 0.025f, 0.02f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (side_sign * 0.135f), y - 0.12f, z - (facing_sign * 0.03f)),
+        make_float3(0.015f, 0.025f, 0.02f),
+        cap_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (side_sign * 0.125f), y, z - (facing_sign * 0.08f)),
+        make_float3(0.005f, 0.08f, 0.01f),
+        scaled_color(hinge_color, 0.92f),
+        0
+    );
+}
+
+static void push_signal_head_rear_coupling(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 conduit_color = make_float4(0.22f, 0.23f, 0.26f, 1.0f);
+    const MDTBFloat4 collar_color = make_float4(0.36f, 0.37f, 0.40f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.18f, z - (facing_sign * 0.12f)),
+        make_float3(0.025f, 0.045f, 0.01f),
+        conduit_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.10f, z - (facing_sign * 0.12f)),
+        make_float3(0.02f, 0.03f, 0.01f),
+        scaled_color(conduit_color, 0.94f),
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.14f, z - (facing_sign * 0.11f)),
+        make_float3(0.035f, 0.02f, 0.008f),
+        collar_color,
+        0
+    );
+}
+
+static void push_signal_head_lower_drain_lip(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 lip_color = make_float4(0.18f, 0.19f, 0.22f, 1.0f);
+    const MDTBFloat4 outlet_color = make_float4(0.30f, 0.31f, 0.34f, 1.0f);
+
+    push_prop(
+        make_float3(x, y - 0.31f, z - (facing_sign * 0.01f)),
+        make_float3(0.09f, 0.01f, 0.045f),
+        lip_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.305f, z + (facing_sign * 0.055f)),
+        make_float3(0.035f, 0.008f, 0.01f),
+        scaled_color(lip_color, 1.06f),
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.315f, z - (facing_sign * 0.055f)),
+        make_float3(0.02f, 0.006f, 0.01f),
+        outlet_color,
+        0
+    );
+}
+
 static void push_signal_head(float x, float y, float z, float facing_sign) {
     const MDTBFloat4 backplate_color = make_float4(0.18f, 0.19f, 0.21f, 1.0f);
     const MDTBFloat4 body_color = make_float4(0.21f, 0.22f, 0.24f, 1.0f);
+    const MDTBFloat4 visor_color = make_float4(0.16f, 0.17f, 0.19f, 1.0f);
 
     push_prop(
         make_float3(x, y, z - (facing_sign * 0.02f)),
@@ -6556,6 +6718,11 @@ static void push_signal_head(float x, float y, float z, float facing_sign) {
         body_color,
         0
     );
+    push_signal_head_rear_detail(x, y, z, facing_sign);
+    push_signal_head_side_detail(x, y, z, facing_sign);
+    push_signal_head_rear_coupling(x, y, z, facing_sign);
+    push_signal_head_lower_drain_lip(x, y, z, facing_sign);
+    push_signal_head_face_weathering(x, y, z, facing_sign);
     push_prop(
         make_float3(x, y + 0.22f, z + (facing_sign * 0.08f)),
         make_float3(0.07f, 0.05f, 0.02f),
@@ -6572,6 +6739,233 @@ static void push_signal_head(float x, float y, float z, float facing_sign) {
         make_float3(x, y - 0.22f, z + (facing_sign * 0.08f)),
         make_float3(0.07f, 0.05f, 0.02f),
         make_float4(0.22f, 0.60f, 0.22f, 1.0f),
+        0
+    );
+    push_signal_head_visor(x, y + 0.22f, z, facing_sign, visor_color);
+    push_signal_head_visor(x, y, z, facing_sign, visor_color);
+    push_signal_head_visor(x, y - 0.22f, z, facing_sign, visor_color);
+}
+
+static void push_signal_head_mount_gasket(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 gasket_color = make_float4(0.13f, 0.14f, 0.16f, 1.0f);
+    const MDTBFloat4 plate_color = make_float4(0.32f, 0.33f, 0.36f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.305f, z - (facing_sign * 0.065f)),
+        make_float3(0.07f, 0.012f, 0.018f),
+        gasket_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.327f, z - (facing_sign * 0.055f)),
+        make_float3(0.05f, 0.010f, 0.015f),
+        plate_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.05f, y + 0.304f, z - (facing_sign * 0.058f)),
+        make_float3(0.012f, 0.020f, 0.014f),
+        scaled_color(gasket_color, 1.04f),
+        0
+    );
+    push_prop(
+        make_float3(x + 0.05f, y + 0.304f, z - (facing_sign * 0.058f)),
+        make_float3(0.012f, 0.020f, 0.014f),
+        scaled_color(gasket_color, 1.04f),
+        0
+    );
+}
+
+static void push_signal_head_mount(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 brace_color = make_float4(0.28f, 0.30f, 0.33f, 1.0f);
+    const MDTBFloat4 clamp_color = make_float4(0.44f, 0.46f, 0.49f, 1.0f);
+
+    push_prop(
+        make_float3(x, y + 0.48f, z - (facing_sign * 0.02f)),
+        make_float3(0.02f, 0.12f, 0.02f),
+        brace_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.58f, z - (facing_sign * 0.02f)),
+        make_float3(0.09f, 0.03f, 0.04f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.38f, z - (facing_sign * 0.03f)),
+        make_float3(0.11f, 0.03f, 0.03f),
+        scaled_color(clamp_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.16f, z - (facing_sign * 0.10f)),
+        make_float3(0.04f, 0.12f, 0.02f),
+        scaled_color(brace_color, 0.92f),
+        0
+    );
+    push_signal_head_mount_gasket(x, y, z, facing_sign);
+}
+
+static void push_signal_arm_reinforcement(float x, float z, float arm_sign) {
+    const MDTBFloat4 brace_color = make_float4(0.31f, 0.33f, 0.36f, 1.0f);
+    const MDTBFloat4 collar_color = make_float4(0.42f, 0.44f, 0.47f, 1.0f);
+
+    push_prop(
+        make_float3(x, 2.66f, z + (arm_sign * 0.14f)),
+        make_float3(0.12f, 0.05f, 0.12f),
+        collar_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.54f, z + (arm_sign * 0.22f)),
+        make_float3(0.10f, 0.04f, 0.16f),
+        scaled_color(collar_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x, 2.36f, z + (arm_sign * 0.28f)),
+        make_float3(0.04f, 0.16f, 0.14f),
+        brace_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.20f, z + (arm_sign * 0.46f)),
+        make_float3(0.03f, 0.12f, 0.14f),
+        scaled_color(brace_color, 0.94f),
+        0
+    );
+    push_prop(
+        make_float3(x, 2.74f, z + (arm_sign * 0.36f)),
+        make_float3(0.09f, 0.03f, 0.12f),
+        scaled_color(collar_color, 1.04f),
+        0
+    );
+}
+
+static void push_pedestrian_signal_readout(float x, float y, float z, int faces_on_x_axis, float facing_sign) {
+    const MDTBFloat4 backplate_color = make_float4(0.18f, 0.19f, 0.22f, 1.0f);
+    const MDTBFloat4 body_color = make_float4(0.23f, 0.24f, 0.27f, 1.0f);
+    const MDTBFloat4 mount_color = make_float4(0.34f, 0.36f, 0.39f, 1.0f);
+    const MDTBFloat4 hand_color = make_float4(0.86f, 0.48f, 0.16f, 1.0f);
+    const MDTBFloat4 walk_color = make_float4(0.84f, 0.86f, 0.82f, 1.0f);
+    const float backplate_half_x = faces_on_x_axis ? 0.04f : 0.13f;
+    const float backplate_half_z = faces_on_x_axis ? 0.13f : 0.04f;
+    const float body_half_x = faces_on_x_axis ? 0.03f : 0.11f;
+    const float body_half_z = faces_on_x_axis ? 0.11f : 0.03f;
+    const float light_half_x = faces_on_x_axis ? 0.02f : 0.08f;
+    const float light_half_z = faces_on_x_axis ? 0.08f : 0.02f;
+    const float rear_offset_x = faces_on_x_axis ? -facing_sign * 0.07f : 0.0f;
+    const float rear_offset_z = faces_on_x_axis ? 0.0f : -facing_sign * 0.07f;
+    const float face_offset_x = faces_on_x_axis ? facing_sign * 0.02f : 0.0f;
+    const float face_offset_z = faces_on_x_axis ? 0.0f : facing_sign * 0.02f;
+
+    push_prop(
+        make_float3(x, y, z),
+        make_float3(backplate_half_x, 0.23f, backplate_half_z),
+        backplate_color,
+        0
+    );
+    push_prop(
+        make_float3(x + face_offset_x, y, z + face_offset_z),
+        make_float3(body_half_x, 0.19f, body_half_z),
+        body_color,
+        0
+    );
+    push_prop(
+        make_float3(x + rear_offset_x, y, z + rear_offset_z),
+        faces_on_x_axis ? make_float3(0.07f, 0.04f, 0.02f) : make_float3(0.02f, 0.04f, 0.07f),
+        mount_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (face_offset_x * 1.5f), y + 0.09f, z + (face_offset_z * 1.5f)),
+        make_float3(light_half_x, 0.04f, light_half_z),
+        hand_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (face_offset_x * 1.5f), y - 0.09f, z + (face_offset_z * 1.5f)),
+        make_float3(light_half_x, 0.04f, light_half_z),
+        walk_color,
+        0
+    );
+    push_prop(
+        make_float3(x + face_offset_x, y + 0.20f, z + face_offset_z),
+        faces_on_x_axis ? make_float3(0.03f, 0.02f, 0.10f) : make_float3(0.10f, 0.02f, 0.03f),
+        scaled_color(body_color, 0.90f),
+        0
+    );
+}
+
+static void push_signal_mast_wiring(float x, float z, float arm_sign) {
+    const MDTBFloat4 cable_color = make_float4(0.17f, 0.18f, 0.20f, 1.0f);
+    const MDTBFloat4 clamp_color = make_float4(0.35f, 0.37f, 0.40f, 1.0f);
+
+    push_prop(
+        make_float3(x, 2.82f, z + (arm_sign * 0.62f)),
+        make_float3(0.02f, 0.02f, 0.70f),
+        cable_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.70f, z + (arm_sign * 0.16f)),
+        make_float3(0.02f, 0.10f, 0.02f),
+        cable_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.76f, z + (arm_sign * 0.28f)),
+        make_float3(0.06f, 0.02f, 0.04f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.76f, z + (arm_sign * 0.74f)),
+        make_float3(0.06f, 0.02f, 0.04f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.76f, z + (arm_sign * 1.02f)),
+        make_float3(0.40f, 0.02f, 0.03f),
+        cable_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.68f, z + (arm_sign * 0.40f)),
+        make_float3(0.04f, 0.02f, 0.03f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.34f, z + (arm_sign * 0.40f)),
+        make_float3(0.02f, 0.14f, 0.02f),
+        cable_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.34f, 2.60f, z + (arm_sign * 1.02f)),
+        make_float3(0.04f, 0.02f, 0.03f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.34f, 2.60f, z + (arm_sign * 1.02f)),
+        make_float3(0.04f, 0.02f, 0.03f),
+        clamp_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.34f, 2.46f, z + (arm_sign * 1.02f)),
+        make_float3(0.02f, 0.13f, 0.02f),
+        cable_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.34f, 2.46f, z + (arm_sign * 1.02f)),
+        make_float3(0.02f, 0.13f, 0.02f),
+        cable_color,
         0
     );
 }
@@ -6644,9 +7038,125 @@ static void push_signal_pole(float x, float z) {
         0
     );
 
+    push_signal_arm_reinforcement(x, z, arm_sign);
+    push_signal_mast_wiring(x, z, arm_sign);
+    push_signal_head_mount(x - 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
+    push_signal_head_mount(x + 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
+    push_signal_head_mount(x, 1.94f, z + (arm_sign * 0.40f), arm_sign);
     push_signal_head(x - 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
     push_signal_head(x + 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
     push_signal_head(x, 1.94f, z + (arm_sign * 0.40f), arm_sign);
+}
+
+static void push_signal_pole_corner_detail(
+    MDTBFloat3 origin,
+    float x_sign,
+    float z_sign,
+    float signal_x,
+    float signal_z,
+    MDTBFloat4 sidewalk_color
+) {
+    const MDTBFloat4 footing_color = scaled_color(sidewalk_color, 0.80f);
+    const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.66f);
+    const MDTBFloat4 hardware_color = make_float4(0.28f, 0.31f, 0.34f, 1.0f);
+    const MDTBFloat4 plate_color = make_float4(0.74f, 0.76f, 0.79f, 1.0f);
+    const MDTBFloat4 speaker_color = make_float4(0.22f, 0.24f, 0.26f, 1.0f);
+    const MDTBFloat4 button_color = make_float4(0.86f, 0.68f, 0.18f, 1.0f);
+    const float pole_x = origin.x + (x_sign * signal_x);
+    const float pole_z = origin.z + (z_sign * signal_z);
+    const float inward_x = -x_sign;
+    const float inward_z = -z_sign;
+
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.01f, pole_z),
+        make_float3(0.34f, 0.01f, 0.34f),
+        footing_color
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.02f, pole_z),
+        make_float3(0.22f, 0.01f, 0.04f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.02f, pole_z),
+        make_float3(0.04f, 0.01f, 0.22f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x + (inward_x * 0.22f), kSidewalkHeight + 0.01f, pole_z),
+        make_float3(0.10f, 0.01f, 0.18f),
+        scaled_color(footing_color, 1.04f)
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.01f, pole_z + (inward_z * 0.22f)),
+        make_float3(0.18f, 0.01f, 0.10f),
+        scaled_color(footing_color, 1.04f)
+    ));
+
+    push_prop(
+        make_float3(pole_x + (inward_x * 0.16f), 1.02f, pole_z + (z_sign * 0.12f)),
+        make_float3(0.04f, 0.18f, 0.10f),
+        hardware_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (inward_x * 0.21f), 1.02f, pole_z + (z_sign * 0.12f)),
+        make_float3(0.02f, 0.14f, 0.08f),
+        plate_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (inward_x * 0.19f), 1.13f, pole_z + (z_sign * 0.12f)),
+        make_float3(0.01f, 0.03f, 0.04f),
+        speaker_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (inward_x * 0.19f), 0.97f, pole_z + (z_sign * 0.12f)),
+        make_float3(0.01f, 0.04f, 0.03f),
+        button_color,
+        0
+    );
+
+    push_prop(
+        make_float3(pole_x + (x_sign * 0.12f), 1.02f, pole_z + (inward_z * 0.16f)),
+        make_float3(0.10f, 0.18f, 0.04f),
+        hardware_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (x_sign * 0.12f), 1.02f, pole_z + (inward_z * 0.21f)),
+        make_float3(0.08f, 0.14f, 0.02f),
+        plate_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (x_sign * 0.12f), 1.13f, pole_z + (inward_z * 0.19f)),
+        make_float3(0.04f, 0.03f, 0.01f),
+        speaker_color,
+        0
+    );
+    push_prop(
+        make_float3(pole_x + (x_sign * 0.12f), 0.97f, pole_z + (inward_z * 0.19f)),
+        make_float3(0.03f, 0.04f, 0.01f),
+        button_color,
+        0
+    );
+
+    push_pedestrian_signal_readout(
+        pole_x + (inward_x * 0.29f),
+        1.52f,
+        pole_z + (z_sign * 0.14f),
+        1,
+        inward_x
+    );
+    push_pedestrian_signal_readout(
+        pole_x + (x_sign * 0.14f),
+        1.52f,
+        pole_z + (inward_z * 0.29f),
+        0,
+        inward_z
+    );
 }
 
 static void push_utility_pole(float x, float z, int line_on_x_axis, float transformer_side) {
@@ -7244,6 +7754,7 @@ static void push_corner_curb_return(
 ) {
     const MDTBFloat4 lip_color = scaled_color(curb_color, 0.96f);
     const MDTBFloat4 landing_color = scaled_color(sidewalk_color, 1.02f);
+    const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.88f);
 
     push_scene_box(make_box(
         make_float3(origin.x + (x_sign * (crosswalk_offset_x + 0.20f)), 0.09f, origin.z + (z_sign * (crosswalk_offset_z + 1.64f))),
@@ -7275,6 +7786,21 @@ static void push_corner_curb_return(
         make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.18f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 1.18f))),
         make_float3(0.40f, kSidewalkHeight * 0.5f, 0.40f),
         scaled_color(landing_color, 1.04f)
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.14f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 1.68f))),
+        make_float3(0.34f, 0.01f, 0.06f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.68f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 1.14f))),
+        make_float3(0.06f, 0.01f, 0.34f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.34f)), kSidewalkHeight + 0.02f, origin.z + (z_sign * (crosswalk_offset_z + 1.34f))),
+        make_float3(0.12f, 0.01f, 0.12f),
+        scaled_color(seam_color, 1.05f)
     ));
 }
 
@@ -7432,6 +7958,59 @@ static void push_crosswalk_edge_treatment_z(float x_origin, float z_center, MDTB
     ));
 }
 
+static void push_tactile_warning_pad(
+    float x,
+    float z,
+    int align_on_x_axis,
+    MDTBFloat4 pad_color,
+    MDTBFloat4 stud_color,
+    MDTBFloat4 edge_color
+) {
+    const float pad_half_x = align_on_x_axis ? 0.48f : 0.12f;
+    const float pad_half_z = align_on_x_axis ? 0.12f : 0.48f;
+    const float stud_step = 0.18f;
+
+    push_scene_box(make_box(
+        make_float3(x, kSidewalkHeight + 0.01f, z),
+        make_float3(pad_half_x, 0.01f, pad_half_z),
+        pad_color
+    ));
+
+    if (align_on_x_axis) {
+        push_scene_box(make_box(
+            make_float3(x, kSidewalkHeight + 0.02f, z),
+            make_float3(pad_half_x * 0.92f, 0.01f, 0.03f),
+            edge_color
+        ));
+
+        for (int row = -1; row <= 1; row += 2) {
+            for (int column = -1; column <= 1; ++column) {
+                push_scene_box(make_box(
+                    make_float3(x + ((float)column * stud_step), kSidewalkHeight + 0.03f, z + ((float)row * 0.04f)),
+                    make_float3(0.04f, 0.01f, 0.03f),
+                    stud_color
+                ));
+            }
+        }
+    } else {
+        push_scene_box(make_box(
+            make_float3(x, kSidewalkHeight + 0.02f, z),
+            make_float3(0.03f, 0.01f, pad_half_z * 0.92f),
+            edge_color
+        ));
+
+        for (int row = -1; row <= 1; row += 2) {
+            for (int column = -1; column <= 1; ++column) {
+                push_scene_box(make_box(
+                    make_float3(x + ((float)row * 0.04f), kSidewalkHeight + 0.03f, z + ((float)column * stud_step)),
+                    make_float3(0.03f, 0.01f, 0.04f),
+                    stud_color
+                ));
+            }
+        }
+    }
+}
+
 static void push_signal_wait_corner(
     MDTBFloat3 origin,
     float x_sign,
@@ -7444,6 +8023,10 @@ static void push_signal_wait_corner(
 ) {
     const MDTBFloat4 pad_color = scaled_color(sidewalk_color, 1.05f);
     const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.78f);
+    const MDTBFloat4 approach_color = scaled_color(sidewalk_color, 0.88f);
+    const MDTBFloat4 tactile_color = make_float4(0.82f, 0.68f, 0.22f, 1.0f);
+    const MDTBFloat4 tactile_stud_color = scaled_color(tactile_color, 1.10f);
+    const MDTBFloat4 tactile_edge_color = scaled_color(tactile_color, 0.82f);
 
     push_prop(
         make_float3(origin.x + (x_sign * (signal_x - 1.34f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 2.04f))),
@@ -7468,6 +8051,32 @@ static void push_signal_wait_corner(
         make_float3(0.05f, 0.01f, 0.64f),
         seam_color,
         0
+    );
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (signal_x - 1.34f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 1.36f))),
+        make_float3(0.54f, 0.01f, 0.08f),
+        approach_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.36f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (signal_z - 1.34f))),
+        make_float3(0.08f, 0.01f, 0.54f),
+        approach_color
+    ));
+    push_tactile_warning_pad(
+        origin.x + (x_sign * (signal_x - 1.34f)),
+        origin.z + (z_sign * (crosswalk_offset_z + 1.56f)),
+        1,
+        tactile_color,
+        tactile_stud_color,
+        tactile_edge_color
+    );
+    push_tactile_warning_pad(
+        origin.x + (x_sign * (crosswalk_offset_x + 1.56f)),
+        origin.z + (z_sign * (signal_z - 1.34f)),
+        0,
+        tactile_color,
+        tactile_stud_color,
+        tactile_edge_color
     );
 }
 
@@ -7798,6 +8407,8 @@ static void push_signal_service_corner(
 ) {
     const MDTBFloat4 pad_color = scaled_color(sidewalk_color, 0.86f);
     const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.68f);
+    const MDTBFloat4 edge_color = scaled_color(sidewalk_color, 0.74f);
+    const MDTBFloat4 scuff_color = scaled_color(sidewalk_color, 0.79f);
     const MDTBFloat4 cover_color = make_float4(0.42f, 0.44f, 0.46f, 1.0f);
     const float cabinet_x = origin.x + (x_sign * (signal_x + 1.95f));
     const float cabinet_z = origin.z + (z_sign * (signal_z - 1.75f));
@@ -7816,6 +8427,26 @@ static void push_signal_service_corner(
         pad_color
     ));
     push_scene_box(make_box(
+        make_float3(cabinet_x, kSidewalkHeight + 0.015f, cabinet_z - (cabinet_half_z + 0.12f)),
+        make_float3(cabinet_half_x * 0.90f, 0.01f, 0.05f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(cabinet_x, kSidewalkHeight + 0.015f, cabinet_z + (cabinet_half_z + 0.12f)),
+        make_float3(cabinet_half_x * 0.90f, 0.01f, 0.05f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(cabinet_x - (cabinet_half_x + 0.12f), kSidewalkHeight + 0.015f, cabinet_z),
+        make_float3(0.05f, 0.01f, cabinet_half_z * 0.90f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(cabinet_x + (cabinet_half_x + 0.12f), kSidewalkHeight + 0.015f, cabinet_z),
+        make_float3(0.05f, 0.01f, cabinet_half_z * 0.90f),
+        edge_color
+    ));
+    push_scene_box(make_box(
         make_float3(cabinet_x, kSidewalkHeight + 0.02f, cabinet_z),
         align_on_x_axis ? make_float3(cabinet_half_x * 0.76f, 0.01f, 0.05f) : make_float3(0.05f, 0.01f, cabinet_half_z * 0.76f),
         seam_color
@@ -7823,8 +8454,18 @@ static void push_signal_service_corner(
 
     push_scene_box(make_box(
         make_float3(pole_x, kSidewalkHeight + 0.01f, (pole_z + cabinet_z) * 0.5f),
+        make_float3(0.10f, 0.01f, conduit_half_z + 0.14f),
+        scuff_color
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.01f, (pole_z + cabinet_z) * 0.5f),
         make_float3(0.05f, 0.01f, conduit_half_z),
         seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3((pole_x + cabinet_x) * 0.5f, kSidewalkHeight + 0.01f, cabinet_z),
+        make_float3(conduit_half_x + 0.18f, 0.01f, 0.10f),
+        scuff_color
     ));
     push_scene_box(make_box(
         make_float3((pole_x + cabinet_x) * 0.5f, kSidewalkHeight + 0.01f, cabinet_z),
@@ -7837,6 +8478,11 @@ static void push_signal_service_corner(
         cover_color
     ));
 
+    push_scene_box(make_box(
+        make_float3(hydrant_x, kSidewalkHeight + 0.01f, hydrant_z),
+        make_float3(0.42f, 0.01f, 0.42f),
+        edge_color
+    ));
     push_scene_box(make_box(
         make_float3(hydrant_x, kSidewalkHeight + 0.01f, hydrant_z),
         make_float3(0.30f, 0.01f, 0.30f),
@@ -8175,6 +8821,102 @@ static void push_lane_arrow_x(float x_center, float z_origin, float direction_si
         make_float3(x_center + (direction_sign * 0.34f), kRoadHeight + 0.01f, z_origin + 0.42f),
         make_float3(0.46f, 0.01f, 0.18f),
         stripe_color
+    ));
+}
+
+static void push_turn_pocket_surface_z(
+    float x_origin,
+    float z_origin,
+    float direction_sign,
+    float stop_bar_offset,
+    float arrow_offset,
+    float lane_offset,
+    MDTBFloat4 road_color
+) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.77f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+    const float near_along = stop_bar_offset + 1.08f;
+    const float far_along = arrow_offset - 2.22f;
+    if (far_along <= near_along) {
+        return;
+    }
+
+    const float pocket_half_x = fmaxf(lane_offset + 0.52f, 1.64f);
+    const float center_along = (near_along + far_along) * 0.5f;
+    const float half_along = (far_along - near_along) * 0.5f;
+
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.005f, z_origin + (direction_sign * (near_along + half_along * 0.40f))),
+        make_float3(pocket_half_x * 0.66f, 0.01f, fmaxf(half_along * 0.34f, 0.88f)),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.005f, z_origin + (direction_sign * center_along)),
+        make_float3(pocket_half_x * 0.84f, 0.01f, fmaxf(half_along * 0.58f, 1.22f)),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.015f, z_origin + (direction_sign * center_along)),
+        make_float3(0.06f, 0.01f, fmaxf(half_along * 0.70f, 1.10f)),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - (pocket_half_x * 0.72f), kRoadHeight + 0.015f, z_origin + (direction_sign * center_along)),
+        make_float3(0.07f, 0.01f, fmaxf(half_along * 0.46f, 0.82f)),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + (pocket_half_x * 0.72f), kRoadHeight + 0.015f, z_origin + (direction_sign * center_along)),
+        make_float3(0.07f, 0.01f, fmaxf(half_along * 0.46f, 0.82f)),
+        seam_color
+    ));
+}
+
+static void push_turn_pocket_surface_x(
+    float x_origin,
+    float z_origin,
+    float direction_sign,
+    float stop_bar_offset,
+    float arrow_offset,
+    float lane_offset,
+    MDTBFloat4 road_color
+) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.77f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+    const float near_along = stop_bar_offset + 1.08f;
+    const float far_along = arrow_offset - 2.22f;
+    if (far_along <= near_along) {
+        return;
+    }
+
+    const float pocket_half_z = fmaxf(lane_offset + 0.52f, 1.64f);
+    const float center_along = (near_along + far_along) * 0.5f;
+    const float half_along = (far_along - near_along) * 0.5f;
+
+    push_scene_box(make_box(
+        make_float3(x_origin + (direction_sign * (near_along + half_along * 0.40f)), kRoadHeight + 0.005f, z_origin),
+        make_float3(fmaxf(half_along * 0.34f, 0.88f), 0.01f, pocket_half_z * 0.66f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + (direction_sign * center_along), kRoadHeight + 0.005f, z_origin),
+        make_float3(fmaxf(half_along * 0.58f, 1.22f), 0.01f, pocket_half_z * 0.84f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + (direction_sign * center_along), kRoadHeight + 0.015f, z_origin),
+        make_float3(fmaxf(half_along * 0.70f, 1.10f), 0.01f, 0.06f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + (direction_sign * center_along), kRoadHeight + 0.015f, z_origin - (pocket_half_z * 0.72f)),
+        make_float3(fmaxf(half_along * 0.46f, 0.82f), 0.01f, 0.07f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + (direction_sign * center_along), kRoadHeight + 0.015f, z_origin + (pocket_half_z * 0.72f)),
+        make_float3(fmaxf(half_along * 0.46f, 0.82f), 0.01f, 0.07f),
+        seam_color
     ));
 }
 
@@ -9163,6 +9905,43 @@ static void build_road_markings(void) {
         push_crosswalk_z(x_origin, z_origin - horizontal_crosswalk_offset);
         push_crosswalk_z(x_origin, z_origin + horizontal_crosswalk_offset);
 
+        push_turn_pocket_surface_z(
+            x_origin,
+            z_origin,
+            -1.0f,
+            northsouth_stop_bar_offset,
+            northsouth_arrow_offset,
+            vertical_road->lane_offset,
+            northsouth_road_color
+        );
+        push_turn_pocket_surface_z(
+            x_origin,
+            z_origin,
+            1.0f,
+            northsouth_stop_bar_offset,
+            northsouth_arrow_offset,
+            vertical_road->lane_offset,
+            northsouth_road_color
+        );
+        push_turn_pocket_surface_x(
+            x_origin,
+            z_origin,
+            -1.0f,
+            eastwest_stop_bar_offset,
+            eastwest_arrow_offset,
+            horizontal_road->lane_offset,
+            eastwest_road_color
+        );
+        push_turn_pocket_surface_x(
+            x_origin,
+            z_origin,
+            1.0f,
+            eastwest_stop_bar_offset,
+            eastwest_arrow_offset,
+            horizontal_road->lane_offset,
+            eastwest_road_color
+        );
+
         push_stop_bar_shoulder_z(x_origin, z_origin - northsouth_stop_bar_offset, northsouth_stop_bar_half_width, northsouth_road_color);
         push_stop_bar_shoulder_z(x_origin, z_origin + northsouth_stop_bar_offset, northsouth_stop_bar_half_width, northsouth_road_color);
         push_stop_bar_shoulder_x(x_origin - eastwest_stop_bar_offset, z_origin, eastwest_stop_bar_half_width, eastwest_road_color);
@@ -9353,6 +10132,14 @@ static void build_intersection_props(const MDTBBlockDescriptor *block) {
             push_signal_pole(
                 block->origin.x + ((float)x_sign * signal_x),
                 block->origin.z + ((float)z_sign * signal_z)
+            );
+            push_signal_pole_corner_detail(
+                block->origin,
+                (float)x_sign,
+                (float)z_sign,
+                signal_x,
+                signal_z,
+                plaza_color
             );
             push_signal_control_box(
                 block->origin.x + ((float)x_sign * (signal_x + 1.95f)),
