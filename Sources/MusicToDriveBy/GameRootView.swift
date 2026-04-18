@@ -101,6 +101,12 @@ private struct CombatHUDView: View {
                             detail: model.systemDetail,
                             tint: tint
                         )
+                        HUDDetailCard(
+                            section: "Map",
+                            headline: model.mapTitle,
+                            detail: model.mapDetail,
+                            tint: tint
+                        )
                     }
                 }
             }

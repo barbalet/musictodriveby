@@ -13,6 +13,8 @@ struct CombatHUDModel: Equatable {
     var encounterDetail = "No pressure yet"
     var systemTitle = "Street calm"
     var systemDetail = "No witness reaction yet"
+    var mapTitle = "West Adams"
+    var mapDetail = "Mid-city West tile / Crenshaw Blvd"
     var promptText = "Walk north to the combat lane"
     var isCritical = false
     var isVehicleMode = false

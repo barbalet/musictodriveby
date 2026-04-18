@@ -66,6 +66,8 @@ typedef struct {
     MDTBFloat3 midpoint;
     float length;
     uint32_t axis;
+    uint32_t road_class;
+    uint32_t corridor;
 } MDTBRoadLink;
 
 typedef struct {
@@ -138,6 +140,12 @@ typedef struct {
     uint32_t territory_commit_state;
     float territory_commit_timer;
     float territory_commit_progress;
+    uint32_t territory_resolve_state;
+    float territory_resolve_timer;
+    float territory_resolve_progress;
+    uint32_t territory_reapproach_mode;
+    float territory_reapproach_timer;
+    float territory_preferred_side;
     uint32_t active_pedestrian_spawn_count;
     uint32_t active_vehicle_spawn_count;
     uint32_t traversal_mode;
@@ -274,9 +282,14 @@ enum {
 };
 
 enum {
-    MDTBDistrictSouthHub = 0,
-    MDTBDistrictMapleHeights = 1,
-    MDTBDistrictMarketSpur = 2,
+    MDTBDistrictWestAdams = 0,
+    MDTBDistrictJeffersonPark = 1,
+    MDTBDistrictExpositionPark = 2,
+    MDTBDistrictLeimertPark = 3,
+    MDTBDistrictCrenshawCorridor = 4,
+    MDTBDistrictHistoricSouthCentral = 5,
+    MDTBDistrictVermontSquare = 6,
+    MDTBDistrictFlorenceFirestone = 7,
 };
 
 enum {
@@ -311,13 +324,33 @@ enum {
 };
 
 enum {
-    MDTBWorldChunkWestGrid = 0,
-    MDTBWorldChunkEastGrid = 1,
+    MDTBWorldChunkMidCityWest = 0,
+    MDTBWorldChunkCentralSouth = 1,
+    MDTBWorldChunkExpoCrenshaw = 2,
+    MDTBWorldChunkFlorenceVermont = 3,
 };
 
 enum {
     MDTBRoadAxisNorthSouth = 0,
     MDTBRoadAxisEastWest = 1,
+};
+
+enum {
+    MDTBRoadClassResidentialStreet = 0,
+    MDTBRoadClassAvenue = 1,
+    MDTBRoadClassBoulevard = 2,
+    MDTBRoadClassConnector = 3,
+};
+
+enum {
+    MDTBCorridorCrenshawBlvd = 0,
+    MDTBCorridorArlingtonAve = 1,
+    MDTBCorridorWesternAve = 2,
+    MDTBCorridorVermontAve = 3,
+    MDTBCorridorAdamsBlvd = 4,
+    MDTBCorridorJeffersonBlvd = 5,
+    MDTBCorridorExpositionBlvd = 6,
+    MDTBCorridorMartinLutherKingBlvd = 7,
 };
 
 enum {
@@ -424,6 +457,19 @@ enum {
     MDTBTerritoryCommitWindow = 1,
     MDTBTerritoryCommitActive = 2,
     MDTBTerritoryCommitComplete = 3,
+};
+
+enum {
+    MDTBTerritoryResolveNone = 0,
+    MDTBTerritoryResolveWindow = 1,
+    MDTBTerritoryResolveHold = 2,
+    MDTBTerritoryResolvePullout = 3,
+};
+
+enum {
+    MDTBTerritoryReapproachNone = 0,
+    MDTBTerritoryReapproachReclaim = 1,
+    MDTBTerritoryReapproachRetake = 2,
 };
 
 void mdtb_engine_init(MDTBEngineState *state);

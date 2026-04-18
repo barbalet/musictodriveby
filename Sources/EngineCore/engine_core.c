@@ -4,15 +4,16 @@
 #include <string.h>
 
 enum {
-    MDTBMaxSceneBoxes = 4096,
-    MDTBMaxCollisionBoxes = 1536,
-    MDTBMaxBlocks = 16,
-    MDTBMaxRoadLinks = 32,
-    MDTBMaxVehicleAnchors = 16,
-    MDTBMaxInterestPoints = 128,
-    MDTBMaxDynamicProps = 192,
+    MDTBMaxSceneBoxes = 16384,
+    MDTBMaxCollisionBoxes = 6144,
+    MDTBMaxBlocks = 32,
+    MDTBMaxRoadLinks = 128,
+    MDTBMaxRoadSpines = 16,
+    MDTBMaxVehicleAnchors = 64,
+    MDTBMaxInterestPoints = 320,
+    MDTBMaxDynamicProps = 768,
     MDTBMaxPopulationProfiles = MDTBMaxBlocks,
-    MDTBMaxTrafficOccupancies = 32,
+    MDTBMaxTrafficOccupancies = 96,
 };
 
 typedef struct {
@@ -42,6 +43,82 @@ typedef struct {
     float third_person_side;
 } MDTBVehicleTuning;
 
+typedef struct {
+    float coordinate;
+    uint32_t axis;
+    uint32_t road_class;
+    uint32_t corridor;
+} MDTBRoadSpine;
+
+typedef struct {
+    float road_half_width;
+    float curb_outer;
+    float sidewalk_outer;
+    float lane_offset;
+    float median_half_width;
+} MDTBRoadProfile;
+
+typedef struct {
+    uint32_t chunk_index;
+    float min_x;
+    float max_x;
+    float min_z;
+    float max_z;
+    float corner_plaza_scale;
+    float planter_scale;
+    float refuge_scale;
+} MDTBWorldChunkDescriptor;
+
+typedef struct {
+    uint32_t corridor;
+    uint32_t axis;
+    uint32_t road_class;
+    float coordinate;
+    float crosswalk_offset;
+    float stop_bar_offset;
+    float arrow_offset;
+    float signal_offset;
+    float planter_offset;
+    float plaza_scale;
+} MDTBCorridorDescriptor;
+
+typedef struct {
+    const MDTBCorridorDescriptor *vertical;
+    const MDTBCorridorDescriptor *horizontal;
+    const MDTBWorldChunkDescriptor *chunk;
+} MDTBIntersectionProfile;
+
+typedef struct {
+    uint32_t frontage_template;
+    float shopfront_z;
+    float furniture_z;
+    float transit_stop_z;
+    float rear_anchor_z;
+    float rear_fence_z;
+    float planter_size;
+    float primary_awning_scale;
+    float secondary_awning_scale;
+    float loading_zone_z;
+    float loading_zone_half_z;
+    float loading_zone_half_x_scale;
+} MDTBFrontageDescriptor;
+
+typedef struct {
+    const MDTBFrontageDescriptor *descriptor;
+    MDTBIntersectionProfile intersection;
+    float shopfront_z;
+    float furniture_z;
+    float transit_stop_z;
+    float rear_anchor_z;
+    float rear_fence_z;
+    float planter_size;
+    float primary_awning_scale;
+    float secondary_awning_scale;
+    float loading_zone_z;
+    float loading_zone_half_z;
+    float loading_zone_half_x_scale;
+} MDTBFrontageProfile;
+
 static MDTBSceneBox g_scene_boxes[MDTBMaxSceneBoxes];
 static size_t g_scene_box_count = 0u;
 static MDTBBox g_collision_boxes[MDTBMaxCollisionBoxes];
@@ -50,6 +127,8 @@ static MDTBBlockDescriptor g_blocks[MDTBMaxBlocks];
 static size_t g_block_count = 0u;
 static MDTBRoadLink g_road_links[MDTBMaxRoadLinks];
 static size_t g_road_link_count = 0u;
+static MDTBRoadSpine g_road_spines[MDTBMaxRoadSpines];
+static size_t g_road_spine_count = 0u;
 static MDTBVehicleAnchor g_vehicle_anchors[MDTBMaxVehicleAnchors];
 static size_t g_vehicle_anchor_count = 0u;
 static MDTBInterestPoint g_interest_points[MDTBMaxInterestPoints];
@@ -68,6 +147,17 @@ static void build_frontage_for_block(const MDTBBlockDescriptor *block);
 static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
 static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32_t block_index);
 static void build_combat_sandbox_props(void);
+static void rebuild_road_spines(void);
+static const MDTBRoadSpine *road_spine_for_axis_coordinate(uint32_t axis, float coordinate);
+static int road_spine_segment_hits_intersection(const MDTBRoadSpine *spine, float segment_center);
+static const MDTBRoadProfile *road_profile_for_class(uint32_t road_class);
+static const MDTBRoadProfile *road_profile_for_spine(const MDTBRoadSpine *spine);
+static const MDTBRoadProfile *road_profile_for_link(const MDTBRoadLink *link);
+static const MDTBWorldChunkDescriptor *world_chunk_descriptor_for_index(uint32_t chunk_index);
+static const MDTBCorridorDescriptor *corridor_descriptor_for_axis_coordinate(uint32_t axis, float coordinate);
+static MDTBIntersectionProfile intersection_profile_for_block(const MDTBBlockDescriptor *block);
+static const MDTBFrontageDescriptor *frontage_descriptor_for_template(uint32_t frontage_template);
+static MDTBFrontageProfile frontage_profile_for_block(const MDTBBlockDescriptor *block);
 static MDTBFloat3 view_forward(float yaw, float pitch);
 static MDTBFloat3 normalize_flat(MDTBFloat3 value);
 static MDTBFloat3 vehicle_forward_flat(float heading);
@@ -76,6 +166,9 @@ static MDTBFloat3 actor_focus_position(const MDTBEngineState *state);
 static MDTBFloat3 player_cover_position(const MDTBEngineState *state);
 static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state);
 static MDTBFloat3 lookout_anchor_position(uint32_t anchor_index);
+static float territory_preferred_side_bias(const MDTBEngineState *state);
+static float territory_preferred_side_strength(const MDTBEngineState *state);
+static MDTBFloat3 territory_shoulder_focus_position(const MDTBEngineState *state, MDTBFloat3 position, float lateral_offset, float depth_offset);
 static int territory_descriptor_for_position(MDTBFloat3 position, uint32_t *faction_out, uint32_t *phase_out, float *presence_out);
 static void step_territory_state(MDTBEngineState *state, float dt);
 static void start_hostile_search(MDTBEngineState *state, MDTBFloat3 position, float duration);
@@ -94,8 +187,8 @@ static const float kPi = 3.1415926535f;
 static const float kRoadHalfWidth = 5.8f;
 static const float kCurbOuter = 6.35f;
 static const float kSidewalkOuter = 12.0f;
-static const float kPlayableHalfWidth = 168.0f;
-static const float kPlayableHalfLength = 132.0f;
+static const float kPlayableHalfWidth = 360.0f;
+static const float kPlayableHalfLength = 288.0f;
 static const float kRoadHeight = 0.02f;
 static const float kSidewalkHeight = 0.22f;
 static const float kPlayerRadius = 0.34f;
@@ -178,6 +271,8 @@ static const float kCourtSetTerritoryEntryZ = 33.5f;
 static const float kCourtSetTerritoryCoreZ = 43.5f;
 static const float kCourtSetTerritoryMaxZ = 67.5f;
 static const float kTerritoryWatchCarryDuration = 3.6f;
+static const float kTerritoryReapproachReclaimDuration = 4.8f;
+static const float kTerritoryReapproachRetakeDuration = 4.2f;
 static const MDTBFloat3 kTerritoryPatrolBasePosition = {-26.2f, kSidewalkHeight, 30.2f};
 static const MDTBFloat3 kTerritoryPatrolLinePosition = {-21.8f, kSidewalkHeight, 35.8f};
 static const MDTBFloat3 kTerritoryPatrolHandoffPosition = {-17.4f, kSidewalkHeight, 40.4f};
@@ -192,33 +287,159 @@ static const MDTBFloat3 kLookoutPressureAnchors[] = {
 };
 
 static const MDTBBlockDescriptor kBlockLayout[] = {
-    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictSouthHub, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateCivicRetail, MDTBWorldChunkWestGrid},
-    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 56.0f, MDTBDistrictMapleHeights, MDTBBlockTagResidential | MDTBBlockTagTransit, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkWestGrid},
-    {{96.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 2u, 58.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkEastGrid},
-    {{96.0f, 0.0f, 72.0f}, MDTBBlockKindMixedUse, 3u, 56.0f, MDTBDistrictMarketSpur, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagSpur | MDTBBlockTagCourt, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkEastGrid},
+    {{0.0f, 0.0f, 0.0f}, MDTBBlockKindHub, 0u, 58.0f, MDTBDistrictWestAdams, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateCivicRetail, MDTBWorldChunkMidCityWest},
+    {{0.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 1u, 56.0f, MDTBDistrictWestAdams, MDTBBlockTagResidential | MDTBBlockTagTransit | MDTBBlockTagCourt, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkMidCityWest},
+    {{0.0f, 0.0f, 144.0f}, MDTBBlockKindResidential, 2u, 56.0f, MDTBDistrictLeimertPark, MDTBBlockTagResidential | MDTBBlockTagLandmark, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkExpoCrenshaw},
+    {{0.0f, 0.0f, 216.0f}, MDTBBlockKindMixedUse, 3u, 58.0f, MDTBDistrictLeimertPark, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkExpoCrenshaw},
+    {{96.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 4u, 58.0f, MDTBDistrictJeffersonPark, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkMidCityWest},
+    {{96.0f, 0.0f, 72.0f}, MDTBBlockKindMixedUse, 5u, 58.0f, MDTBDistrictExpositionPark, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkMidCityWest},
+    {{96.0f, 0.0f, 144.0f}, MDTBBlockKindResidential, 6u, 56.0f, MDTBDistrictCrenshawCorridor, MDTBBlockTagResidential | MDTBBlockTagTransit | MDTBBlockTagCourt, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkExpoCrenshaw},
+    {{96.0f, 0.0f, 216.0f}, MDTBBlockKindMixedUse, 7u, 58.0f, MDTBDistrictCrenshawCorridor, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkExpoCrenshaw},
+    {{192.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 8u, 58.0f, MDTBDistrictHistoricSouthCentral, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagSpur, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkCentralSouth},
+    {{192.0f, 0.0f, 72.0f}, MDTBBlockKindMixedUse, 9u, 58.0f, MDTBDistrictHistoricSouthCentral, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark | MDTBBlockTagCourt, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkCentralSouth},
+    {{192.0f, 0.0f, 144.0f}, MDTBBlockKindMixedUse, 10u, 58.0f, MDTBDistrictHistoricSouthCentral, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagSpur, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkFlorenceVermont},
+    {{192.0f, 0.0f, 216.0f}, MDTBBlockKindMixedUse, 11u, 58.0f, MDTBDistrictFlorenceFirestone, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagSpur | MDTBBlockTagCourt, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkFlorenceVermont},
+    {{288.0f, 0.0f, 0.0f}, MDTBBlockKindMixedUse, 12u, 58.0f, MDTBDistrictVermontSquare, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagLandmark, MDTBFrontageTemplateTransitMarket, MDTBWorldChunkCentralSouth},
+    {{288.0f, 0.0f, 72.0f}, MDTBBlockKindResidential, 13u, 56.0f, MDTBDistrictVermontSquare, MDTBBlockTagResidential | MDTBBlockTagTransit, MDTBFrontageTemplateResidentialCourt, MDTBWorldChunkCentralSouth},
+    {{288.0f, 0.0f, 144.0f}, MDTBBlockKindMixedUse, 14u, 58.0f, MDTBDistrictFlorenceFirestone, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagSpur | MDTBBlockTagLandmark, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkFlorenceVermont},
+    {{288.0f, 0.0f, 216.0f}, MDTBBlockKindMixedUse, 15u, 58.0f, MDTBDistrictFlorenceFirestone, MDTBBlockTagRetail | MDTBBlockTagTransit | MDTBBlockTagSpur | MDTBBlockTagCourt, MDTBFrontageTemplateServiceSpur, MDTBWorldChunkFlorenceVermont},
 };
 
 static const MDTBRoadLink kRoadLayout[] = {
-    {0u, 1u, {0.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
-    {0u, 2u, {48.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest},
-    {1u, 3u, {48.0f, 0.22f, 72.0f}, 96.0f, MDTBRoadAxisEastWest},
-    {2u, 3u, {96.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth},
+    {0u, 1u, {0.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassBoulevard, MDTBCorridorCrenshawBlvd},
+    {1u, 2u, {0.0f, 0.22f, 108.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassBoulevard, MDTBCorridorCrenshawBlvd},
+    {2u, 3u, {0.0f, 0.22f, 180.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassBoulevard, MDTBCorridorCrenshawBlvd},
+    {4u, 5u, {96.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorArlingtonAve},
+    {5u, 6u, {96.0f, 0.22f, 108.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorArlingtonAve},
+    {6u, 7u, {96.0f, 0.22f, 180.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorArlingtonAve},
+    {8u, 9u, {192.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorWesternAve},
+    {9u, 10u, {192.0f, 0.22f, 108.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorWesternAve},
+    {10u, 11u, {192.0f, 0.22f, 180.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorWesternAve},
+    {12u, 13u, {288.0f, 0.22f, 36.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorVermontAve},
+    {13u, 14u, {288.0f, 0.22f, 108.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorVermontAve},
+    {14u, 15u, {288.0f, 0.22f, 180.0f}, 72.0f, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, MDTBCorridorVermontAve},
+    {0u, 4u, {48.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorAdamsBlvd},
+    {4u, 8u, {144.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorAdamsBlvd},
+    {8u, 12u, {240.0f, 0.22f, 0.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorAdamsBlvd},
+    {1u, 5u, {48.0f, 0.22f, 72.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorJeffersonBlvd},
+    {5u, 9u, {144.0f, 0.22f, 72.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorJeffersonBlvd},
+    {9u, 13u, {240.0f, 0.22f, 72.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorJeffersonBlvd},
+    {2u, 6u, {48.0f, 0.22f, 144.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorExpositionBlvd},
+    {6u, 10u, {144.0f, 0.22f, 144.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorExpositionBlvd},
+    {10u, 14u, {240.0f, 0.22f, 144.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorExpositionBlvd},
+    {3u, 7u, {48.0f, 0.22f, 216.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorMartinLutherKingBlvd},
+    {7u, 11u, {144.0f, 0.22f, 216.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorMartinLutherKingBlvd},
+    {11u, 15u, {240.0f, 0.22f, 216.0f}, 96.0f, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, MDTBCorridorMartinLutherKingBlvd},
+};
+
+static const MDTBWorldChunkDescriptor kWorldChunkLayout[] = {
+    {MDTBWorldChunkMidCityWest, -48.0f, 144.0f, -36.0f, 108.0f, 1.16f, 1.10f, 1.02f},
+    {MDTBWorldChunkCentralSouth, 144.0f, 336.0f, -36.0f, 108.0f, 0.98f, 0.92f, 0.90f},
+    {MDTBWorldChunkExpoCrenshaw, -48.0f, 144.0f, 108.0f, 252.0f, 1.12f, 1.16f, 1.08f},
+    {MDTBWorldChunkFlorenceVermont, 144.0f, 336.0f, 108.0f, 252.0f, 0.94f, 0.88f, 0.96f},
+};
+
+static const MDTBCorridorDescriptor kCorridorLayout[] = {
+    {MDTBCorridorCrenshawBlvd, MDTBRoadAxisNorthSouth, MDTBRoadClassBoulevard, 0.0f, 7.60f, 6.90f, 20.9f, 9.55f, 10.95f, 1.22f},
+    {MDTBCorridorArlingtonAve, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, 96.0f, 6.95f, 6.45f, 18.8f, 8.90f, 10.05f, 1.00f},
+    {MDTBCorridorWesternAve, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, 192.0f, 7.05f, 6.55f, 19.2f, 9.05f, 10.20f, 1.04f},
+    {MDTBCorridorVermontAve, MDTBRoadAxisNorthSouth, MDTBRoadClassAvenue, 288.0f, 7.15f, 6.65f, 19.5f, 9.15f, 10.35f, 1.08f},
+    {MDTBCorridorAdamsBlvd, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, 0.0f, 7.45f, 6.90f, 20.4f, 9.20f, 10.65f, 1.18f},
+    {MDTBCorridorJeffersonBlvd, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, 72.0f, 7.55f, 7.00f, 20.7f, 9.35f, 10.85f, 1.22f},
+    {MDTBCorridorExpositionBlvd, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, 144.0f, 7.65f, 7.10f, 21.0f, 9.55f, 11.05f, 1.26f},
+    {MDTBCorridorMartinLutherKingBlvd, MDTBRoadAxisEastWest, MDTBRoadClassBoulevard, 216.0f, 7.75f, 7.20f, 21.2f, 9.70f, 11.20f, 1.30f},
+};
+
+static const MDTBFrontageDescriptor kFrontageLayout[] = {
+    {MDTBFrontageTemplateCivicRetail, 13.45f, 10.75f, 15.9f, 33.8f, 46.5f, 0.58f, 1.08f, 1.02f, 4.65f, 0.54f, 1.00f},
+    {MDTBFrontageTemplateResidentialCourt, 13.40f, 10.70f, 16.1f, 33.9f, 46.2f, 0.50f, 0.94f, 0.98f, 4.65f, 0.54f, 1.00f},
+    {MDTBFrontageTemplateTransitMarket, 13.30f, 10.65f, 16.0f, 33.5f, 46.0f, 0.60f, 1.02f, 1.00f, 4.65f, 0.54f, 1.00f},
+    {MDTBFrontageTemplateServiceSpur, 13.25f, 10.70f, 16.3f, 32.9f, 45.9f, 0.56f, 0.98f, 0.95f, 4.65f, 0.54f, 1.08f},
 };
 
 static const MDTBPopulationProfile kPopulationProfileLayout[] = {
-    {0u, 0.76f, 0.60f, 0.72f, 0.58f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
-    {1u, 0.58f, 0.38f, 0.46f, 0.42f, MDTBPopulationStyleResidentialCalm},
-    {2u, 0.84f, 0.70f, 0.90f, 0.82f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
-    {3u, 0.72f, 0.82f, 0.86f, 0.94f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {0u, 0.82f, 0.60f, 0.76f, 0.56f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {1u, 0.58f, 0.40f, 0.48f, 0.40f, MDTBPopulationStyleResidentialCalm},
+    {2u, 0.52f, 0.34f, 0.42f, 0.34f, MDTBPopulationStyleResidentialCalm},
+    {3u, 0.70f, 0.54f, 0.68f, 0.58f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {4u, 0.80f, 0.64f, 0.78f, 0.62f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {5u, 0.78f, 0.62f, 0.82f, 0.64f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {6u, 0.56f, 0.42f, 0.52f, 0.46f, MDTBPopulationStyleResidentialCalm | MDTBPopulationStyleTransitHeavy},
+    {7u, 0.74f, 0.60f, 0.74f, 0.66f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {8u, 0.72f, 0.76f, 0.80f, 0.88f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {9u, 0.70f, 0.78f, 0.82f, 0.92f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {10u, 0.66f, 0.82f, 0.78f, 0.96f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleThroughTraffic},
+    {11u, 0.68f, 0.86f, 0.80f, 0.98f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {12u, 0.74f, 0.68f, 0.76f, 0.70f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered},
+    {13u, 0.54f, 0.46f, 0.50f, 0.52f, MDTBPopulationStyleResidentialCalm | MDTBPopulationStyleTransitHeavy},
+    {14u, 0.64f, 0.86f, 0.78f, 1.0f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleRetailClustered | MDTBPopulationStyleThroughTraffic},
+    {15u, 0.62f, 0.88f, 0.76f, 1.0f, MDTBPopulationStyleTransitHeavy | MDTBPopulationStyleThroughTraffic},
 };
 
 static size_t scene_layout_count(void) {
     return sizeof(kBlockLayout) / sizeof(kBlockLayout[0]);
 }
 
-static int layout_has_prior_z(size_t layout_index) {
-    for (size_t index = 0u; index < layout_index; ++index) {
-        if (fabsf(kBlockLayout[index].origin.z - kBlockLayout[layout_index].origin.z) <= 0.01f) {
+static void rebuild_road_spines(void) {
+    g_road_spine_count = 0u;
+
+    for (size_t index = 0u; index < (sizeof(kRoadLayout) / sizeof(kRoadLayout[0])); ++index) {
+        const MDTBRoadLink *link = &kRoadLayout[index];
+        const float coordinate =
+            link->axis == MDTBRoadAxisNorthSouth
+            ? link->midpoint.x
+            : link->midpoint.z;
+        int already_present = 0;
+
+        for (size_t spine_index = 0u; spine_index < g_road_spine_count; ++spine_index) {
+            if (g_road_spines[spine_index].axis == link->axis &&
+                fabsf(g_road_spines[spine_index].coordinate - coordinate) <= 0.01f) {
+                already_present = 1;
+                break;
+            }
+        }
+
+        if (already_present || g_road_spine_count >= MDTBMaxRoadSpines) {
+            continue;
+        }
+
+        g_road_spines[g_road_spine_count].coordinate = coordinate;
+        g_road_spines[g_road_spine_count].axis = link->axis;
+        g_road_spines[g_road_spine_count].road_class = link->road_class;
+        g_road_spines[g_road_spine_count].corridor = link->corridor;
+        g_road_spine_count += 1u;
+    }
+}
+
+static const MDTBRoadSpine *road_spine_for_axis_coordinate(uint32_t axis, float coordinate) {
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        if (g_road_spines[index].axis == axis &&
+            fabsf(g_road_spines[index].coordinate - coordinate) <= 0.01f) {
+            return &g_road_spines[index];
+        }
+    }
+
+    return NULL;
+}
+
+static int road_spine_segment_hits_intersection(const MDTBRoadSpine *spine, float segment_center) {
+    if (spine == NULL) {
+        return 0;
+    }
+
+    for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
+        const MDTBBlockDescriptor *block = &kBlockLayout[block_index];
+        const float corridor_coordinate =
+            spine->axis == MDTBRoadAxisNorthSouth
+            ? block->origin.x
+            : block->origin.z;
+        const float intersection_coordinate =
+            spine->axis == MDTBRoadAxisNorthSouth
+            ? block->origin.z
+            : block->origin.x;
+
+        if (fabsf(corridor_coordinate - spine->coordinate) <= 0.01f &&
+            fabsf(segment_center - intersection_coordinate) <= kIntersectionClear) {
             return 1;
         }
     }
@@ -226,14 +447,133 @@ static int layout_has_prior_z(size_t layout_index) {
     return 0;
 }
 
-static int layout_has_prior_x(size_t layout_index) {
-    for (size_t index = 0u; index < layout_index; ++index) {
-        if (fabsf(kBlockLayout[index].origin.x - kBlockLayout[layout_index].origin.x) <= 0.01f) {
-            return 1;
+static const MDTBRoadProfile *road_profile_for_class(uint32_t road_class) {
+    static const MDTBRoadProfile kBoulevardProfile = {7.2f, 7.9f, 14.2f, 2.25f, 0.52f};
+    static const MDTBRoadProfile kAvenueProfile = {6.2f, 6.9f, 11.8f, 1.95f, 0.0f};
+    static const MDTBRoadProfile kConnectorProfile = {5.2f, 5.8f, 10.2f, 1.70f, 0.0f};
+    static const MDTBRoadProfile kResidentialProfile = {kRoadHalfWidth, kCurbOuter, kSidewalkOuter, 1.58f, 0.0f};
+
+    switch (road_class) {
+        case MDTBRoadClassBoulevard:
+            return &kBoulevardProfile;
+        case MDTBRoadClassAvenue:
+            return &kAvenueProfile;
+        case MDTBRoadClassConnector:
+            return &kConnectorProfile;
+        case MDTBRoadClassResidentialStreet:
+        default:
+            return &kResidentialProfile;
+    }
+}
+
+static const MDTBRoadProfile *road_profile_for_spine(const MDTBRoadSpine *spine) {
+    return spine != NULL ? road_profile_for_class(spine->road_class) : road_profile_for_class(MDTBRoadClassResidentialStreet);
+}
+
+static const MDTBRoadProfile *road_profile_for_link(const MDTBRoadLink *link) {
+    return link != NULL ? road_profile_for_class(link->road_class) : road_profile_for_class(MDTBRoadClassResidentialStreet);
+}
+
+static const MDTBWorldChunkDescriptor *world_chunk_descriptor_for_index(uint32_t chunk_index) {
+    for (size_t index = 0u; index < (sizeof(kWorldChunkLayout) / sizeof(kWorldChunkLayout[0])); ++index) {
+        if (kWorldChunkLayout[index].chunk_index == chunk_index) {
+            return &kWorldChunkLayout[index];
         }
     }
 
-    return 0;
+    return NULL;
+}
+
+static const MDTBCorridorDescriptor *corridor_descriptor_for_axis_coordinate(uint32_t axis, float coordinate) {
+    for (size_t index = 0u; index < (sizeof(kCorridorLayout) / sizeof(kCorridorLayout[0])); ++index) {
+        if (kCorridorLayout[index].axis == axis &&
+            fabsf(kCorridorLayout[index].coordinate - coordinate) <= 0.01f) {
+            return &kCorridorLayout[index];
+        }
+    }
+
+    return NULL;
+}
+
+static MDTBIntersectionProfile intersection_profile_for_block(const MDTBBlockDescriptor *block) {
+    MDTBIntersectionProfile profile;
+
+    profile.vertical = NULL;
+    profile.horizontal = NULL;
+    profile.chunk = NULL;
+
+    if (block == NULL) {
+        return profile;
+    }
+
+    profile.vertical = corridor_descriptor_for_axis_coordinate(MDTBRoadAxisNorthSouth, block->origin.x);
+    profile.horizontal = corridor_descriptor_for_axis_coordinate(MDTBRoadAxisEastWest, block->origin.z);
+    profile.chunk = world_chunk_descriptor_for_index(block->chunk_index);
+    return profile;
+}
+
+static const MDTBFrontageDescriptor *frontage_descriptor_for_template(uint32_t frontage_template) {
+    for (size_t index = 0u; index < (sizeof(kFrontageLayout) / sizeof(kFrontageLayout[0])); ++index) {
+        if (kFrontageLayout[index].frontage_template == frontage_template) {
+            return &kFrontageLayout[index];
+        }
+    }
+
+    return &kFrontageLayout[0];
+}
+
+static MDTBFrontageProfile frontage_profile_for_block(const MDTBBlockDescriptor *block) {
+    MDTBFrontageProfile profile;
+    const MDTBFrontageDescriptor *descriptor = frontage_descriptor_for_template(
+        block != NULL ? block->frontage_template : MDTBFrontageTemplateCivicRetail
+    );
+    const MDTBIntersectionProfile intersection = intersection_profile_for_block(block);
+    const float horizontal_plaza_scale = intersection.horizontal != NULL ? intersection.horizontal->plaza_scale : 1.0f;
+    const float vertical_plaza_scale = intersection.vertical != NULL ? intersection.vertical->plaza_scale : 1.0f;
+    const float chunk_plaza_scale = intersection.chunk != NULL ? intersection.chunk->corner_plaza_scale : 1.0f;
+    const float chunk_planter_scale = intersection.chunk != NULL ? intersection.chunk->planter_scale : 1.0f;
+    const float horizontal_boulevard_bias =
+        intersection.horizontal != NULL && intersection.horizontal->road_class == MDTBRoadClassBoulevard
+        ? 0.22f
+        : 0.0f;
+    const float vertical_boulevard_bias =
+        intersection.vertical != NULL && intersection.vertical->road_class == MDTBRoadClassBoulevard
+        ? 0.10f
+        : 0.0f;
+    const float frontage_depth_bias =
+        (horizontal_plaza_scale - 1.0f) * 1.10f +
+        (chunk_plaza_scale - 1.0f) * 0.85f +
+        horizontal_boulevard_bias;
+    const float rear_depth_bias =
+        (chunk_plaza_scale - 1.0f) * 1.70f +
+        (vertical_plaza_scale - 1.0f) * 0.55f;
+    const float awning_bias =
+        1.0f +
+        ((horizontal_plaza_scale - 1.0f) * 0.36f) +
+        ((chunk_plaza_scale - 1.0f) * 0.22f) +
+        horizontal_boulevard_bias * 0.18f;
+    const float secondary_awning_bias =
+        1.0f +
+        ((vertical_plaza_scale - 1.0f) * 0.20f) +
+        ((chunk_plaza_scale - 1.0f) * 0.14f) +
+        vertical_boulevard_bias * 0.14f;
+
+    profile.descriptor = descriptor;
+    profile.intersection = intersection;
+    profile.shopfront_z = descriptor->shopfront_z + frontage_depth_bias;
+    profile.furniture_z = descriptor->furniture_z + frontage_depth_bias * 0.62f;
+    profile.transit_stop_z = descriptor->transit_stop_z + frontage_depth_bias * 0.82f;
+    profile.rear_anchor_z = descriptor->rear_anchor_z + rear_depth_bias;
+    profile.rear_fence_z = descriptor->rear_fence_z + rear_depth_bias * 0.92f;
+    profile.planter_size = descriptor->planter_size * chunk_planter_scale;
+    profile.primary_awning_scale = descriptor->primary_awning_scale * awning_bias;
+    profile.secondary_awning_scale = descriptor->secondary_awning_scale * secondary_awning_bias;
+    profile.loading_zone_z = descriptor->loading_zone_z + frontage_depth_bias * 0.36f;
+    profile.loading_zone_half_z = descriptor->loading_zone_half_z * (1.0f + frontage_depth_bias * 0.05f);
+    profile.loading_zone_half_x_scale =
+        descriptor->loading_zone_half_x_scale *
+        (1.0f + ((chunk_plaza_scale - 1.0f) * 0.18f) + horizontal_boulevard_bias * 0.12f);
+    return profile;
 }
 
 static MDTBFloat3 make_float3(float x, float y, float z) {
@@ -737,6 +1077,11 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
 
     state->territory_reentry_timer = fmaxf(state->territory_reentry_timer - dt, 0.0f);
     state->territory_watch_timer = fmaxf(state->territory_watch_timer - dt, 0.0f);
+    state->territory_reapproach_timer = fmaxf(state->territory_reapproach_timer - dt, 0.0f);
+    if (state->territory_reapproach_timer <= 0.0f) {
+        state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+        state->territory_reapproach_timer = 0.0f;
+    }
     patrol_target_position = kTerritoryPatrolBasePosition;
     inner_target_position = kTerritoryInnerBasePosition;
     patrol_heading_focus = player_position;
@@ -751,6 +1096,12 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
             !inside &&
             player_position.z >= (kCourtSetTerritoryEntryZ - 6.8f) &&
             player_position.z < kCourtSetTerritoryEntryZ &&
+            sidewalk_watch_proximity > 0.0f;
+        const int far_sidewalk_approach =
+            !inside &&
+            !near_sidewalk_watch &&
+            player_position.z >= (kCourtSetTerritoryEntryZ - 10.8f) &&
+            player_position.z < (kCourtSetTerritoryEntryZ - 6.8f) &&
             sidewalk_watch_proximity > 0.0f;
         const int street_hot = state->street_incident_timer > 0.0f && state->street_incident_level > 0.14f;
         const int direct_pressure =
@@ -768,6 +1119,29 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
             civilian_reaction ||
             state->combat_hostile_alert > 0.58f ||
             state->combat_last_hit_target_kind == MDTBCombatTargetLookout;
+        const int street_normalizing_nearby =
+            state->street_incident_timer > 0.0f &&
+            state->street_incident_level > 0.08f &&
+            !direct_pressure;
+        const int street_reopening_nearby =
+            state->street_recovery_timer > 0.0f &&
+            state->street_recovery_level > 0.04f;
+        const float street_cooldown_memory =
+            street_normalizing_nearby
+            ? clampf(
+                state->street_incident_level * 0.72f +
+                state->street_incident_timer / (kStreetIncidentSettleDuration + 0.8f),
+                0.0f,
+                1.0f
+            )
+            : (street_reopening_nearby
+                ? clampf(
+                    state->street_recovery_level * 1.20f +
+                    state->street_recovery_timer / (kStreetRecoveryDuration + 0.8f),
+                    0.0f,
+                    1.0f
+                )
+                : 0.0f);
         const int hot_nearby =
             !inside &&
             state->territory_reentry_timer > 0.0f &&
@@ -782,6 +1156,97 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
             kSidewalkHeight,
             kCourtSetTerritoryEntryZ + 1.0f
         );
+        const int pocket_claiming =
+            state->territory_resolve_state == MDTBTerritoryResolveHold &&
+            state->territory_resolve_timer > 0.0f &&
+            state->territory_resolve_progress >= 0.999f;
+        const int edge_retaking =
+            state->territory_resolve_state == MDTBTerritoryResolvePullout &&
+            state->territory_resolve_timer > 0.0f &&
+            state->territory_resolve_progress >= 0.999f;
+        const float reclaim_return_intensity =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachReclaim &&
+            state->territory_reapproach_timer > 0.0f &&
+            !pocket_claiming
+            ? clampf(state->territory_reapproach_timer / kTerritoryReapproachReclaimDuration, 0.0f, 1.0f)
+            : 0.0f;
+        const float retake_return_intensity =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachRetake &&
+            state->territory_reapproach_timer > 0.0f &&
+            !edge_retaking
+            ? clampf(state->territory_reapproach_timer / kTerritoryReapproachRetakeDuration, 0.0f, 1.0f)
+            : 0.0f;
+        const int reclaim_returning = reclaim_return_intensity > 0.0f;
+        const int retake_returning = retake_return_intensity > 0.0f;
+        const int side_memory_context =
+            inside ||
+            far_sidewalk_approach ||
+            near_sidewalk_watch ||
+            hot_nearby ||
+            street_normalizing_nearby ||
+            street_reopening_nearby ||
+            reclaim_returning ||
+            retake_returning ||
+            pocket_claiming ||
+            edge_retaking ||
+            state->territory_reentry_timer > 0.0f;
+        const float side_memory_target =
+            side_memory_context && lateral_amount > 0.14f
+            ? clampf(
+                lateral_bias * (
+                    (inside
+                        ? (0.30f + presence * 0.28f + (phase == MDTBTerritoryPhaseBoundary ? 0.12f : 0.04f))
+                        : (0.14f + sidewalk_watch_proximity * 0.30f +
+                            (hot_nearby ? 0.08f : 0.0f) +
+                            street_cooldown_memory * 0.08f)) +
+                    reclaim_return_intensity * 0.24f +
+                    retake_return_intensity * 0.24f +
+                    (pocket_claiming ? 0.10f : 0.0f) +
+                    (edge_retaking ? 0.08f : 0.0f)
+                ) +
+                state->territory_preferred_side * 0.18f,
+                -1.0f,
+                1.0f
+            )
+            : state->territory_preferred_side * (
+                side_memory_context
+                ? (street_cooldown_memory > 0.0f ? 0.985f : 0.96f)
+                : 0.0f
+            );
+        const float side_memory_speed =
+            side_memory_context
+            ? (lateral_amount > 0.14f
+                ? (1.4f +
+                    reclaim_return_intensity * 0.9f +
+                    retake_return_intensity * 0.9f +
+                    sidewalk_watch_proximity * 0.3f +
+                    street_cooldown_memory * 0.22f)
+                : (0.24f + street_cooldown_memory * 0.08f))
+            : 0.18f;
+
+        state->territory_preferred_side = approachf(
+            state->territory_preferred_side,
+            side_memory_target,
+            side_memory_speed,
+            dt
+        );
+
+        const float preferred_side_bias = clampf(state->territory_preferred_side, -1.0f, 1.0f);
+        const float preferred_side_amount = fabsf(preferred_side_bias);
+        const float remembered_lateral_blend = clampf(
+            preferred_side_amount * (inside ? 0.42f : 0.50f) +
+            reclaim_return_intensity * 0.18f +
+            retake_return_intensity * 0.18f +
+            (hot_nearby ? 0.08f : 0.0f),
+            0.0f,
+            0.82f
+        );
+        const float remembered_lateral_bias = clampf(
+            lateral_bias * (1.0f - remembered_lateral_blend) + preferred_side_bias * remembered_lateral_blend,
+            -1.0f,
+            1.0f
+        );
+        const float remembered_lateral_amount = fabsf(remembered_lateral_bias);
 
         if (inside) {
             int stored_vehicle_entry;
@@ -805,7 +1270,11 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
             const float watch_carry = clampf(state->territory_watch_timer / kTerritoryWatchCarryDuration, 0.0f, 1.0f);
             const float base_heat =
                 (phase == MDTBTerritoryPhaseBoundary ? 0.12f : 0.18f) +
-                presence * (phase == MDTBTerritoryPhaseBoundary ? 0.14f : 0.22f);
+                presence * (phase == MDTBTerritoryPhaseBoundary ? 0.14f : 0.22f) +
+                (pocket_claiming ? 0.06f : 0.0f) +
+                (edge_retaking ? 0.02f : 0.0f) +
+                reclaim_return_intensity * (phase == MDTBTerritoryPhaseBoundary ? 0.02f : 0.04f) +
+                retake_return_intensity * (phase == MDTBTerritoryPhaseBoundary ? 0.04f : 0.02f);
             const float provocation_heat = provoked ? (0.28f + presence * 0.40f) : 0.0f;
             float watch_heat;
             float heat_target;
@@ -815,33 +1284,33 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
             }
             stored_vehicle_entry = state->territory_entry_mode == MDTBTerritoryEntryVehicle;
             const float patrol_side_bias =
-                lateral_amount < 0.16f
+                remembered_lateral_amount < 0.16f
                 ? (stored_vehicle_entry ? 1.0f : -1.0f)
-                : lateral_bias;
+                : remembered_lateral_bias;
 
             const MDTBFloat3 patrol_watch_position = offset_point(
                 kTerritoryPatrolLinePosition,
-                lateral_bias * 1.6f,
+                remembered_lateral_bias * 1.6f,
                 0.0f,
-                -0.22f + lateral_amount * 0.24f
+                -0.22f + remembered_lateral_amount * 0.24f
             );
             const MDTBFloat3 patrol_screen_position = offset_point(
                 kTerritoryPatrolLinePosition,
-                lateral_bias * 2.2f,
+                remembered_lateral_bias * 2.2f,
                 0.0f,
-                0.52f + (stored_vehicle_entry ? -0.34f : 0.22f) - lateral_amount * 0.10f
+                0.52f + (stored_vehicle_entry ? -0.34f : 0.22f) - remembered_lateral_amount * 0.10f
             );
             const MDTBFloat3 patrol_clamp_position = offset_point(
                 kTerritoryPatrolLinePosition,
                 patrol_side_bias * 2.48f,
                 0.0f,
-                0.94f + (stored_vehicle_entry ? -0.18f : 0.26f) - lateral_amount * 0.12f
+                0.94f + (stored_vehicle_entry ? -0.18f : 0.26f) - remembered_lateral_amount * 0.12f
             );
             const MDTBFloat3 patrol_handoff_position = offset_point(
                 kTerritoryPatrolHandoffPosition,
-                lateral_bias * 1.1f,
+                remembered_lateral_bias * 1.1f,
                 0.0f,
-                (stored_vehicle_entry ? -0.18f : 0.22f) + lateral_amount * 0.16f
+                (stored_vehicle_entry ? -0.18f : 0.22f) + remembered_lateral_amount * 0.16f
             );
             const MDTBFloat3 patrol_clear_position = offset_point(
                 kTerritoryPatrolHandoffPosition,
@@ -872,7 +1341,7 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 )
             );
             const float inner_lateral_bias = clampf(
-                (-lateral_bias * 0.72f) +
+                (-remembered_lateral_bias * 0.72f) +
                 (stored_vehicle_entry ? 0.18f : -0.06f) +
                 (hot_reentry ? 0.12f : 0.0f),
                 -1.0f,
@@ -911,6 +1380,43 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 0.0f,
                 1.32f - inner_clamp_amount * 0.42f
             );
+            const float reclaim_commit_side_blend = clampf(
+                preferred_side_amount * (
+                    0.26f +
+                    (phase == MDTBTerritoryPhaseClaimed ? 0.28f : 0.0f) +
+                    reclaim_return_intensity * 0.22f +
+                    state->territory_deep_watch * 0.18f +
+                    watch_carry * 0.10f
+                ),
+                0.0f,
+                0.92f
+            );
+            const float retake_commit_side_blend = clampf(
+                preferred_side_amount * (
+                    0.24f +
+                    (phase == MDTBTerritoryPhaseBoundary ? 0.26f : 0.0f) +
+                    retake_return_intensity * 0.22f +
+                    boundary_depth * 0.20f +
+                    state->territory_front_watch * 0.18f +
+                    watch_carry * 0.10f
+                ),
+                0.0f,
+                0.90f
+            );
+            const float reclaim_commit_side_bias = clampf(
+                remembered_lateral_bias * (1.0f - reclaim_commit_side_blend) +
+                preferred_side_bias * reclaim_commit_side_blend,
+                -1.0f,
+                1.0f
+            );
+            const float retake_commit_side_bias = clampf(
+                remembered_lateral_bias * (1.0f - retake_commit_side_blend) +
+                preferred_side_bias * retake_commit_side_blend,
+                -1.0f,
+                1.0f
+            );
+            const float reclaim_commit_side_amount = fabsf(reclaim_commit_side_bias);
+            const float retake_commit_side_amount = fabsf(retake_commit_side_bias);
             const MDTBFloat3 inner_settle_position = lerp_float3(
                 inner_pocket_position,
                 inner_screen_support_position,
@@ -933,18 +1439,76 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     0.82f
                 )
             );
+            const MDTBFloat3 reclaim_commit_patrol_position = offset_point(
+                patrol_handoff_position,
+                reclaim_commit_side_bias * (0.18f + reclaim_commit_side_amount * 0.42f),
+                0.0f,
+                0.06f + reclaim_commit_side_amount * 0.20f
+            );
+            const MDTBFloat3 reclaim_commit_clear_position = offset_point(
+                patrol_clear_position,
+                reclaim_commit_side_bias * (0.28f + reclaim_commit_side_amount * 0.54f),
+                0.0f,
+                -0.08f + reclaim_commit_side_amount * 0.18f
+            );
+            const MDTBFloat3 reclaim_commit_inner_position = offset_point(
+                inner_handoff_position,
+                reclaim_commit_side_bias * (0.24f + reclaim_commit_side_amount * 0.46f),
+                0.0f,
+                0.12f + reclaim_commit_side_amount * 0.22f
+            );
+            const MDTBFloat3 reclaim_commit_patrol_focus = offset_point(
+                player_position,
+                reclaim_commit_side_bias * (0.44f + reclaim_commit_side_amount * 0.58f),
+                0.0f,
+                0.38f + reclaim_commit_side_amount * 0.24f
+            );
+            const MDTBFloat3 reclaim_commit_inner_focus = offset_point(
+                player_position,
+                reclaim_commit_side_bias * (0.72f + reclaim_commit_side_amount * 0.68f),
+                0.0f,
+                1.02f + reclaim_commit_side_amount * 0.34f
+            );
+            const MDTBFloat3 retake_commit_patrol_position = offset_point(
+                patrol_brace_position,
+                retake_commit_side_bias * (0.16f + retake_commit_side_amount * 0.48f),
+                0.0f,
+                0.06f + retake_commit_side_amount * 0.18f
+            );
+            const MDTBFloat3 retake_commit_inner_position = offset_point(
+                inner_brace_position,
+                -retake_commit_side_bias * (0.18f + retake_commit_side_amount * 0.42f),
+                0.0f,
+                0.08f + retake_commit_side_amount * 0.16f
+            );
+            const MDTBFloat3 retake_commit_patrol_focus = offset_point(
+                boundary_focus_position,
+                retake_commit_side_bias * (0.54f + retake_commit_side_amount * 0.56f),
+                0.0f,
+                0.10f + retake_commit_side_amount * 0.14f
+            );
+            const MDTBFloat3 retake_commit_inner_focus = offset_point(
+                boundary_focus_position,
+                -retake_commit_side_bias * (0.68f + retake_commit_side_amount * 0.48f),
+                0.0f,
+                0.56f + retake_commit_side_amount * 0.18f
+            );
             const int returning_from_clear =
                 phase == MDTBTerritoryPhaseBoundary &&
                 !hot_reentry &&
                 !provoked &&
                 state->combat_hostile_search_timer <= 0.0f &&
-                state->territory_patrol_alert > 0.12f &&
+                (state->territory_patrol_alert > 0.12f || reclaim_returning) &&
                 (state->territory_patrol_state == MDTBTerritoryPatrolClear ||
                  state->territory_patrol_state == MDTBTerritoryPatrolReform ||
                  state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
                  state->territory_inner_state == MDTBTerritoryPatrolReform ||
                  state->territory_inner_state == MDTBTerritoryPatrolBrace ||
-                 previous_deep_watch > 0.16f);
+                 previous_deep_watch > 0.16f ||
+                 (reclaim_returning &&
+                  (presence > (stored_vehicle_entry ? 0.12f : 0.16f) ||
+                   state->territory_deep_watch > 0.18f ||
+                   watch_carry > 0.10f)));
             const int hardening_retake =
                 phase == MDTBTerritoryPhaseBoundary &&
                 !hot_reentry &&
@@ -955,10 +1519,30 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                  state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
                  state->territory_inner_state == MDTBTerritoryPatrolReform ||
                  state->territory_inner_state == MDTBTerritoryPatrolBrace) &&
-                (presence > (stored_vehicle_entry ? 0.24f : 0.28f) ||
+                (presence > (stored_vehicle_entry ? (retake_returning ? 0.18f : 0.24f) : (retake_returning ? 0.22f : 0.28f)) ||
                  boundary_depth > 0.18f) &&
-                (state->territory_front_watch > 0.24f || watch_carry > 0.18f) &&
+                (state->territory_front_watch > (retake_returning ? 0.18f : 0.24f) || watch_carry > (retake_returning ? 0.12f : 0.18f)) &&
                 state->territory_deep_watch <= (state->territory_front_watch + 0.18f);
+            const int reclaim_edge_feint =
+                phase == MDTBTerritoryPhaseBoundary &&
+                reclaim_returning &&
+                !hot_reentry &&
+                !provoked &&
+                state->combat_hostile_search_timer <= 0.0f &&
+                boundary_depth < 0.26f &&
+                presence > (stored_vehicle_entry ? 0.10f : 0.14f) &&
+                presence < (stored_vehicle_entry ? 0.36f : 0.42f) &&
+                state->territory_deep_watch >= (state->territory_front_watch - 0.08f);
+            const int retake_edge_challenge =
+                phase == MDTBTerritoryPhaseBoundary &&
+                retake_returning &&
+                !hot_reentry &&
+                !provoked &&
+                state->combat_hostile_search_timer <= 0.0f &&
+                boundary_depth < 0.22f &&
+                presence > (stored_vehicle_entry ? 0.10f : 0.14f) &&
+                presence < (stored_vehicle_entry ? 0.30f : 0.36f) &&
+                (state->territory_front_watch > 0.18f || watch_carry > 0.12f);
             const int screen_entry =
                 phase == MDTBTerritoryPhaseBoundary &&
                 !hot_reentry &&
@@ -980,6 +1564,89 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 (state->territory_front_watch > 0.22f || state->territory_watch_timer > 0.52f) &&
                 presence > (stored_vehicle_entry ? 0.18f : 0.22f) &&
                 state->territory_deep_watch <= (state->territory_front_watch + 0.14f);
+            const float reclaim_counter_step =
+                reclaim_edge_feint
+                ? clampf(
+                    0.20f +
+                    watch_carry * 0.24f +
+                    reclaim_return_intensity * 0.34f +
+                    state->territory_deep_watch * 0.20f -
+                    boundary_depth * 0.18f,
+                    0.0f,
+                    1.0f
+                )
+                : 0.0f;
+            const float retake_cross_angle =
+                retake_edge_challenge
+                ? clampf(
+                    0.22f +
+                    watch_carry * 0.22f +
+                    retake_return_intensity * 0.34f +
+                    state->territory_front_watch * 0.22f -
+                    boundary_depth * 0.14f,
+                    0.0f,
+                    1.0f
+                )
+                : 0.0f;
+            const MDTBFloat3 reclaim_counter_patrol_position = offset_point(
+                patrol_screen_position,
+                -patrol_side_bias * (0.24f + reclaim_counter_step * 0.72f),
+                0.0f,
+                -0.10f + reclaim_counter_step * 0.12f
+            );
+            const MDTBFloat3 reclaim_counter_inner_position = offset_point(
+                inner_handoff_position,
+                patrol_side_bias * (0.24f + reclaim_counter_step * 0.68f),
+                0.0f,
+                -0.18f + reclaim_counter_step * 0.16f
+            );
+            const MDTBFloat3 reclaim_counter_patrol_focus = lerp_float3(
+                boundary_focus_position,
+                inner_handoff_position,
+                clampf(0.26f + reclaim_counter_step * 0.38f, 0.0f, 0.74f)
+            );
+            const MDTBFloat3 reclaim_counter_inner_focus = offset_point(
+                boundary_focus_position,
+                patrol_side_bias * (0.68f + reclaim_counter_step * 0.74f),
+                0.0f,
+                0.52f + reclaim_counter_step * 0.34f
+            );
+            const MDTBFloat3 retake_challenge_screen_position = offset_point(
+                patrol_screen_position,
+                patrol_side_bias * (0.28f + retake_cross_angle * 0.84f),
+                0.0f,
+                0.12f + retake_cross_angle * 0.18f
+            );
+            const MDTBFloat3 retake_challenge_brace_position = offset_point(
+                patrol_clamp_position,
+                patrol_side_bias * (0.12f + retake_cross_angle * 0.52f),
+                0.0f,
+                0.04f + retake_cross_angle * 0.16f
+            );
+            const MDTBFloat3 retake_challenge_inner_watch_position = offset_point(
+                inner_screen_support_position,
+                -patrol_side_bias * (0.26f + retake_cross_angle * 0.62f),
+                0.0f,
+                0.10f + retake_cross_angle * 0.20f
+            );
+            const MDTBFloat3 retake_challenge_inner_brace_position = offset_point(
+                inner_clamp_position,
+                -patrol_side_bias * (0.18f + retake_cross_angle * 0.54f),
+                0.0f,
+                0.06f + retake_cross_angle * 0.18f
+            );
+            const MDTBFloat3 retake_challenge_patrol_focus = offset_point(
+                boundary_focus_position,
+                patrol_side_bias * (0.52f + retake_cross_angle * 0.56f),
+                0.0f,
+                0.10f
+            );
+            const MDTBFloat3 retake_challenge_inner_focus = offset_point(
+                boundary_focus_position,
+                -patrol_side_bias * (0.72f + retake_cross_angle * 0.48f),
+                0.0f,
+                0.56f + retake_cross_angle * 0.22f
+            );
 
             if (phase == MDTBTerritoryPhaseBoundary) {
                 front_watch_target =
@@ -998,7 +1665,165 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     presence * (stored_vehicle_entry ? 0.28f : 0.22f);
             }
 
-            if (phase == MDTBTerritoryPhaseClaimed ||
+            if (pocket_claiming) {
+                front_watch_target += 0.06f;
+                deep_watch_target += 0.16f;
+            } else if (edge_retaking && phase == MDTBTerritoryPhaseBoundary) {
+                front_watch_target += 0.12f;
+                deep_watch_target += 0.04f;
+            }
+
+            if (reclaim_returning) {
+                front_watch_target += phase == MDTBTerritoryPhaseBoundary ? 0.02f : 0.04f;
+                deep_watch_target += phase == MDTBTerritoryPhaseBoundary ? 0.10f : 0.18f;
+            }
+
+            if (retake_returning) {
+                front_watch_target += phase == MDTBTerritoryPhaseBoundary ? 0.12f : 0.06f;
+                deep_watch_target += phase == MDTBTerritoryPhaseBoundary ? 0.02f : 0.04f;
+            }
+
+            front_watch_target += retake_cross_angle * 0.05f;
+            deep_watch_target += reclaim_counter_step * 0.05f;
+
+            if (pocket_claiming &&
+                phase == MDTBTerritoryPhaseClaimed &&
+                !hot_reentry) {
+                clear_line =
+                    state->territory_deep_watch > 0.58f ||
+                    presence > 0.76f ||
+                    direct_pressure;
+                patrol_target_state = clear_line ? MDTBTerritoryPatrolClear : MDTBTerritoryPatrolHandoff;
+                patrol_target_position = clear_line
+                    ? patrol_clear_position
+                    : lerp_float3(patrol_handoff_position, patrol_clear_position, 0.24f);
+                patrol_target_alert = clear_line
+                    ? (0.52f +
+                        presence * 0.16f +
+                        watch_carry * 0.10f +
+                        (stored_vehicle_entry ? 0.04f : 0.0f))
+                    : (0.74f +
+                        presence * 0.18f +
+                        watch_carry * 0.10f +
+                        (stored_vehicle_entry ? 0.06f : 0.0f));
+                patrol_speed = clear_line ? 3.3f : 3.8f;
+                patrol_heading_focus = clear_line ? boundary_focus_position : player_position;
+            } else if (reclaim_edge_feint) {
+                patrol_target_state = MDTBTerritoryPatrolScreen;
+                patrol_target_position = lerp_float3(
+                    patrol_watch_position,
+                    reclaim_counter_patrol_position,
+                    clampf(
+                        0.40f +
+                        presence * 0.24f +
+                        watch_carry * 0.10f +
+                        reclaim_return_intensity * 0.12f +
+                        reclaim_counter_step * 0.12f,
+                        0.0f,
+                        0.86f
+                    )
+                );
+                patrol_target_alert =
+                    0.26f +
+                    presence * 0.12f +
+                    watch_carry * 0.06f +
+                    reclaim_return_intensity * 0.08f +
+                    reclaim_counter_step * 0.04f +
+                    (stored_vehicle_entry ? 0.04f : 0.0f);
+                patrol_speed = 3.0f + reclaim_counter_step * 0.3f;
+                patrol_heading_focus = reclaim_counter_patrol_focus;
+            } else if (reclaim_returning &&
+                !hot_reentry &&
+                !provoked &&
+                state->combat_hostile_search_timer <= 0.0f &&
+                (phase == MDTBTerritoryPhaseClaimed ||
+                 state->territory_deep_watch > 0.24f ||
+                 presence > 0.42f)) {
+                clear_line =
+                    phase == MDTBTerritoryPhaseClaimed &&
+                    (state->territory_deep_watch > 0.46f ||
+                     presence > 0.68f ||
+                     direct_pressure);
+                patrol_target_state = clear_line ? MDTBTerritoryPatrolClear : MDTBTerritoryPatrolHandoff;
+                patrol_target_position = clear_line
+                    ? lerp_float3(patrol_clear_position, patrol_handoff_position, 0.16f)
+                    : lerp_float3(patrol_settle_position, patrol_handoff_position, 0.58f);
+                patrol_target_alert = clear_line
+                    ? (0.46f +
+                        presence * 0.14f +
+                        watch_carry * 0.08f +
+                        reclaim_return_intensity * 0.08f)
+                    : (0.62f +
+                        presence * 0.16f +
+                        watch_carry * 0.10f +
+                        reclaim_return_intensity * 0.10f +
+                        (stored_vehicle_entry ? 0.04f : 0.0f));
+                patrol_speed = clear_line ? 3.1f : 3.5f;
+                patrol_heading_focus = player_position;
+            } else if (retake_edge_challenge) {
+                entry_clamp = boundary_hesitation;
+                patrol_target_state = entry_clamp ? MDTBTerritoryPatrolBrace : MDTBTerritoryPatrolScreen;
+                patrol_target_position = entry_clamp
+                    ? lerp_float3(
+                        patrol_screen_position,
+                        retake_challenge_brace_position,
+                        clampf(
+                            0.42f +
+                            presence * 0.18f +
+                            watch_carry * 0.10f +
+                            retake_return_intensity * 0.10f +
+                            retake_cross_angle * 0.10f,
+                            0.0f,
+                            0.86f
+                        )
+                    )
+                    : lerp_float3(
+                        patrol_watch_position,
+                        retake_challenge_screen_position,
+                        clampf(
+                            0.46f +
+                            presence * 0.20f +
+                            retake_return_intensity * 0.12f +
+                            retake_cross_angle * 0.12f,
+                            0.0f,
+                            0.88f
+                        )
+                    );
+                patrol_target_alert =
+                    (entry_clamp ? 0.38f : 0.30f) +
+                    presence * 0.16f +
+                    watch_carry * 0.08f +
+                    retake_return_intensity * 0.10f +
+                    retake_cross_angle * 0.04f +
+                    (stored_vehicle_entry ? 0.06f : 0.02f);
+                patrol_speed = (entry_clamp ? 3.2f : 3.0f) + retake_cross_angle * 0.24f;
+                patrol_heading_focus = retake_challenge_patrol_focus;
+            } else if (retake_returning &&
+                phase == MDTBTerritoryPhaseBoundary &&
+                !hot_reentry &&
+                !provoked &&
+                state->combat_hostile_search_timer <= 0.0f &&
+                (presence > (stored_vehicle_entry ? 0.12f : 0.16f) ||
+                 state->territory_front_watch > 0.18f ||
+                 watch_carry > 0.10f)) {
+                hardening_line = 1;
+                entry_clamp = 1;
+                patrol_target_state = MDTBTerritoryPatrolBrace;
+                patrol_target_position = lerp_float3(
+                    patrol_screen_position,
+                    patrol_clamp_position,
+                    clampf(0.56f + boundary_depth * 0.18f + retake_return_intensity * 0.18f, 0.0f, 0.90f)
+                );
+                patrol_target_alert =
+                    0.36f +
+                    presence * 0.16f +
+                    boundary_depth * 0.10f +
+                    watch_carry * 0.08f +
+                    retake_return_intensity * 0.10f +
+                    (stored_vehicle_entry ? 0.06f : 0.0f);
+                patrol_speed = 3.2f;
+                patrol_heading_focus = boundary_focus_position;
+            } else if (phase == MDTBTerritoryPhaseClaimed ||
                 hot_reentry ||
                 provoked ||
                 state->combat_hostile_search_timer > 0.0f ||
@@ -1150,6 +1975,56 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     (hot_reentry ? 0.10f : 0.0f);
                 inner_speed = inner_target_state == MDTBTerritoryPatrolHandoff ? 3.4f : 2.8f;
                 inner_heading_focus = clear_line ? boundary_focus_position : player_position;
+            } else if (reclaim_edge_feint) {
+                inner_target_state = MDTBTerritoryPatrolHandoff;
+                inner_target_position = lerp_float3(
+                    inner_pocket_position,
+                    reclaim_counter_inner_position,
+                    clampf(
+                        0.18f +
+                        presence * 0.18f +
+                        patrol_target_alert * 0.20f +
+                        reclaim_return_intensity * 0.18f +
+                        state->territory_deep_watch * 0.14f +
+                        reclaim_counter_step * 0.12f,
+                        0.0f,
+                        0.70f
+                    )
+                );
+                inner_target_alert =
+                    0.14f +
+                    presence * 0.06f +
+                    patrol_target_alert * 0.20f +
+                    reclaim_return_intensity * 0.08f +
+                    reclaim_counter_step * 0.04f +
+                    (stored_vehicle_entry ? 0.04f : 0.0f);
+                inner_speed = 2.9f + reclaim_counter_step * 0.3f;
+                inner_heading_focus = reclaim_counter_inner_focus;
+            } else if (retake_edge_challenge) {
+                entry_clamp = boundary_hesitation;
+                inner_target_state = entry_clamp ? MDTBTerritoryPatrolBrace : MDTBTerritoryPatrolWatch;
+                inner_target_position = lerp_float3(
+                    inner_pocket_position,
+                    entry_clamp ? retake_challenge_inner_brace_position : retake_challenge_inner_watch_position,
+                    clampf(
+                        (entry_clamp ? 0.34f : 0.22f) +
+                        presence * 0.16f +
+                        patrol_target_alert * 0.16f +
+                        retake_return_intensity * 0.10f +
+                        retake_cross_angle * 0.10f,
+                        0.0f,
+                        0.74f
+                    )
+                );
+                inner_target_alert =
+                    (entry_clamp ? 0.16f : 0.10f) +
+                    presence * 0.08f +
+                    patrol_target_alert * 0.18f +
+                    retake_return_intensity * 0.06f +
+                    retake_cross_angle * 0.04f +
+                    (stored_vehicle_entry ? 0.04f : 0.0f);
+                inner_speed = (entry_clamp ? 2.8f : 2.5f) + retake_cross_angle * 0.22f;
+                inner_heading_focus = retake_challenge_inner_focus;
             } else if (hardening_line) {
                 const float brace_blend = clampf(
                     0.26f +
@@ -1229,6 +2104,112 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 inner_speed = 2.5f;
             }
 
+            {
+                const int reclaim_commit_follow_through =
+                    reclaim_returning &&
+                    !reclaim_edge_feint &&
+                    !hot_reentry &&
+                    !provoked &&
+                    state->combat_hostile_search_timer <= 0.0f &&
+                    preferred_side_amount > 0.22f &&
+                    (phase == MDTBTerritoryPhaseClaimed ||
+                     clear_line ||
+                     patrol_target_state == MDTBTerritoryPatrolHandoff ||
+                     inner_target_state == MDTBTerritoryPatrolHandoff) &&
+                    (boundary_depth > 0.18f ||
+                     state->territory_deep_watch > 0.22f ||
+                     presence > 0.34f);
+                const int retake_commit_follow_through =
+                    retake_returning &&
+                    !retake_edge_challenge &&
+                    !hot_reentry &&
+                    !provoked &&
+                    state->combat_hostile_search_timer <= 0.0f &&
+                    preferred_side_amount > 0.22f &&
+                    (hardening_line ||
+                     patrol_target_state == MDTBTerritoryPatrolBrace ||
+                     patrol_target_state == MDTBTerritoryPatrolHandoff ||
+                     inner_target_state == MDTBTerritoryPatrolBrace ||
+                     inner_target_state == MDTBTerritoryPatrolHandoff) &&
+                    (boundary_depth > 0.12f ||
+                     presence > 0.28f ||
+                     state->territory_front_watch > 0.18f);
+
+                if (reclaim_commit_follow_through) {
+                    const float carry_blend = clampf(
+                        0.24f +
+                        reclaim_commit_side_amount * 0.36f +
+                        state->territory_deep_watch * 0.18f +
+                        boundary_depth * 0.10f,
+                        0.0f,
+                        0.88f
+                    );
+                    const float inner_carry_blend = clampf(carry_blend + 0.10f, 0.0f, 0.92f);
+
+                    patrol_target_position = lerp_float3(
+                        patrol_target_position,
+                        clear_line ? reclaim_commit_clear_position : reclaim_commit_patrol_position,
+                        carry_blend
+                    );
+                    patrol_heading_focus = lerp_float3(
+                        patrol_heading_focus,
+                        reclaim_commit_patrol_focus,
+                        carry_blend
+                    );
+                    patrol_target_alert += carry_blend * 0.06f;
+                    patrol_speed += carry_blend * 0.28f;
+                    inner_target_position = lerp_float3(
+                        inner_target_position,
+                        reclaim_commit_inner_position,
+                        inner_carry_blend
+                    );
+                    inner_heading_focus = lerp_float3(
+                        inner_heading_focus,
+                        reclaim_commit_inner_focus,
+                        carry_blend
+                    );
+                    inner_target_alert += carry_blend * 0.05f;
+                    inner_speed += carry_blend * 0.22f;
+                    deep_watch_target += carry_blend * 0.08f;
+                } else if (retake_commit_follow_through) {
+                    const float carry_blend = clampf(
+                        0.24f +
+                        retake_commit_side_amount * 0.34f +
+                        boundary_depth * 0.18f +
+                        state->territory_front_watch * 0.14f,
+                        0.0f,
+                        0.88f
+                    );
+                    const float inner_carry_blend = clampf(carry_blend + 0.08f, 0.0f, 0.90f);
+
+                    patrol_target_position = lerp_float3(
+                        patrol_target_position,
+                        retake_commit_patrol_position,
+                        carry_blend
+                    );
+                    patrol_heading_focus = lerp_float3(
+                        patrol_heading_focus,
+                        retake_commit_patrol_focus,
+                        carry_blend
+                    );
+                    patrol_target_alert += carry_blend * 0.06f;
+                    patrol_speed += carry_blend * 0.24f;
+                    inner_target_position = lerp_float3(
+                        inner_target_position,
+                        retake_commit_inner_position,
+                        inner_carry_blend
+                    );
+                    inner_heading_focus = lerp_float3(
+                        inner_heading_focus,
+                        retake_commit_inner_focus,
+                        carry_blend
+                    );
+                    inner_target_alert += carry_blend * 0.05f;
+                    inner_speed += carry_blend * 0.20f;
+                    front_watch_target += carry_blend * 0.08f;
+                }
+            }
+
             front_watch_target += inner_target_alert * (
                 inner_target_state == MDTBTerritoryPatrolHandoff
                 ? 0.02f
@@ -1270,6 +2251,10 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 watch_heat +
                 patrol_target_alert * 0.08f +
                 inner_target_alert * 0.06f +
+                (pocket_claiming ? 0.10f : 0.0f) +
+                (edge_retaking ? 0.04f : 0.0f) +
+                reclaim_return_intensity * 0.08f +
+                retake_return_intensity * 0.06f +
                 (hot_reentry ? (0.18f + previous_heat * 0.20f) : 0.0f),
                 0.0f,
                 1.0f
@@ -1308,6 +2293,9 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     state->territory_deep_watch * 0.20f +
                     patrol_target_alert * 0.08f +
                     inner_target_alert * 0.08f +
+                    (pocket_claiming ? 0.06f : 0.0f) +
+                    reclaim_return_intensity * 0.06f +
+                    retake_return_intensity * 0.04f +
                     ((state->territory_reentry_timer > 0.0f && state->territory_heat > 0.34f) ? 0.10f : 0.0f);
                 state->combat_hostile_alert = fmaxf(state->combat_hostile_alert, territory_alert_floor);
             }
@@ -1317,21 +2305,42 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 ? MDTBTerritoryPhaseHot
                 : phase;
         } else {
-            if (near_sidewalk_watch || hot_nearby) {
+            if (far_sidewalk_approach ||
+                near_sidewalk_watch ||
+                hot_nearby ||
+                edge_retaking ||
+                pocket_claiming ||
+                reclaim_returning ||
+                retake_returning ||
+                (state->street_recovery_timer > 0.0f &&
+                 state->street_recovery_level > 0.04f &&
+                 sidewalk_watch_proximity > 0.0f &&
+                 preferred_side_amount > 0.18f)) {
                 const float watch_carry = clampf(state->territory_watch_timer / kTerritoryWatchCarryDuration, 0.0f, 1.0f);
                 const float patrol_side_bias =
-                    lateral_amount < 0.16f
+                    remembered_lateral_amount < 0.16f
                     ? (current_vehicle_entry ? 1.0f : -1.0f)
-                    : lateral_bias;
+                    : remembered_lateral_bias;
+                const float reopening_reform_intensity =
+                    state->street_recovery_timer > 0.0f &&
+                    state->street_recovery_level > 0.04f
+                    ? clampf(
+                        state->street_recovery_level * 0.92f +
+                        state->street_recovery_timer / (kStreetRecoveryDuration + 0.8f) +
+                        preferred_side_amount * 0.22f,
+                        0.0f,
+                        1.0f
+                    )
+                    : 0.0f;
                 const MDTBFloat3 patrol_watch_position = offset_point(
                     kTerritoryPatrolLinePosition,
-                    lateral_bias * 1.4f,
+                    remembered_lateral_bias * 1.4f,
                     0.0f,
-                    -0.42f + lateral_amount * 0.18f
+                    -0.42f + remembered_lateral_amount * 0.18f
                 );
                 const MDTBFloat3 patrol_screen_position = offset_point(
                     kTerritoryPatrolLinePosition,
-                    lateral_bias * 2.0f,
+                    remembered_lateral_bias * 2.0f,
                     0.0f,
                     0.18f + (current_vehicle_entry ? -0.30f : 0.16f)
                 );
@@ -1359,7 +2368,7 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     0.24f
                 );
                 const float outer_inner_lateral_bias = clampf(
-                    (-lateral_bias * 0.66f) +
+                    (-remembered_lateral_bias * 0.66f) +
                     (current_vehicle_entry ? 0.14f : -0.04f) +
                     (hot_nearby ? 0.10f : 0.0f),
                     -1.0f,
@@ -1409,26 +2418,428 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 const int screening_edge =
                     near_sidewalk_watch &&
                     !hot_nearby &&
+                    !retake_returning &&
                     sidewalk_watch_proximity > (current_vehicle_entry ? 0.52f : 0.34f);
+                const int reclaiming_pocket_outside =
+                    (pocket_claiming || reclaim_returning) &&
+                    sidewalk_watch_proximity > 0.0f;
+                const int retaking_edge =
+                    (edge_retaking || retake_returning) &&
+                    (sidewalk_watch_proximity > 0.0f ||
+                     state->territory_front_watch > 0.12f ||
+                     watch_carry > 0.10f);
                 const int reforming_edge =
-                    near_sidewalk_watch &&
-                    !hot_nearby &&
-                    state->territory_patrol_alert > 0.10f &&
-                    (state->territory_patrol_state == MDTBTerritoryPatrolClear ||
-                     state->territory_patrol_state == MDTBTerritoryPatrolReform ||
-                     state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
-                     state->territory_inner_state == MDTBTerritoryPatrolBrace ||
-                     previous_deep_watch > 0.18f ||
-                     state->territory_inner_alert > 0.10f);
+                    (reopening_reform_intensity > 0.18f &&
+                     sidewalk_watch_proximity > 0.0f &&
+                     !hot_nearby &&
+                     !reclaiming_pocket_outside &&
+                     !retaking_edge) ||
+                    (near_sidewalk_watch &&
+                     !hot_nearby &&
+                     state->territory_patrol_alert > 0.10f &&
+                     (state->territory_patrol_state == MDTBTerritoryPatrolClear ||
+                      state->territory_patrol_state == MDTBTerritoryPatrolReform ||
+                      state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
+                      state->territory_inner_state == MDTBTerritoryPatrolBrace ||
+                      previous_deep_watch > 0.18f ||
+                      state->territory_inner_alert > 0.10f));
                 const int hardening_edge =
+                    reopening_reform_intensity <= 0.18f &&
                     reforming_edge &&
-                    sidewalk_watch_proximity > (current_vehicle_entry ? 0.40f : 0.28f) &&
-                    (state->territory_front_watch > 0.22f || watch_carry > 0.18f);
+                    sidewalk_watch_proximity > (current_vehicle_entry ? (retake_returning ? 0.32f : 0.40f) : (retake_returning ? 0.22f : 0.28f)) &&
+                    (state->territory_front_watch > (retake_returning ? 0.16f : 0.22f) || watch_carry > (retake_returning ? 0.12f : 0.18f));
                 const int entry_clamp =
                     (screening_edge || hardening_edge) &&
                     (state->territory_front_watch > 0.20f || state->territory_watch_timer > 0.48f);
+                const float reopening_side_bias =
+                    preferred_side_amount > 0.18f
+                    ? preferred_side_bias
+                    : patrol_side_bias;
+                const float reopening_side_amount = fabsf(reopening_side_bias);
+                const float outside_reclaim_counter_step =
+                    reclaiming_pocket_outside
+                    ? clampf(
+                        0.18f +
+                        sidewalk_watch_proximity * 0.22f +
+                        watch_carry * 0.22f +
+                        reclaim_return_intensity * 0.26f +
+                        state->territory_deep_watch * 0.18f,
+                        0.0f,
+                        1.0f
+                    )
+                    : 0.0f;
+                const float outside_retake_cross_angle =
+                    retaking_edge
+                    ? clampf(
+                        0.20f +
+                        sidewalk_watch_proximity * 0.24f +
+                        watch_carry * 0.20f +
+                        retake_return_intensity * 0.28f +
+                        state->territory_front_watch * 0.18f,
+                        0.0f,
+                        1.0f
+                    )
+                    : 0.0f;
+                const MDTBFloat3 outside_reclaim_patrol_position = offset_point(
+                    patrol_settle_position,
+                    -patrol_side_bias * (0.22f + outside_reclaim_counter_step * 0.58f),
+                    0.0f,
+                    0.02f + outside_reclaim_counter_step * 0.10f
+                );
+                const MDTBFloat3 outside_reclaim_inner_position = offset_point(
+                    inner_screen_support_position,
+                    patrol_side_bias * (0.18f + outside_reclaim_counter_step * 0.54f),
+                    0.0f,
+                    -0.12f + outside_reclaim_counter_step * 0.10f
+                );
+                const MDTBFloat3 outside_reclaim_patrol_focus = lerp_float3(
+                    boundary_focus_position,
+                    inner_screen_support_position,
+                    clampf(0.18f + outside_reclaim_counter_step * 0.30f, 0.0f, 0.62f)
+                );
+                const MDTBFloat3 outside_reclaim_inner_focus = offset_point(
+                    boundary_focus_position,
+                    patrol_side_bias * (0.54f + outside_reclaim_counter_step * 0.46f),
+                    0.0f,
+                    0.38f + outside_reclaim_counter_step * 0.20f
+                );
+                const MDTBFloat3 outside_retake_patrol_position = offset_point(
+                    patrol_brace_position,
+                    patrol_side_bias * (0.18f + outside_retake_cross_angle * 0.56f),
+                    0.0f,
+                    0.08f + outside_retake_cross_angle * 0.12f
+                );
+                const MDTBFloat3 outside_retake_inner_position = offset_point(
+                    inner_brace_position,
+                    -patrol_side_bias * (0.22f + outside_retake_cross_angle * 0.52f),
+                    0.0f,
+                    0.10f + outside_retake_cross_angle * 0.12f
+                );
+                const MDTBFloat3 outside_retake_patrol_focus = offset_point(
+                    boundary_focus_position,
+                    patrol_side_bias * (0.42f + outside_retake_cross_angle * 0.46f),
+                    0.0f,
+                    0.10f
+                );
+                const MDTBFloat3 outside_retake_inner_focus = offset_point(
+                    boundary_focus_position,
+                    -patrol_side_bias * (0.56f + outside_retake_cross_angle * 0.42f),
+                    0.0f,
+                    0.40f + outside_retake_cross_angle * 0.18f
+                );
+                const float outside_retake_side_blend = clampf(
+                    preferred_side_amount * (
+                        0.30f +
+                        sidewalk_watch_proximity * 0.22f +
+                        state->territory_front_watch * 0.16f +
+                        watch_carry * 0.12f +
+                        (edge_retaking ? 0.20f : 0.0f) +
+                        retake_return_intensity * 0.18f
+                    ),
+                    0.0f,
+                    0.90f
+                );
+                const float outside_retake_side_bias = clampf(
+                    remembered_lateral_bias * (1.0f - outside_retake_side_blend) +
+                    preferred_side_bias * outside_retake_side_blend,
+                    -1.0f,
+                    1.0f
+                );
+                const float outside_retake_side_amount = fabsf(outside_retake_side_bias);
+                const MDTBFloat3 outside_retake_reseal_patrol_position = offset_point(
+                    outside_retake_patrol_position,
+                    outside_retake_side_bias * (0.18f + outside_retake_side_amount * 0.46f),
+                    0.0f,
+                    0.06f + outside_retake_side_amount * 0.14f
+                );
+                const MDTBFloat3 outside_retake_reseal_inner_position = offset_point(
+                    outside_retake_inner_position,
+                    -outside_retake_side_bias * (0.18f + outside_retake_side_amount * 0.42f),
+                    0.0f,
+                    0.08f + outside_retake_side_amount * 0.12f
+                );
+                const MDTBFloat3 outside_retake_reseal_patrol_focus = offset_point(
+                    boundary_focus_position,
+                    outside_retake_side_bias * (0.48f + outside_retake_side_amount * 0.48f),
+                    0.0f,
+                    0.12f
+                );
+                const MDTBFloat3 outside_retake_reseal_inner_focus = offset_point(
+                    boundary_focus_position,
+                    -outside_retake_side_bias * (0.58f + outside_retake_side_amount * 0.42f),
+                    0.0f,
+                    0.42f + outside_retake_side_amount * 0.16f
+                );
+                const MDTBFloat3 reopening_patrol_position = offset_point(
+                    patrol_settle_position,
+                    reopening_side_bias * (0.34f + reopening_side_amount * 0.78f),
+                    0.0f,
+                    0.08f + reopening_reform_intensity * 0.18f
+                );
+                const MDTBFloat3 reopening_inner_position = offset_point(
+                    inner_settle_position,
+                    -reopening_side_bias * (0.24f + reopening_side_amount * 0.64f),
+                    0.0f,
+                    0.12f + reopening_reform_intensity * 0.18f
+                );
+                const MDTBFloat3 reopening_patrol_focus = offset_point(
+                    boundary_focus_position,
+                    reopening_side_bias * (0.42f + reopening_side_amount * 0.44f),
+                    0.0f,
+                    0.08f + reopening_reform_intensity * 0.06f
+                );
+                const MDTBFloat3 reopening_inner_focus = offset_point(
+                    boundary_focus_position,
+                    -reopening_side_bias * (0.46f + reopening_side_amount * 0.40f),
+                    0.0f,
+                    0.26f + reopening_reform_intensity * 0.12f
+                );
+                const int outer_post_approach_carry =
+                    far_sidewalk_approach &&
+                    !hot_nearby &&
+                    !reclaiming_pocket_outside &&
+                    !retaking_edge &&
+                    !reforming_edge &&
+                    !hardening_edge &&
+                    !screening_edge &&
+                    reopening_reform_intensity <= 0.12f &&
+                    preferred_side_amount > 0.18f &&
+                    state->territory_reentry_timer <= 0.0f &&
+                    state->territory_reapproach_timer <= 0.05f &&
+                    state->territory_resolve_timer <= 0.05f &&
+                    state->combat_hostile_search_timer <= 0.0f &&
+                    state->street_recovery_timer <= 0.0f &&
+                    state->street_recovery_level <= 0.04f &&
+                    state->street_incident_timer <= 0.0f &&
+                    state->street_incident_level <= 0.06f &&
+                    watch_carry > 0.0f &&
+                    watch_carry < 0.30f &&
+                    state->territory_heat > 0.03f &&
+                    state->territory_heat < 0.14f &&
+                    (state->territory_patrol_state == MDTBTerritoryPatrolIdle ||
+                     state->territory_patrol_state == MDTBTerritoryPatrolCooldown ||
+                     state->territory_patrol_state == MDTBTerritoryPatrolWatch ||
+                     previous_front_watch > 0.08f ||
+                     previous_heat > 0.06f);
+                const float outer_post_approach_blend =
+                    outer_post_approach_carry
+                    ? clampf(
+                        preferred_side_amount * 0.30f +
+                        sidewalk_watch_proximity * 0.16f +
+                        watch_carry * 0.26f +
+                        previous_front_watch * 0.10f +
+                        previous_heat * 0.12f,
+                        0.0f,
+                        0.68f
+                    )
+                    : 0.0f;
+                const MDTBFloat3 outer_post_approach_position = lerp_float3(
+                    kTerritoryPatrolBasePosition,
+                    patrol_watch_position,
+                    clampf(
+                        0.08f +
+                        sidewalk_watch_proximity * 0.18f +
+                        outer_post_approach_blend * 0.18f,
+                        0.0f,
+                        0.28f
+                    )
+                );
+                const MDTBFloat3 outer_post_approach_focus = offset_point(
+                    kTerritoryPatrolLinePosition,
+                    preferred_side_bias * (0.22f + preferred_side_amount * 0.30f),
+                    0.0f,
+                    -0.28f + outer_post_approach_blend * 0.06f
+                );
+                const int cold_watch_shoulder_carry =
+                    near_sidewalk_watch &&
+                    !hot_nearby &&
+                    !reclaiming_pocket_outside &&
+                    !retaking_edge &&
+                    !reforming_edge &&
+                    !hardening_edge &&
+                    !screening_edge &&
+                    reopening_reform_intensity <= 0.12f &&
+                    preferred_side_amount > 0.18f &&
+                    state->territory_reentry_timer <= 0.0f &&
+                    state->territory_reapproach_timer <= 0.05f &&
+                    state->territory_resolve_timer <= 0.05f &&
+                    state->combat_hostile_search_timer <= 0.0f &&
+                    state->street_recovery_timer <= 0.0f &&
+                    state->street_recovery_level <= 0.04f &&
+                    state->street_incident_timer <= 0.0f &&
+                    state->street_incident_level <= 0.06f &&
+                    watch_carry > 0.0f &&
+                    watch_carry < 0.36f &&
+                    state->territory_heat > 0.03f &&
+                    state->territory_heat < 0.18f &&
+                    (state->territory_patrol_state == MDTBTerritoryPatrolCooldown ||
+                     state->territory_patrol_state == MDTBTerritoryPatrolWatch ||
+                     previous_front_watch > 0.10f ||
+                     previous_heat > 0.08f);
+                const float cold_watch_carry_blend =
+                    cold_watch_shoulder_carry
+                    ? clampf(
+                        preferred_side_amount * 0.34f +
+                        (1.0f - sidewalk_watch_proximity) * 0.08f +
+                        watch_carry * 0.28f +
+                        previous_front_watch * 0.12f +
+                        previous_heat * 0.14f,
+                        0.0f,
+                        0.76f
+                    )
+                    : 0.0f;
+                const float cold_watch_side_bias =
+                    preferred_side_amount > 0.18f
+                    ? preferred_side_bias
+                    : remembered_lateral_bias;
+                const float cold_watch_side_amount = fabsf(cold_watch_side_bias);
+                const MDTBFloat3 cold_watch_patrol_position = offset_point(
+                    patrol_watch_position,
+                    cold_watch_side_bias * (0.26f + cold_watch_side_amount * 0.38f),
+                    0.0f,
+                    -0.14f + cold_watch_carry_blend * 0.08f
+                );
+                const MDTBFloat3 cold_watch_patrol_focus = offset_point(
+                    kTerritoryPatrolLinePosition,
+                    cold_watch_side_bias * (0.32f + cold_watch_side_amount * 0.34f),
+                    0.0f,
+                    -0.12f + cold_watch_carry_blend * 0.06f
+                );
+                const int cold_start_shoulder_carry =
+                    near_sidewalk_watch &&
+                    !hot_nearby &&
+                    !reclaiming_pocket_outside &&
+                    !retaking_edge &&
+                    reopening_reform_intensity <= 0.18f &&
+                    preferred_side_amount > 0.18f &&
+                    state->street_recovery_timer <= 0.0f &&
+                    state->street_recovery_level <= 0.04f &&
+                    state->street_incident_timer <= 0.0f &&
+                    state->street_incident_level <= 0.06f &&
+                    watch_carry > 0.0f &&
+                    watch_carry < 0.42f &&
+                    state->territory_heat > 0.04f &&
+                    state->territory_heat < 0.24f &&
+                    (state->territory_patrol_state == MDTBTerritoryPatrolCooldown ||
+                     state->territory_patrol_state == MDTBTerritoryPatrolWatch ||
+                     state->territory_inner_state == MDTBTerritoryPatrolCooldown ||
+                     state->territory_inner_state == MDTBTerritoryPatrolWatch ||
+                     state->territory_patrol_alert > 0.08f ||
+                     state->territory_inner_alert > 0.06f);
+                const float cold_start_carry_blend =
+                    cold_start_shoulder_carry
+                    ? clampf(
+                        preferred_side_amount * 0.42f +
+                        sidewalk_watch_proximity * 0.22f +
+                        watch_carry * 0.28f +
+                        fmaxf(state->territory_patrol_alert, state->territory_inner_alert) * 0.18f,
+                        0.0f,
+                        0.88f
+                    )
+                    : 0.0f;
+                const float cold_start_side_bias =
+                    preferred_side_amount > 0.18f
+                    ? preferred_side_bias
+                    : patrol_side_bias;
+                const float cold_start_side_amount = fabsf(cold_start_side_bias);
+                const MDTBFloat3 cold_start_patrol_screen_position = offset_point(
+                    patrol_screen_position,
+                    cold_start_side_bias * (0.34f + cold_start_side_amount * 0.42f),
+                    0.0f,
+                    0.08f + cold_start_carry_blend * 0.10f
+                );
+                const MDTBFloat3 cold_start_patrol_brace_position = offset_point(
+                    patrol_brace_position,
+                    cold_start_side_bias * (0.28f + cold_start_side_amount * 0.36f),
+                    0.0f,
+                    0.10f + cold_start_carry_blend * 0.10f
+                );
+                const MDTBFloat3 cold_start_patrol_watch_position = lerp_float3(
+                    patrol_watch_position,
+                    cold_start_patrol_screen_position,
+                    clampf(0.12f + cold_start_carry_blend * 0.24f, 0.0f, 0.46f)
+                );
+                const MDTBFloat3 cold_start_patrol_focus = offset_point(
+                    boundary_focus_position,
+                    cold_start_side_bias * (0.42f + cold_start_side_amount * 0.40f),
+                    0.0f,
+                    0.10f + cold_start_carry_blend * 0.04f
+                );
+                const MDTBFloat3 cold_start_inner_screen_position = offset_point(
+                    inner_screen_support_position,
+                    -cold_start_side_bias * (0.24f + cold_start_side_amount * 0.32f),
+                    0.0f,
+                    0.10f + cold_start_carry_blend * 0.12f
+                );
+                const MDTBFloat3 cold_start_inner_brace_position = offset_point(
+                    inner_brace_position,
+                    -cold_start_side_bias * (0.20f + cold_start_side_amount * 0.30f),
+                    0.0f,
+                    0.08f + cold_start_carry_blend * 0.10f
+                );
+                const MDTBFloat3 cold_start_inner_focus = offset_point(
+                    boundary_focus_position,
+                    -cold_start_side_bias * (0.48f + cold_start_side_amount * 0.34f),
+                    0.0f,
+                    0.34f + cold_start_carry_blend * 0.12f
+                );
 
-                if (hardening_edge) {
+                if (reclaiming_pocket_outside) {
+                    const float reclaim_blend = clampf(
+                        0.16f +
+                        sidewalk_watch_proximity * 0.20f +
+                        state->territory_deep_watch * 0.18f +
+                        watch_carry * 0.12f +
+                        reclaim_return_intensity * 0.10f +
+                        outside_reclaim_counter_step * 0.08f,
+                        0.0f,
+                        0.52f
+                    );
+
+                    patrol_target_state = MDTBTerritoryPatrolReform;
+                    patrol_target_position = lerp_float3(
+                        patrol_clear_position,
+                        outside_reclaim_patrol_position,
+                        reclaim_blend
+                    );
+                    patrol_target_alert =
+                        0.22f +
+                        sidewalk_watch_proximity * 0.14f +
+                        state->territory_deep_watch * 0.10f +
+                        watch_carry * 0.08f +
+                        reclaim_return_intensity * 0.08f +
+                        outside_reclaim_counter_step * 0.04f;
+                    patrol_speed = 2.9f + outside_reclaim_counter_step * 0.22f;
+                    patrol_heading_focus = outside_reclaim_patrol_focus;
+                } else if (retaking_edge) {
+                    const float brace_blend = clampf(
+                        0.54f +
+                        sidewalk_watch_proximity * 0.18f +
+                        state->territory_front_watch * 0.12f +
+                        watch_carry * 0.12f +
+                        retake_return_intensity * 0.12f +
+                        outside_retake_cross_angle * 0.10f,
+                        0.0f,
+                        0.92f
+                    );
+
+                    patrol_target_state = MDTBTerritoryPatrolBrace;
+                    patrol_target_position = lerp_float3(
+                        patrol_screen_position,
+                        outside_retake_patrol_position,
+                        brace_blend
+                    );
+                    patrol_target_alert =
+                        0.34f +
+                        sidewalk_watch_proximity * 0.18f +
+                        state->territory_front_watch * 0.10f +
+                        watch_carry * 0.10f +
+                        retake_return_intensity * 0.10f +
+                        outside_retake_cross_angle * 0.04f +
+                        (current_vehicle_entry ? 0.04f : 0.0f);
+                    patrol_speed = 3.1f + outside_retake_cross_angle * 0.22f;
+                    patrol_heading_focus = outside_retake_patrol_focus;
+                } else if (hardening_edge) {
                     const float brace_blend = clampf(
                         0.34f +
                         sidewalk_watch_proximity * 0.20f +
@@ -1440,16 +2851,43 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     patrol_target_state = MDTBTerritoryPatrolBrace;
                     patrol_target_position = lerp_float3(
                         patrol_screen_position,
-                        patrol_brace_position,
+                        cold_start_shoulder_carry ? cold_start_patrol_brace_position : patrol_brace_position,
                         brace_blend
                     );
                     patrol_target_alert =
                         0.28f +
                         sidewalk_watch_proximity * 0.20f +
                         state->territory_front_watch * 0.08f +
-                        (current_vehicle_entry ? 0.04f : 0.0f);
+                        (current_vehicle_entry ? 0.04f : 0.0f) +
+                        cold_start_carry_blend * 0.04f;
                     patrol_speed = 3.0f;
-                    patrol_heading_focus = boundary_focus_position;
+                    patrol_heading_focus = cold_start_shoulder_carry ? cold_start_patrol_focus : boundary_focus_position;
+                } else if (reopening_reform_intensity > 0.18f &&
+                           sidewalk_watch_proximity > 0.0f &&
+                           !hot_nearby) {
+                    const float reform_blend = clampf(
+                        0.28f +
+                        sidewalk_watch_proximity * 0.24f +
+                        watch_carry * 0.12f +
+                        reopening_reform_intensity * 0.24f,
+                        0.0f,
+                        0.86f
+                    );
+
+                    patrol_target_state = MDTBTerritoryPatrolReform;
+                    patrol_target_position = lerp_float3(
+                        patrol_clear_position,
+                        reopening_patrol_position,
+                        reform_blend
+                    );
+                    patrol_target_alert =
+                        0.18f +
+                        sidewalk_watch_proximity * 0.12f +
+                        watch_carry * 0.06f +
+                        reopening_reform_intensity * 0.10f +
+                        (current_vehicle_entry ? 0.04f : 0.0f);
+                    patrol_speed = 2.8f + reopening_reform_intensity * 0.14f;
+                    patrol_heading_focus = reopening_patrol_focus;
                 } else if (reforming_edge) {
                     const float reform_blend = clampf(
                         0.18f +
@@ -1476,32 +2914,126 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     patrol_speed = 2.7f;
                     patrol_heading_focus = boundary_focus_position;
                 } else {
+                    const MDTBFloat3 cold_watch_target_position =
+                        cold_watch_shoulder_carry
+                        ? cold_watch_patrol_position
+                        : (cold_start_shoulder_carry
+                            ? cold_start_patrol_watch_position
+                            : patrol_watch_position);
+                    const MDTBFloat3 screening_patrol_position = offset_point(
+                        patrol_screen_position,
+                        patrol_side_bias * (entry_clamp ? 0.42f : 0.0f),
+                        0.0f,
+                        entry_clamp ? 0.24f : 0.0f
+                    );
                     patrol_target_state = screening_edge ? MDTBTerritoryPatrolScreen : MDTBTerritoryPatrolWatch;
                     patrol_target_position = screening_edge
-                        ? offset_point(
-                            patrol_screen_position,
-                            patrol_side_bias * (entry_clamp ? 0.42f : 0.0f),
-                            0.0f,
-                            entry_clamp ? 0.24f : 0.0f
+                        ? lerp_float3(
+                            screening_patrol_position,
+                            cold_start_patrol_screen_position,
+                            cold_start_carry_blend
                         )
-                        : lerp_float3(
-                            kTerritoryPatrolBasePosition,
-                            patrol_watch_position,
-                            clampf(0.20f + sidewalk_watch_proximity * 0.80f, 0.0f, 1.0f)
-                        );
+                        : (outer_post_approach_carry
+                            ? lerp_float3(
+                                outer_post_approach_position,
+                                cold_watch_target_position,
+                                clampf(0.06f + outer_post_approach_blend * 0.10f, 0.0f, 0.22f)
+                            )
+                            : lerp_float3(
+                                kTerritoryPatrolBasePosition,
+                                cold_watch_target_position,
+                                clampf(
+                                    0.20f +
+                                    sidewalk_watch_proximity * 0.80f +
+                                    cold_start_carry_blend * 0.06f +
+                                    cold_watch_carry_blend * 0.08f,
+                                    0.0f,
+                                    1.0f
+                                )
+                            ));
                     patrol_target_alert = screening_edge
                         ? ((entry_clamp ? 0.38f : 0.32f) +
                             sidewalk_watch_proximity * 0.32f +
-                            (current_vehicle_entry ? 0.08f : 0.04f))
-                        : (0.20f +
-                            sidewalk_watch_proximity * 0.28f +
-                            (current_vehicle_entry ? 0.06f : 0.0f) +
-                            (hot_nearby ? 0.10f : 0.0f));
-                    patrol_speed = screening_edge ? 3.2f : 2.8f;
-                    patrol_heading_focus = screening_edge ? boundary_focus_position : player_position;
+                            (current_vehicle_entry ? 0.08f : 0.04f) +
+                            cold_start_carry_blend * 0.04f)
+                        : (outer_post_approach_carry
+                            ? (0.12f +
+                                sidewalk_watch_proximity * 0.12f +
+                                outer_post_approach_blend * 0.04f +
+                                (current_vehicle_entry ? 0.04f : 0.0f))
+                            : (0.20f +
+                                sidewalk_watch_proximity * 0.28f +
+                                (current_vehicle_entry ? 0.06f : 0.0f) +
+                                (hot_nearby ? 0.10f : 0.0f) +
+                                cold_start_carry_blend * 0.03f +
+                                cold_watch_carry_blend * 0.02f));
+                    patrol_speed = screening_edge
+                        ? (3.2f + cold_start_carry_blend * 0.12f)
+                        : (outer_post_approach_carry
+                            ? (2.4f + outer_post_approach_blend * 0.08f)
+                            : (2.8f + cold_start_carry_blend * 0.10f + cold_watch_carry_blend * 0.08f));
+                    patrol_heading_focus = screening_edge
+                        ? (cold_start_shoulder_carry ? cold_start_patrol_focus : boundary_focus_position)
+                        : (outer_post_approach_carry
+                            ? outer_post_approach_focus
+                            : (cold_watch_shoulder_carry
+                            ? cold_watch_patrol_focus
+                            : (cold_start_shoulder_carry ? cold_start_patrol_focus : player_position)));
                 }
 
-                if (hot_nearby) {
+                if (retaking_edge) {
+                    const float brace_blend = clampf(
+                        0.30f +
+                        sidewalk_watch_proximity * 0.18f +
+                        watch_carry * 0.12f +
+                        patrol_target_alert * 0.14f +
+                        retake_return_intensity * 0.08f +
+                        outside_retake_cross_angle * 0.08f,
+                        0.0f,
+                        0.78f
+                    );
+
+                    inner_target_state = MDTBTerritoryPatrolBrace;
+                    inner_target_position = lerp_float3(
+                        inner_screen_support_position,
+                        outside_retake_inner_position,
+                        brace_blend
+                    );
+                    inner_target_alert =
+                        0.14f +
+                        sidewalk_watch_proximity * 0.10f +
+                        patrol_target_alert * 0.18f +
+                        watch_carry * 0.06f +
+                        retake_return_intensity * 0.06f +
+                        outside_retake_cross_angle * 0.04f;
+                    inner_speed = 2.6f + outside_retake_cross_angle * 0.18f;
+                    inner_heading_focus = outside_retake_inner_focus;
+                } else if (reclaiming_pocket_outside) {
+                    inner_target_state = MDTBTerritoryPatrolHandoff;
+                    inner_target_position = lerp_float3(
+                        inner_pocket_position,
+                        outside_reclaim_inner_position,
+                        clampf(
+                            0.22f +
+                            sidewalk_watch_proximity * 0.14f +
+                            state->territory_deep_watch * 0.18f +
+                            patrol_target_alert * 0.10f +
+                            reclaim_return_intensity * 0.10f +
+                            outside_reclaim_counter_step * 0.08f,
+                            0.0f,
+                            0.64f
+                        )
+                    );
+                    inner_target_alert =
+                        0.14f +
+                        sidewalk_watch_proximity * 0.08f +
+                        state->territory_deep_watch * 0.08f +
+                        patrol_target_alert * 0.12f +
+                        reclaim_return_intensity * 0.06f +
+                        outside_reclaim_counter_step * 0.04f;
+                    inner_speed = 2.5f + outside_reclaim_counter_step * 0.18f;
+                    inner_heading_focus = outside_reclaim_inner_focus;
+                } else if (hot_nearby) {
                     inner_target_state = MDTBTerritoryPatrolWatch;
                     inner_target_position = lerp_float3(
                         inner_pocket_position,
@@ -1523,16 +3055,42 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     inner_target_state = MDTBTerritoryPatrolBrace;
                     inner_target_position = lerp_float3(
                         inner_screen_support_position,
-                        inner_brace_position,
+                        cold_start_shoulder_carry ? cold_start_inner_brace_position : inner_brace_position,
                         brace_blend
                     );
                     inner_target_alert =
                         0.10f +
                         sidewalk_watch_proximity * 0.10f +
                         patrol_target_alert * 0.16f +
-                        (entry_clamp ? 0.04f : 0.0f);
+                        (entry_clamp ? 0.04f : 0.0f) +
+                        cold_start_carry_blend * 0.03f;
                     inner_speed = 2.5f;
-                    inner_heading_focus = boundary_focus_position;
+                    inner_heading_focus = cold_start_shoulder_carry ? cold_start_inner_focus : boundary_focus_position;
+                } else if (reopening_reform_intensity > 0.18f &&
+                           sidewalk_watch_proximity > 0.0f &&
+                           !hot_nearby) {
+                    const float reform_blend = clampf(
+                        0.18f +
+                        sidewalk_watch_proximity * 0.14f +
+                        patrol_target_alert * 0.12f +
+                        reopening_reform_intensity * 0.18f,
+                        0.0f,
+                        0.62f
+                    );
+
+                    inner_target_state = MDTBTerritoryPatrolReform;
+                    inner_target_position = lerp_float3(
+                        inner_pocket_position,
+                        reopening_inner_position,
+                        reform_blend
+                    );
+                    inner_target_alert =
+                        0.08f +
+                        sidewalk_watch_proximity * 0.08f +
+                        patrol_target_alert * 0.10f +
+                        reopening_reform_intensity * 0.08f;
+                    inner_speed = 2.1f + reopening_reform_intensity * 0.10f;
+                    inner_heading_focus = reopening_inner_focus;
                 } else if (reforming_edge) {
                     const float reform_blend = clampf(
                         0.10f +
@@ -1558,25 +3116,84 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                     inner_speed = 2.0f;
                     inner_heading_focus = boundary_focus_position;
                 } else if (screening_edge) {
+                    const MDTBFloat3 screening_inner_position =
+                        entry_clamp
+                        ? offset_point(
+                            inner_screen_support_position,
+                            -patrol_side_bias * 0.62f,
+                            0.0f,
+                            0.30f
+                        )
+                        : inner_screen_support_position;
                     inner_target_state = MDTBTerritoryPatrolWatch;
                     inner_target_position = lerp_float3(
                         inner_pocket_position,
-                        entry_clamp
-                            ? offset_point(
-                                inner_screen_support_position,
-                                -patrol_side_bias * 0.62f,
-                                0.0f,
-                                0.30f
+                        cold_start_shoulder_carry
+                            ? lerp_float3(
+                                screening_inner_position,
+                                cold_start_inner_screen_position,
+                                cold_start_carry_blend
                             )
-                            : inner_screen_support_position,
-                        clampf((entry_clamp ? 0.24f : 0.16f) + sidewalk_watch_proximity * 0.12f + patrol_target_alert * 0.10f, 0.0f, 0.34f)
+                            : screening_inner_position,
+                        clampf(
+                            (entry_clamp ? 0.24f : 0.16f) +
+                            sidewalk_watch_proximity * 0.12f +
+                            patrol_target_alert * 0.10f +
+                            cold_start_carry_blend * 0.06f,
+                            0.0f,
+                            0.40f
+                        )
                     );
                     inner_target_alert =
                         (entry_clamp ? 0.10f : 0.06f) +
                         sidewalk_watch_proximity * 0.08f +
-                        patrol_target_alert * 0.10f;
-                    inner_speed = entry_clamp ? 2.4f : 2.0f;
-                    inner_heading_focus = boundary_focus_position;
+                        patrol_target_alert * 0.10f +
+                        cold_start_carry_blend * 0.03f;
+                    inner_speed = entry_clamp
+                        ? (2.4f + cold_start_carry_blend * 0.12f)
+                        : (2.0f + cold_start_carry_blend * 0.08f);
+                    inner_heading_focus = cold_start_shoulder_carry ? cold_start_inner_focus : boundary_focus_position;
+                }
+
+                if (retaking_edge &&
+                    preferred_side_amount > 0.22f &&
+                    patrol_target_state == MDTBTerritoryPatrolBrace &&
+                    inner_target_state == MDTBTerritoryPatrolBrace) {
+                    const float reseal_blend = clampf(
+                        0.24f +
+                        outside_retake_side_amount * 0.34f +
+                        sidewalk_watch_proximity * 0.20f +
+                        watch_carry * 0.16f +
+                        state->territory_front_watch * 0.14f,
+                        0.0f,
+                        0.90f
+                    );
+                    const float inner_reseal_blend = clampf(reseal_blend + 0.08f, 0.0f, 0.92f);
+
+                    patrol_target_position = lerp_float3(
+                        patrol_target_position,
+                        outside_retake_reseal_patrol_position,
+                        reseal_blend
+                    );
+                    patrol_heading_focus = lerp_float3(
+                        patrol_heading_focus,
+                        outside_retake_reseal_patrol_focus,
+                        reseal_blend
+                    );
+                    patrol_target_alert += reseal_blend * 0.06f;
+                    patrol_speed += reseal_blend * 0.18f;
+                    inner_target_position = lerp_float3(
+                        inner_target_position,
+                        outside_retake_reseal_inner_position,
+                        inner_reseal_blend
+                    );
+                    inner_heading_focus = lerp_float3(
+                        inner_heading_focus,
+                        outside_retake_reseal_inner_focus,
+                        reseal_blend
+                    );
+                    inner_target_alert += reseal_blend * 0.04f;
+                    inner_speed += reseal_blend * 0.16f;
                 }
             }
 
@@ -1602,14 +3219,24 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 state->territory_heat = 0.0f;
             }
 
+            const int street_cooldown_active =
+                (state->street_incident_timer > 0.0f && state->street_incident_level > 0.06f) ||
+                (state->street_recovery_timer > 0.0f && state->street_recovery_level > 0.04f);
+
             if (state->territory_watch_timer <= 0.0f &&
                 state->territory_front_watch <= 0.04f &&
                 state->territory_deep_watch <= 0.04f &&
-                state->territory_heat <= 0.04f) {
+                state->territory_heat <= 0.04f &&
+                !street_cooldown_active) {
                 state->territory_entry_mode = MDTBTerritoryEntryNone;
+                state->territory_preferred_side = 0.0f;
                 state->territory_watch_timer = 0.0f;
                 state->territory_front_watch = 0.0f;
                 state->territory_deep_watch = 0.0f;
+                if (state->territory_reapproach_timer <= 0.12f) {
+                    state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+                    state->territory_reapproach_timer = 0.0f;
+                }
             } else if (state->territory_watch_timer <= 0.0f &&
                        fmaxf(previous_front_watch, previous_deep_watch) > 0.12f) {
                 state->territory_watch_timer = kTerritoryWatchCarryDuration * 0.28f;
@@ -1618,10 +3245,57 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
 
         if (patrol_target_state == MDTBTerritoryPatrolIdle &&
             (state->territory_patrol_state != MDTBTerritoryPatrolIdle || state->territory_patrol_alert > 0.05f)) {
+            const int late_fallback_active =
+                !inside &&
+                state->street_recovery_timer <= 0.0f &&
+                state->street_recovery_level <= 0.04f &&
+                state->street_incident_timer <= 0.0f &&
+                state->street_incident_level <= 0.06f &&
+                preferred_side_amount > 0.18f &&
+                state->territory_watch_timer > 0.0f &&
+                state->territory_heat > 0.04f &&
+                (state->territory_patrol_state == MDTBTerritoryPatrolReform ||
+                 state->territory_patrol_state == MDTBTerritoryPatrolCooldown ||
+                 state->territory_patrol_state == MDTBTerritoryPatrolWatch ||
+                 state->territory_inner_state == MDTBTerritoryPatrolReform ||
+                 state->territory_inner_state == MDTBTerritoryPatrolCooldown ||
+                 state->territory_patrol_alert > 0.10f ||
+                 state->territory_inner_alert > 0.08f ||
+                 previous_heat > 0.12f);
+            const float late_fallback_blend =
+                late_fallback_active
+                ? clampf(
+                    preferred_side_amount * 0.46f +
+                    state->territory_watch_timer / kTerritoryWatchCarryDuration * 0.38f +
+                    fmaxf(state->territory_patrol_alert, state->territory_inner_alert) * 0.24f +
+                    previous_heat * 0.20f,
+                    0.0f,
+                    0.92f
+                )
+                : 0.0f;
+            const MDTBFloat3 late_fallback_patrol_position = offset_point(
+                kTerritoryPatrolBasePosition,
+                preferred_side_bias * (0.48f + preferred_side_amount * 0.72f),
+                0.0f,
+                -0.10f + late_fallback_blend * 0.12f
+            );
             patrol_target_state = MDTBTerritoryPatrolCooldown;
-            patrol_target_position = kTerritoryPatrolBasePosition;
-            patrol_target_alert = 0.08f + fminf(previous_heat, 0.30f) * 0.12f;
-            patrol_speed = 2.2f;
+            patrol_target_position = lerp_float3(
+                kTerritoryPatrolBasePosition,
+                late_fallback_patrol_position,
+                late_fallback_blend
+            );
+            patrol_target_alert =
+                0.08f +
+                fminf(previous_heat, 0.30f) * 0.12f +
+                late_fallback_blend * 0.05f;
+            patrol_speed = 2.2f + late_fallback_blend * 0.16f;
+            patrol_heading_focus = offset_point(
+                kTerritoryPatrolLinePosition,
+                preferred_side_bias * (0.72f + preferred_side_amount * 0.44f),
+                0.0f,
+                0.0f
+            );
         }
 
         state->territory_patrol_state = patrol_target_state;
@@ -1640,9 +3314,11 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
 
         {
             const MDTBFloat3 heading_target =
-                patrol_target_state == MDTBTerritoryPatrolIdle || patrol_target_state == MDTBTerritoryPatrolCooldown
+                patrol_target_state == MDTBTerritoryPatrolIdle
                 ? kTerritoryPatrolLinePosition
-                : patrol_heading_focus;
+                : (patrol_target_state == MDTBTerritoryPatrolCooldown
+                    ? patrol_heading_focus
+                    : patrol_heading_focus);
             float desired_heading = state->territory_patrol_heading;
 
             if (distance_squared_xz(state->territory_patrol_position, heading_target) > 0.04f) {
@@ -1657,10 +3333,56 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
 
         if (inner_target_state == MDTBTerritoryPatrolIdle &&
             (state->territory_inner_state != MDTBTerritoryPatrolIdle || state->territory_inner_alert > 0.05f)) {
+            const int late_fallback_active =
+                !inside &&
+                state->street_recovery_timer <= 0.0f &&
+                state->street_recovery_level <= 0.04f &&
+                state->street_incident_timer <= 0.0f &&
+                state->street_incident_level <= 0.06f &&
+                preferred_side_amount > 0.18f &&
+                state->territory_watch_timer > 0.0f &&
+                state->territory_heat > 0.04f &&
+                (state->territory_patrol_state == MDTBTerritoryPatrolReform ||
+                 state->territory_patrol_state == MDTBTerritoryPatrolCooldown ||
+                 state->territory_inner_state == MDTBTerritoryPatrolReform ||
+                 state->territory_inner_state == MDTBTerritoryPatrolCooldown ||
+                 state->territory_patrol_alert > 0.10f ||
+                 state->territory_inner_alert > 0.08f ||
+                 previous_heat > 0.12f);
+            const float late_fallback_blend =
+                late_fallback_active
+                ? clampf(
+                    preferred_side_amount * 0.42f +
+                    state->territory_watch_timer / kTerritoryWatchCarryDuration * 0.34f +
+                    fmaxf(state->territory_patrol_alert, state->territory_inner_alert) * 0.22f +
+                    previous_heat * 0.18f,
+                    0.0f,
+                    0.90f
+                )
+                : 0.0f;
+            const MDTBFloat3 late_fallback_inner_position = offset_point(
+                kTerritoryInnerBasePosition,
+                -preferred_side_bias * (0.34f + preferred_side_amount * 0.62f),
+                0.0f,
+                0.08f + late_fallback_blend * 0.12f
+            );
             inner_target_state = MDTBTerritoryPatrolCooldown;
-            inner_target_position = kTerritoryInnerBasePosition;
-            inner_target_alert = 0.06f + fminf(previous_heat, 0.26f) * 0.10f;
-            inner_speed = 2.2f;
+            inner_target_position = lerp_float3(
+                kTerritoryInnerBasePosition,
+                late_fallback_inner_position,
+                late_fallback_blend
+            );
+            inner_target_alert =
+                0.06f +
+                fminf(previous_heat, 0.26f) * 0.10f +
+                late_fallback_blend * 0.04f;
+            inner_speed = 2.2f + late_fallback_blend * 0.14f;
+            inner_heading_focus = offset_point(
+                patrol_heading_focus,
+                -preferred_side_bias * (0.42f + preferred_side_amount * 0.30f),
+                0.0f,
+                0.34f + late_fallback_blend * 0.10f
+            );
         }
 
         state->territory_inner_state = inner_target_state;
@@ -1679,9 +3401,11 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
 
         {
             const MDTBFloat3 heading_target =
-                inner_target_state == MDTBTerritoryPatrolIdle || inner_target_state == MDTBTerritoryPatrolCooldown
+                inner_target_state == MDTBTerritoryPatrolIdle
                 ? state->territory_patrol_position
-                : inner_heading_focus;
+                : (inner_target_state == MDTBTerritoryPatrolCooldown
+                    ? inner_heading_focus
+                    : inner_heading_focus);
             float desired_heading = state->territory_inner_heading;
 
             if (distance_squared_xz(state->territory_inner_position, heading_target) > 0.04f) {
@@ -1695,11 +3419,59 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
         }
 
         if (!inside && state->territory_patrol_alert > 0.12f) {
-            const float sidewalk_watch = state->territory_patrol_alert * (near_sidewalk_watch ? 0.48f : 0.24f);
+            const float sidewalk_watch_scale =
+                near_sidewalk_watch
+                ? 0.48f
+                : (far_sidewalk_approach ? 0.16f : 0.24f);
+            const float sidewalk_watch = state->territory_patrol_alert * sidewalk_watch_scale;
             state->territory_front_watch = fmaxf(state->territory_front_watch, sidewalk_watch);
             state->territory_watch_timer = fmaxf(
                 state->territory_watch_timer,
-                kTerritoryWatchCarryDuration * (near_sidewalk_watch ? 0.44f : 0.24f)
+                kTerritoryWatchCarryDuration * (near_sidewalk_watch ? 0.44f : (far_sidewalk_approach ? 0.16f : 0.24f))
+            );
+        }
+
+        if (!inside && edge_retaking) {
+            state->territory_front_watch = fmaxf(
+                state->territory_front_watch,
+                0.34f + sidewalk_watch_proximity * 0.14f
+            );
+            state->territory_watch_timer = fmaxf(
+                state->territory_watch_timer,
+                kTerritoryWatchCarryDuration * 0.56f
+            );
+        }
+
+        if (!inside && retake_returning) {
+            state->territory_front_watch = fmaxf(
+                state->territory_front_watch,
+                0.24f + sidewalk_watch_proximity * 0.12f + retake_return_intensity * 0.08f
+            );
+            state->territory_watch_timer = fmaxf(
+                state->territory_watch_timer,
+                kTerritoryWatchCarryDuration * 0.34f
+            );
+        }
+
+        if (!inside && pocket_claiming) {
+            state->territory_deep_watch = fmaxf(
+                state->territory_deep_watch,
+                0.28f + state->territory_inner_alert * 0.22f
+            );
+            state->territory_watch_timer = fmaxf(
+                state->territory_watch_timer,
+                kTerritoryWatchCarryDuration * 0.42f
+            );
+        }
+
+        if (!inside && reclaim_returning) {
+            state->territory_deep_watch = fmaxf(
+                state->territory_deep_watch,
+                0.22f + state->territory_inner_alert * 0.16f + reclaim_return_intensity * 0.08f
+            );
+            state->territory_watch_timer = fmaxf(
+                state->territory_watch_timer,
+                kTerritoryWatchCarryDuration * 0.30f
             );
         }
 
@@ -1711,19 +3483,23 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
         {
             const float commit_hold_duration =
                 state->territory_entry_mode == MDTBTerritoryEntryVehicle ? 1.35f : 1.10f;
+            const float resolve_hold_duration =
+                state->territory_entry_mode == MDTBTerritoryEntryVehicle ? 1.20f : 1.02f;
+            const float resolve_pullout_duration =
+                state->territory_entry_mode == MDTBTerritoryEntryVehicle ? 1.08f : 0.92f;
             const int commit_window_candidate =
                 state->player_reset_timer <= 0.0f &&
                 state->combat_hostile_search_timer <= 0.0f &&
                 state->territory_phase != MDTBTerritoryPhaseHot &&
                 state->territory_patrol_state == MDTBTerritoryPatrolBrace &&
                 state->territory_patrol_alert > 0.18f &&
-                state->territory_deep_watch <= (state->territory_front_watch + 0.18f);
+                state->territory_deep_watch <= (state->territory_front_watch + (retake_returning ? 0.14f : 0.18f));
             const int commit_push_candidate =
                 inside &&
                 state->territory_faction == MDTBTerritoryFactionCourtSet &&
                 state->territory_phase != MDTBTerritoryPhaseBoundary &&
-                (state->territory_presence > 0.60f ||
-                 state->territory_deep_watch > (state->territory_front_watch + 0.06f) ||
+                (state->territory_presence > (reclaim_returning ? 0.54f : 0.60f) ||
+                 state->territory_deep_watch > (state->territory_front_watch + (reclaim_returning ? 0.02f : 0.06f)) ||
                  state->territory_patrol_state == MDTBTerritoryPatrolHandoff ||
                  state->territory_patrol_state == MDTBTerritoryPatrolClear ||
                  state->territory_inner_state == MDTBTerritoryPatrolHandoff);
@@ -1742,12 +3518,52 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                 fmaxf(0.0f, state->territory_deep_watch - state->territory_front_watch) * 0.30f +
                 ((state->territory_patrol_state == MDTBTerritoryPatrolClear ||
                   state->territory_patrol_state == MDTBTerritoryPatrolHandoff) ? 0.18f : 0.0f) +
-                (state->territory_inner_state == MDTBTerritoryPatrolHandoff ? 0.10f : 0.0f);
+                (state->territory_inner_state == MDTBTerritoryPatrolHandoff ? 0.10f : 0.0f) +
+                reclaim_return_intensity * 0.10f -
+                retake_return_intensity * 0.04f;
+            const float resolve_exit_depth = clampf(
+                ((kCourtSetTerritoryEntryZ + 0.45f) - player_position.z) / 2.8f,
+                0.0f,
+                1.0f
+            );
+            const int resolve_hold_candidate =
+                inside &&
+                state->territory_faction == MDTBTerritoryFactionCourtSet &&
+                state->territory_phase == MDTBTerritoryPhaseClaimed &&
+                (state->territory_presence > (reclaim_returning ? 0.62f : 0.68f) ||
+                 state->territory_deep_watch > (state->territory_front_watch + (reclaim_returning ? 0.06f : 0.10f)) ||
+                 state->territory_patrol_state == MDTBTerritoryPatrolClear ||
+                 state->territory_patrol_state == MDTBTerritoryPatrolHandoff ||
+                 state->territory_inner_state == MDTBTerritoryPatrolHandoff);
+            const int resolve_pullout_candidate =
+                state->territory_faction == MDTBTerritoryFactionCourtSet &&
+                ((!inside && player_position.z <= (kCourtSetTerritoryEntryZ + 0.28f)) ||
+                 (state->territory_phase == MDTBTerritoryPhaseBoundary &&
+                  state->territory_presence < 0.58f &&
+                  player_position.z <= (kCourtSetTerritoryEntryZ + 0.72f)));
+            const float resolve_hold_rate =
+                0.74f +
+                state->territory_presence * 0.18f +
+                fmaxf(0.0f, state->territory_deep_watch - state->territory_front_watch) * 0.26f +
+                ((state->territory_patrol_state == MDTBTerritoryPatrolClear ||
+                  state->territory_inner_state == MDTBTerritoryPatrolHandoff) ? 0.12f : 0.0f) +
+                reclaim_return_intensity * 0.08f;
+            const float resolve_pullout_rate =
+                0.84f +
+                resolve_exit_depth * 0.32f +
+                (state->territory_entry_mode == MDTBTerritoryEntryVehicle ? 0.08f : 0.0f) +
+                (state->combat_hostile_search_timer > 0.0f ? 0.10f : 0.0f) +
+                retake_return_intensity * 0.10f;
 
             if (state->territory_phase == MDTBTerritoryPhaseHot || state->player_reset_timer > 0.0f) {
                 state->territory_commit_state = MDTBTerritoryCommitNone;
                 state->territory_commit_timer = 0.0f;
                 state->territory_commit_progress = 0.0f;
+                state->territory_resolve_state = MDTBTerritoryResolveNone;
+                state->territory_resolve_timer = 0.0f;
+                state->territory_resolve_progress = 0.0f;
+                state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+                state->territory_reapproach_timer = 0.0f;
             } else {
                 switch (state->territory_commit_state) {
                     case MDTBTerritoryCommitWindow:
@@ -1803,6 +3619,9 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                                 state->territory_commit_state = MDTBTerritoryCommitComplete;
                                 state->territory_commit_timer = 2.4f;
                                 state->territory_commit_progress = 1.0f;
+                                state->territory_resolve_state = MDTBTerritoryResolveWindow;
+                                state->territory_resolve_timer = 1.30f;
+                                state->territory_resolve_progress = 0.0f;
                                 state->territory_heat = fmaxf(state->territory_heat, 0.48f);
                                 state->territory_watch_timer = fmaxf(state->territory_watch_timer, kTerritoryWatchCarryDuration * 0.54f);
 
@@ -1859,6 +3678,233 @@ static void step_territory_state(MDTBEngineState *state, float dt) {
                             state->territory_commit_timer = 0.0f;
                             state->territory_commit_progress = 0.0f;
                         }
+                        break;
+                }
+
+                if (state->territory_resolve_state == MDTBTerritoryResolveNone &&
+                    state->territory_commit_state == MDTBTerritoryCommitComplete) {
+                    state->territory_resolve_state = MDTBTerritoryResolveWindow;
+                    state->territory_resolve_timer = fmaxf(state->territory_commit_timer, 1.10f);
+                    state->territory_resolve_progress = 0.0f;
+                }
+
+                switch (state->territory_resolve_state) {
+                    case MDTBTerritoryResolveWindow:
+                        if (resolve_hold_candidate) {
+                            state->territory_resolve_state = MDTBTerritoryResolveHold;
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress,
+                                0.18f + commit_depth * 0.10f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_hold_duration,
+                                0.30f
+                            );
+                        } else if (resolve_pullout_candidate) {
+                            state->territory_resolve_state = MDTBTerritoryResolvePullout;
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress,
+                                0.20f + resolve_exit_depth * 0.10f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_pullout_duration,
+                                0.26f
+                            );
+                        } else if (state->territory_commit_state == MDTBTerritoryCommitComplete) {
+                            state->territory_resolve_timer = fmaxf(
+                                state->territory_resolve_timer,
+                                0.88f + state->territory_commit_timer * 0.34f
+                            );
+                        } else {
+                            state->territory_resolve_timer = fmaxf(state->territory_resolve_timer - dt, 0.0f);
+                            state->territory_resolve_progress = approachf(
+                                state->territory_resolve_progress,
+                                0.0f,
+                                3.4f,
+                                dt
+                            );
+
+                            if (state->territory_resolve_timer <= 0.0f) {
+                                state->territory_resolve_state = MDTBTerritoryResolveNone;
+                                state->territory_resolve_progress = 0.0f;
+                            }
+                        }
+                        break;
+                    case MDTBTerritoryResolveHold:
+                        if (state->territory_resolve_progress >= 0.999f) {
+                            state->territory_resolve_timer = fmaxf(state->territory_resolve_timer - dt, 0.0f);
+                            if (state->territory_resolve_timer <= 0.0f) {
+                                state->territory_resolve_state = MDTBTerritoryResolveNone;
+                                state->territory_resolve_progress = 0.0f;
+                            }
+                        } else if (resolve_hold_candidate) {
+                            state->territory_resolve_progress = clampf(
+                                state->territory_resolve_progress + (dt * resolve_hold_rate / resolve_hold_duration),
+                                0.0f,
+                                1.0f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_hold_duration,
+                                0.0f
+                            );
+
+                            if (state->territory_resolve_progress >= 0.999f) {
+                                const MDTBFloat3 reclaim_focus_position = territory_shoulder_focus_position(
+                                    state,
+                                    player_position,
+                                    1.35f,
+                                    0.62f
+                                );
+                                state->territory_resolve_progress = 1.0f;
+                                state->territory_resolve_timer = 1.35f;
+                                state->territory_reapproach_mode = MDTBTerritoryReapproachReclaim;
+                                state->territory_reapproach_timer =
+                                    state->territory_entry_mode == MDTBTerritoryEntryVehicle
+                                    ? kTerritoryReapproachReclaimDuration + 0.6f
+                                    : kTerritoryReapproachReclaimDuration;
+                                state->territory_heat = fmaxf(state->territory_heat, 0.56f);
+                                state->territory_watch_timer = fmaxf(state->territory_watch_timer, kTerritoryWatchCarryDuration * 0.76f);
+                                state->territory_deep_watch = fmaxf(state->territory_deep_watch, 0.62f);
+
+                                if (combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+                                    state->combat_hostile_alert = fmaxf(state->combat_hostile_alert, 0.92f);
+                                    state->combat_hostile_reposition_timer = 0.0f;
+                                    state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, 0.46f);
+                                }
+
+                                trigger_street_incident(
+                                    state,
+                                    reclaim_focus_position,
+                                    0.34f,
+                                    kStreetIncidentNoticeDuration * 0.84f
+                                );
+                            }
+                        } else if (resolve_pullout_candidate && state->territory_resolve_progress < 0.34f) {
+                            state->territory_resolve_state = MDTBTerritoryResolvePullout;
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress,
+                                0.18f + resolve_exit_depth * 0.08f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_pullout_duration,
+                                0.26f
+                            );
+                        } else {
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress - dt * 1.10f,
+                                0.0f
+                            );
+
+                            if (state->territory_resolve_progress <= 0.05f) {
+                                state->territory_resolve_state = MDTBTerritoryResolveWindow;
+                                state->territory_resolve_timer = fmaxf(
+                                    state->territory_commit_timer,
+                                    0.54f
+                                );
+                                state->territory_resolve_progress = 0.0f;
+                            } else {
+                                state->territory_resolve_timer = fmaxf(
+                                    (1.0f - state->territory_resolve_progress) * resolve_hold_duration,
+                                    0.0f
+                                );
+                            }
+                        }
+                        break;
+                    case MDTBTerritoryResolvePullout:
+                        if (state->territory_resolve_progress >= 0.999f) {
+                            state->territory_resolve_timer = fmaxf(state->territory_resolve_timer - dt, 0.0f);
+                            if (state->territory_resolve_timer <= 0.0f) {
+                                state->territory_resolve_state = MDTBTerritoryResolveNone;
+                                state->territory_resolve_progress = 0.0f;
+                            }
+                        } else if (resolve_pullout_candidate) {
+                            state->territory_resolve_progress = clampf(
+                                state->territory_resolve_progress + (dt * resolve_pullout_rate / resolve_pullout_duration),
+                                0.0f,
+                                1.0f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_pullout_duration,
+                                0.0f
+                            );
+
+                            if (state->territory_resolve_progress >= 0.999f) {
+                                const MDTBFloat3 retake_focus_position = territory_shoulder_focus_position(
+                                    state,
+                                    player_position,
+                                    1.20f,
+                                    0.12f
+                                );
+                                state->territory_resolve_progress = 1.0f;
+                                state->territory_resolve_timer = 1.20f;
+                                state->territory_reapproach_mode = MDTBTerritoryReapproachRetake;
+                                state->territory_reapproach_timer =
+                                    state->territory_entry_mode == MDTBTerritoryEntryVehicle
+                                    ? kTerritoryReapproachRetakeDuration + 0.5f
+                                    : kTerritoryReapproachRetakeDuration;
+                                state->territory_watch_timer = fmaxf(
+                                    state->territory_watch_timer,
+                                    kTerritoryWatchCarryDuration * 0.46f
+                                );
+                                state->territory_front_watch = fmaxf(
+                                    state->territory_front_watch,
+                                    0.28f + resolve_exit_depth * 0.12f
+                                );
+
+                                if (combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
+                                    state->combat_hostile_reposition_timer = 0.0f;
+                                    start_hostile_search(
+                                        state,
+                                        retake_focus_position,
+                                        state->territory_entry_mode == MDTBTerritoryEntryVehicle
+                                            ? kLookoutVehicleReacquireDuration
+                                            : kLookoutSearchSettleDuration
+                                    );
+                                }
+
+                                trigger_street_recovery(
+                                    state,
+                                    retake_focus_position,
+                                    0.24f + resolve_exit_depth * 0.12f,
+                                    kStreetRecoveryDuration * 0.72f
+                                );
+                            }
+                        } else if (resolve_hold_candidate && state->territory_resolve_progress < 0.34f) {
+                            state->territory_resolve_state = MDTBTerritoryResolveHold;
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress,
+                                0.18f + commit_depth * 0.08f
+                            );
+                            state->territory_resolve_timer = fmaxf(
+                                (1.0f - state->territory_resolve_progress) * resolve_hold_duration,
+                                0.30f
+                            );
+                        } else {
+                            state->territory_resolve_progress = fmaxf(
+                                state->territory_resolve_progress - dt * 1.10f,
+                                0.0f
+                            );
+
+                            if (state->territory_resolve_progress <= 0.05f) {
+                                state->territory_resolve_state = MDTBTerritoryResolveWindow;
+                                state->territory_resolve_timer = fmaxf(
+                                    state->territory_commit_timer,
+                                    0.48f
+                                );
+                                state->territory_resolve_progress = 0.0f;
+                            } else {
+                                state->territory_resolve_timer = fmaxf(
+                                    (1.0f - state->territory_resolve_progress) * resolve_pullout_duration,
+                                    0.0f
+                                );
+                            }
+                        }
+                        break;
+                    case MDTBTerritoryResolveNone:
+                    default:
+                        state->territory_resolve_state = MDTBTerritoryResolveNone;
+                        state->territory_resolve_timer = 0.0f;
+                        state->territory_resolve_progress = 0.0f;
                         break;
                 }
             }
@@ -2070,6 +4116,35 @@ static int active_civilian_response_count(const MDTBEngineState *state) {
     return count;
 }
 
+static float territory_preferred_side_bias(const MDTBEngineState *state) {
+    if (state == NULL) {
+        return 0.0f;
+    }
+
+    return clampf(state->territory_preferred_side, -1.0f, 1.0f);
+}
+
+static float territory_preferred_side_strength(const MDTBEngineState *state) {
+    return fabsf(territory_preferred_side_bias(state));
+}
+
+static MDTBFloat3 territory_shoulder_focus_position(const MDTBEngineState *state, MDTBFloat3 position, float lateral_offset, float depth_offset) {
+    const float preferred_side = territory_preferred_side_bias(state);
+    const float preferred_strength = territory_preferred_side_strength(state);
+    const float lateral_scale = 0.34f + preferred_strength * 0.66f;
+    const float depth_scale = 0.28f + preferred_strength * 0.72f;
+
+    if (preferred_strength <= 0.18f) {
+        return position;
+    }
+
+    position.x += preferred_side * lateral_offset * lateral_scale;
+    position.z += depth_offset * depth_scale;
+    position.x = clampf(position.x, kCourtSetTerritoryMinX - 10.0f, kCourtSetTerritoryMaxX + 10.0f);
+    position.z = clampf(position.z, kCourtSetTerritoryEntryZ - 4.0f, kCourtSetTerritoryMaxZ + 4.0f);
+    return position;
+}
+
 static void start_hostile_search(MDTBEngineState *state, MDTBFloat3 position, float duration) {
     if (state == NULL) {
         return;
@@ -2122,6 +4197,97 @@ static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state) {
         return 3u;
     }
 
+    const float preferred_side = territory_preferred_side_bias(state);
+    const float preferred_strength = territory_preferred_side_strength(state);
+    const float reclaim_shoulder_pressure =
+        preferred_strength > 0.18f
+        ? clampf(
+            ((state->territory_resolve_state == MDTBTerritoryResolveHold && state->territory_resolve_timer > 0.0f)
+                ? (0.34f + state->territory_resolve_progress * 0.42f)
+                : 0.0f) +
+            ((state->territory_reapproach_mode == MDTBTerritoryReapproachReclaim && state->territory_reapproach_timer > 0.0f)
+                ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachReclaimDuration + 0.6f), 0.0f, 1.0f) * 0.30f
+                : 0.0f) +
+            fmaxf(0.0f, state->territory_deep_watch - state->territory_front_watch) * 0.18f,
+            0.0f,
+            1.0f
+        )
+        : 0.0f;
+    const float retake_shoulder_pressure =
+        preferred_strength > 0.18f
+        ? clampf(
+            ((state->territory_resolve_state == MDTBTerritoryResolvePullout && state->territory_resolve_timer > 0.0f)
+                ? (0.36f + state->territory_resolve_progress * 0.40f)
+                : 0.0f) +
+            ((state->territory_reapproach_mode == MDTBTerritoryReapproachRetake && state->territory_reapproach_timer > 0.0f)
+                ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachRetakeDuration + 0.5f), 0.0f, 1.0f) * 0.28f
+                : 0.0f) +
+            state->territory_front_watch * 0.16f,
+            0.0f,
+            1.0f
+        )
+        : 0.0f;
+    const float cold_watch_shoulder_pressure =
+        preferred_strength > 0.18f &&
+        state->territory_phase == MDTBTerritoryPhaseNone &&
+        state->territory_reentry_timer <= 0.0f &&
+        state->territory_reapproach_timer <= 0.05f &&
+        state->territory_resolve_timer <= 0.05f &&
+        state->combat_hostile_search_timer <= 0.0f &&
+        state->street_recovery_timer <= 0.0f &&
+        state->street_recovery_level <= 0.04f &&
+        state->street_incident_timer <= 0.0f &&
+        state->street_incident_level <= 0.06f &&
+        state->territory_watch_timer > 0.0f &&
+        state->territory_watch_timer < (kTerritoryWatchCarryDuration * 0.36f) &&
+        state->territory_heat > 0.03f &&
+        state->territory_heat < 0.18f &&
+        state->territory_patrol_state == MDTBTerritoryPatrolWatch &&
+        state->territory_patrol_alert > 0.08f &&
+        state->territory_inner_state != MDTBTerritoryPatrolBrace &&
+        state->territory_inner_state != MDTBTerritoryPatrolHandoff
+        ? clampf(
+            preferred_strength * 0.32f +
+            state->territory_front_watch * 0.16f +
+            fmaxf(state->territory_patrol_alert, state->territory_inner_alert) * 0.20f,
+            0.0f,
+            1.0f
+        )
+        : 0.0f;
+    const float cold_start_shoulder_pressure =
+        preferred_strength > 0.18f &&
+        (state->territory_phase == MDTBTerritoryPhaseBoundary ||
+         state->territory_phase == MDTBTerritoryPhaseNone) &&
+        state->territory_reentry_timer <= 0.0f &&
+        state->territory_reapproach_timer <= 0.05f &&
+        state->territory_resolve_timer <= 0.05f &&
+        state->street_recovery_timer <= 0.0f &&
+        state->street_recovery_level <= 0.04f &&
+        state->street_incident_timer <= 0.0f &&
+        state->street_incident_level <= 0.06f &&
+        state->territory_watch_timer > 0.0f &&
+        state->territory_watch_timer < (kTerritoryWatchCarryDuration * 0.42f) &&
+        state->territory_heat > 0.04f &&
+        state->territory_heat < 0.24f &&
+        (state->territory_patrol_state == MDTBTerritoryPatrolScreen ||
+         state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
+         state->territory_patrol_state == MDTBTerritoryPatrolWatch ||
+         state->territory_inner_state == MDTBTerritoryPatrolBrace ||
+         state->territory_inner_state == MDTBTerritoryPatrolWatch)
+        ? clampf(
+            preferred_strength * 0.36f +
+            ((state->territory_patrol_state == MDTBTerritoryPatrolBrace ||
+              state->territory_inner_state == MDTBTerritoryPatrolBrace)
+                ? 0.20f
+                : 0.0f) +
+            (state->territory_patrol_state == MDTBTerritoryPatrolScreen ? 0.16f : 0.0f) +
+            state->territory_front_watch * 0.18f +
+            fmaxf(state->territory_patrol_alert, state->territory_inner_alert) * 0.18f,
+            0.0f,
+            1.0f
+        )
+        : 0.0f;
+
     for (uint32_t index = 0u; index < (sizeof(kLookoutPressureAnchors) / sizeof(kLookoutPressureAnchors[0])); ++index) {
         const MDTBFloat3 anchor = lookout_anchor_position(index);
         const MDTBFloat3 anchor_shot_origin = make_float3(anchor.x, anchor.y + 1.18f, anchor.z);
@@ -2129,6 +4295,16 @@ static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state) {
         const float travel_distance = sqrtf(distance_squared_xz(anchor, state->combat_hostile_position));
         const int clear_shot = segment_hits_world_cover(anchor_shot_origin, player_cover, 0.10f, NULL) == 0;
         const int far_side = (player_position.x < -2.0f && anchor.x > 2.0f) || (player_position.x > 2.0f && anchor.x < -2.0f);
+        const int left_anchor = anchor.x < -3.0f;
+        const int right_anchor = anchor.x > 3.0f;
+        const int same_shoulder =
+            (preferred_side < -0.18f && left_anchor) ||
+            (preferred_side > 0.18f && right_anchor);
+        const int opposite_shoulder =
+            (preferred_side < -0.18f && right_anchor) ||
+            (preferred_side > 0.18f && left_anchor);
+        const int edge_anchor = anchor.z < 53.8f;
+        const int deep_anchor = anchor.z >= 53.8f;
         float score = clear_shot ? 4.8f : -0.9f;
 
         if (position_overlaps_collision(anchor, 0.26f)) {
@@ -2140,6 +4316,17 @@ static uint32_t choose_lookout_pressure_anchor(const MDTBEngineState *state) {
         score -= travel_distance * 0.12f;
         score -= fabsf(player_distance - 9.0f) * 0.10f;
         score += far_side ? 0.85f : 0.0f;
+        score += same_shoulder ? (reclaim_shoulder_pressure * 0.78f + retake_shoulder_pressure * 0.92f) : 0.0f;
+        score -= opposite_shoulder ? (reclaim_shoulder_pressure * 0.34f + retake_shoulder_pressure * 0.42f) : 0.0f;
+        score += (same_shoulder && clear_shot) ? (reclaim_shoulder_pressure * 0.26f + retake_shoulder_pressure * 0.22f) : 0.0f;
+        score += (same_shoulder && deep_anchor) ? reclaim_shoulder_pressure * 0.18f : 0.0f;
+        score += (same_shoulder && edge_anchor) ? retake_shoulder_pressure * 0.22f : 0.0f;
+        score += same_shoulder ? (edge_anchor ? cold_watch_shoulder_pressure * 0.68f : cold_watch_shoulder_pressure * 0.18f) : 0.0f;
+        score -= opposite_shoulder ? cold_watch_shoulder_pressure * 0.24f : 0.0f;
+        score += (same_shoulder && edge_anchor && clear_shot) ? cold_watch_shoulder_pressure * 0.16f : 0.0f;
+        score += same_shoulder ? (edge_anchor ? cold_start_shoulder_pressure * 0.74f : cold_start_shoulder_pressure * 0.24f) : 0.0f;
+        score -= opposite_shoulder ? cold_start_shoulder_pressure * 0.28f : 0.0f;
+        score += (same_shoulder && edge_anchor && clear_shot) ? cold_start_shoulder_pressure * 0.22f : 0.0f;
 
         if (state->combat_player_in_cover != 0u && clear_shot) {
             score += 0.8f;
@@ -2625,6 +4812,15 @@ static void reset_combat_encounter(MDTBEngineState *state) {
     );
     state->territory_inner_state = MDTBTerritoryPatrolHandoff;
     state->territory_inner_alert = 0.84f;
+    state->territory_commit_state = MDTBTerritoryCommitNone;
+    state->territory_commit_timer = 0.0f;
+    state->territory_commit_progress = 0.0f;
+    state->territory_resolve_state = MDTBTerritoryResolveNone;
+    state->territory_resolve_timer = 0.0f;
+    state->territory_resolve_progress = 0.0f;
+    state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+    state->territory_reapproach_timer = 0.0f;
+    state->territory_preferred_side = 0.0f;
     clear_melee_attack(state);
     cancel_firearm_reload(state);
     clear_hostile_last_shot(state);
@@ -2924,6 +5120,15 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
             );
             state->territory_inner_state = MDTBTerritoryPatrolIdle;
             state->territory_inner_alert = 0.0f;
+            state->territory_commit_state = MDTBTerritoryCommitNone;
+            state->territory_commit_timer = 0.0f;
+            state->territory_commit_progress = 0.0f;
+            state->territory_resolve_state = MDTBTerritoryResolveNone;
+            state->territory_resolve_timer = 0.0f;
+            state->territory_resolve_progress = 0.0f;
+            state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+            state->territory_reapproach_timer = 0.0f;
+            state->territory_preferred_side = 0.0f;
         }
     }
 
@@ -3221,6 +5426,16 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
             state->territory_inner_state == MDTBTerritoryPatrolHandoff
             ? state->territory_inner_alert
             : 0.0f;
+        const float territory_reclaim_return =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachReclaim &&
+            state->territory_reapproach_timer > 0.0f
+            ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachReclaimDuration + 0.6f), 0.0f, 1.0f)
+            : 0.0f;
+        const float territory_retake_return =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachRetake &&
+            state->territory_reapproach_timer > 0.0f
+            ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachRetakeDuration + 0.5f), 0.0f, 1.0f)
+            : 0.0f;
         const MDTBFloat3 current_shot_origin = hostile_shot_origin(state);
         const int current_angle_blocked = segment_hits_world_cover(current_shot_origin, actor_cover_position, 0.10f, NULL) != 0;
         const int wants_angle_change =
@@ -3257,6 +5472,8 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
                 state->territory_inner_alert * 0.10f +
                 territory_inner_brace * 0.04f +
                 territory_inner_handoff * 0.06f +
+                territory_reclaim_return * 0.08f +
+                territory_retake_return * 0.06f +
                 (territory_hot ? 0.10f : 0.0f);
             state->combat_hostile_alert = fmaxf(state->combat_hostile_alert, territory_alert_floor);
         }
@@ -3311,9 +5528,15 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
         combat_target_kind_is_active(state, MDTBCombatTargetLookout)) {
         state->combat_hostile_reacquire_timer = fmaxf(state->combat_hostile_reacquire_timer, kLookoutSearchSettleDuration);
         state->combat_hostile_attack_cooldown = fmaxf(state->combat_hostile_attack_cooldown, 0.32f);
-        trigger_street_incident(
+        const MDTBFloat3 settle_position = territory_shoulder_focus_position(
             state,
             state->combat_hostile_search_position,
+            3.6f,
+            1.2f
+        );
+        trigger_street_incident(
+            state,
+            settle_position,
             fmaxf(state->street_incident_level, 0.32f),
             kStreetIncidentSettleDuration
         );
@@ -3353,6 +5576,16 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
             state->territory_inner_state == MDTBTerritoryPatrolHandoff
             ? state->territory_inner_alert
             : 0.0f;
+        const float territory_reclaim_return =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachReclaim &&
+            state->territory_reapproach_timer > 0.0f
+            ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachReclaimDuration + 0.6f), 0.0f, 1.0f)
+            : 0.0f;
+        const float territory_retake_return =
+            state->territory_reapproach_mode == MDTBTerritoryReapproachRetake &&
+            state->territory_reapproach_timer > 0.0f
+            ? clampf(state->territory_reapproach_timer / (kTerritoryReapproachRetakeDuration + 0.5f), 0.0f, 1.0f)
+            : 0.0f;
         const float player_distance_squared = distance_squared_xz(player_position, state->combat_hostile_position);
         const float attack_range =
             kLookoutAttackRange +
@@ -3363,12 +5596,14 @@ static void step_combat_state(MDTBEngineState *state, float dt, int wants_attack
             territory_patrol_reform * 0.3f +
             territory_patrol_handoff * 1.2f +
             territory_inner_brace * 0.6f +
-            territory_inner_handoff * 1.0f;
+            territory_inner_handoff * 1.0f +
+            territory_reclaim_return * 0.8f +
+            territory_retake_return * 0.5f;
         const float required_alert =
             territory_hot
-            ? fmaxf(0.34f, 0.42f - territory_watch * 0.10f - territory_patrol_screen * 0.04f - territory_patrol_brace * 0.04f - territory_patrol_reform * 0.02f - territory_patrol_handoff * 0.08f - territory_inner_brace * 0.03f - territory_inner_handoff * 0.06f)
+            ? fmaxf(0.34f, 0.42f - territory_watch * 0.10f - territory_patrol_screen * 0.04f - territory_patrol_brace * 0.04f - territory_patrol_reform * 0.02f - territory_patrol_handoff * 0.08f - territory_inner_brace * 0.03f - territory_inner_handoff * 0.06f - territory_reclaim_return * 0.04f - territory_retake_return * 0.03f)
             : (territory_claimed
-                ? fmaxf(0.38f, 0.50f - territory_watch * 0.12f - territory_patrol_screen * 0.04f - territory_patrol_brace * 0.04f - territory_patrol_reform * 0.02f - territory_patrol_handoff * 0.08f - territory_inner_brace * 0.03f - territory_inner_handoff * 0.06f)
+                ? fmaxf(0.38f, 0.50f - territory_watch * 0.12f - territory_patrol_screen * 0.04f - territory_patrol_brace * 0.04f - territory_patrol_reform * 0.02f - territory_patrol_handoff * 0.08f - territory_inner_brace * 0.03f - territory_inner_handoff * 0.06f - territory_reclaim_return * 0.05f - territory_retake_return * 0.03f)
                 : 0.55f);
         const float anchor_error = sqrtf(distance_squared_xz(state->combat_hostile_position, lookout_anchor_position(state->combat_hostile_anchor_index)));
         const int shot_blocked = segment_hits_world_cover(hostile_shot_origin(state), player_cover_position(state), 0.10f, NULL) != 0;
@@ -3977,6 +6212,7 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
         const uint32_t recovery_axis = nearest_road_axis_for_position(recovery_position);
         const uint32_t recovery_block_index = nearest_block_index_for_position(recovery_position);
         const int civilian_sources = active_civilian_response_count(state);
+        const float preferred_side_strength = territory_preferred_side_strength(state);
         const float recovery_radius = 1.8f + state->street_recovery_level * 2.2f;
         const float recovery_strength =
             0.16f +
@@ -4025,6 +6261,38 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                 MDTBTrafficOccupancyReasonIncident,
                 0.12f + state->street_recovery_level * 0.14f + (float)civilian_sources * 0.02f
             );
+        }
+
+        if (preferred_side_strength > 0.18f) {
+            const MDTBFloat3 spill_position = territory_shoulder_focus_position(
+                state,
+                recovery_position,
+                4.0f,
+                0.24f
+            );
+            const uint32_t spill_link_index = nearest_road_link_index_for_position(spill_position);
+
+            push_traffic_occupancy(
+                spill_position,
+                1.4f + state->street_recovery_level * 1.6f,
+                nearest_block_index_for_position(spill_position),
+                nearest_road_axis_for_position(spill_position),
+                MDTBTrafficOccupancyReasonIncident,
+                0.10f + state->street_recovery_level * 0.12f + preferred_side_strength * 0.08f
+            );
+
+            if (spill_link_index < g_road_link_count && spill_link_index != recovery_link_index) {
+                const MDTBRoadLink *spill_link = &g_road_links[spill_link_index];
+
+                push_traffic_occupancy(
+                    spill_link->midpoint,
+                    1.3f + state->street_recovery_level * 1.2f + preferred_side_strength * 0.4f,
+                    nearest_block_index_for_position(spill_link->midpoint),
+                    spill_link->axis,
+                    MDTBTrafficOccupancyReasonIncident,
+                    0.10f + state->street_recovery_level * 0.10f + preferred_side_strength * 0.06f
+                );
+            }
         }
     }
 }
@@ -4134,6 +6402,26 @@ static void push_bollard(float x, float z, float height) {
         make_float4(0.85f, 0.68f, 0.19f, 1.0f),
         0
     );
+}
+
+static void push_corner_plaza_pad(MDTBFloat3 origin, float x_offset, float z_offset, float half_x, float half_z, MDTBFloat4 color) {
+    push_prop(
+        make_float3(origin.x + x_offset, kSidewalkHeight * 0.5f, origin.z + z_offset),
+        make_float3(half_x, kSidewalkHeight * 0.5f, half_z),
+        color,
+        1
+    );
+}
+
+static void push_refuge_island(float x, float z, float half_x, float half_z, float planter_size, MDTBFloat4 curb_color) {
+    push_prop(
+        make_float3(x, kSidewalkHeight * 0.5f, z),
+        make_float3(half_x, kSidewalkHeight * 0.5f, half_z),
+        curb_color,
+        1
+    );
+
+    push_planter(x, z, planter_size);
 }
 
 static void push_trash_bin(float x, float z) {
@@ -4420,6 +6708,134 @@ static void push_crosswalk_z(float x_origin, float z_center) {
     }
 }
 
+static MDTBFloat4 road_surface_color_for_class(uint32_t road_class) {
+    switch (road_class) {
+        case MDTBRoadClassBoulevard:
+            return make_float4(0.15f, 0.15f, 0.17f, 1.0f);
+        case MDTBRoadClassAvenue:
+            return make_float4(0.18f, 0.18f, 0.20f, 1.0f);
+        case MDTBRoadClassConnector:
+            return make_float4(0.22f, 0.21f, 0.20f, 1.0f);
+        case MDTBRoadClassResidentialStreet:
+        default:
+            return make_float4(0.19f, 0.18f, 0.20f, 1.0f);
+    }
+}
+
+static MDTBFloat4 curb_surface_color_for_class(uint32_t road_class) {
+    switch (road_class) {
+        case MDTBRoadClassBoulevard:
+            return make_float4(0.76f, 0.75f, 0.72f, 1.0f);
+        case MDTBRoadClassAvenue:
+            return make_float4(0.72f, 0.72f, 0.71f, 1.0f);
+        default:
+            return make_float4(0.70f, 0.69f, 0.68f, 1.0f);
+    }
+}
+
+static MDTBFloat4 sidewalk_surface_color_for_class(uint32_t road_class) {
+    switch (road_class) {
+        case MDTBRoadClassBoulevard:
+            return make_float4(0.64f, 0.63f, 0.59f, 1.0f);
+        case MDTBRoadClassAvenue:
+            return make_float4(0.60f, 0.60f, 0.57f, 1.0f);
+        default:
+            return make_float4(0.58f, 0.57f, 0.55f, 1.0f);
+    }
+}
+
+static void push_road_feature_segment(const MDTBRoadSpine *spine, float lateral_offset, float segment_center, float half_width, float half_length, float half_height, MDTBFloat4 color) {
+    if (spine == NULL) {
+        return;
+    }
+
+    if (spine->axis == MDTBRoadAxisNorthSouth) {
+        push_scene_box(make_box(
+            make_float3(spine->coordinate + lateral_offset, kRoadHeight + half_height, segment_center),
+            make_float3(half_width, half_height, half_length),
+            color
+        ));
+    } else {
+        push_scene_box(make_box(
+            make_float3(segment_center, kRoadHeight + half_height, spine->coordinate + lateral_offset),
+            make_float3(half_length, half_height, half_width),
+            color
+        ));
+    }
+}
+
+static void push_road_feature_run(const MDTBRoadSpine *spine, float lateral_offset, float half_width, float half_height, MDTBFloat4 color) {
+    if (spine == NULL) {
+        return;
+    }
+
+    if (spine->axis == MDTBRoadAxisNorthSouth) {
+        push_scene_box(make_box(
+            make_float3(spine->coordinate + lateral_offset, kRoadHeight + half_height, 0.0f),
+            make_float3(half_width, half_height, kPlayableHalfLength + 4.0f),
+            color
+        ));
+    } else {
+        push_scene_box(make_box(
+            make_float3(0.0f, kRoadHeight + half_height, spine->coordinate + lateral_offset),
+            make_float3(kPlayableHalfWidth + 4.0f, half_height, half_width),
+            color
+        ));
+    }
+}
+
+static void build_road_class_features(void) {
+    const MDTBFloat4 boulevard_median_color = make_float4(0.63f, 0.58f, 0.24f, 1.0f);
+    const MDTBFloat4 boulevard_divider_color = make_float4(0.90f, 0.88f, 0.74f, 1.0f);
+    const MDTBFloat4 avenue_lane_color = make_float4(0.24f, 0.25f, 0.27f, 1.0f);
+    const MDTBFloat4 avenue_boundary_color = make_float4(0.86f, 0.86f, 0.84f, 1.0f);
+
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const int segment_count =
+            spine->axis == MDTBRoadAxisNorthSouth
+            ? (int)ceilf((kPlayableHalfLength + 8.0f) / 20.0f)
+            : (int)ceilf((kPlayableHalfWidth + 8.0f) / 24.0f);
+        const float segment_spacing = spine->axis == MDTBRoadAxisNorthSouth ? 20.0f : 24.0f;
+        const float avenue_boundary_offset = profile->lane_offset + 1.2f;
+        const float avenue_band_offset = fminf(profile->road_half_width - 0.65f, avenue_boundary_offset + 0.9f);
+        const float boulevard_divider_offset = profile->lane_offset + 0.10f;
+
+        switch (spine->road_class) {
+            case MDTBRoadClassBoulevard:
+                for (int segment = -segment_count; segment <= segment_count; ++segment) {
+                    const float center = (float)segment * segment_spacing;
+                    if (road_spine_segment_hits_intersection(spine, center)) {
+                        continue;
+                    }
+
+                    push_road_feature_segment(spine, 0.0f, center, profile->median_half_width, 6.4f, 0.01f, boulevard_median_color);
+                    push_road_feature_segment(spine, -boulevard_divider_offset, center, 0.08f, 1.8f, 0.01f, boulevard_divider_color);
+                    push_road_feature_segment(spine, boulevard_divider_offset, center, 0.08f, 1.8f, 0.01f, boulevard_divider_color);
+                }
+                break;
+            case MDTBRoadClassAvenue:
+                push_road_feature_run(spine, -avenue_band_offset, 0.62f, 0.01f, avenue_lane_color);
+                push_road_feature_run(spine, avenue_band_offset, 0.62f, 0.01f, avenue_lane_color);
+                for (int segment = -segment_count; segment <= segment_count; ++segment) {
+                    const float center = (float)segment * segment_spacing;
+                    if (road_spine_segment_hits_intersection(spine, center)) {
+                        continue;
+                    }
+
+                    push_road_feature_segment(spine, -avenue_boundary_offset, center, 0.08f, 1.6f, 0.01f, avenue_boundary_color);
+                    push_road_feature_segment(spine, avenue_boundary_offset, center, 0.08f, 1.6f, 0.01f, avenue_boundary_color);
+                }
+                break;
+            case MDTBRoadClassConnector:
+            case MDTBRoadClassResidentialStreet:
+            default:
+                break;
+        }
+    }
+}
+
 static void build_block_lot_surfaces(const MDTBBlockDescriptor *block) {
     const MDTBFloat4 lot_color = make_float4(0.54f, 0.49f, 0.42f, 1.0f);
 
@@ -4438,9 +6854,6 @@ static void build_block_lot_surfaces(const MDTBBlockDescriptor *block) {
 
 static void build_world_surfaces(void) {
     const MDTBFloat4 soil_color = make_float4(0.45f, 0.48f, 0.42f, 1.0f);
-    const MDTBFloat4 road_color = make_float4(0.17f, 0.17f, 0.19f, 1.0f);
-    const MDTBFloat4 curb_color = make_float4(0.74f, 0.74f, 0.73f, 1.0f);
-    const MDTBFloat4 sidewalk_color = make_float4(0.62f, 0.62f, 0.59f, 1.0f);
 
     push_scene_box(make_box(
         make_float3(0.0f, 0.0f, 0.0f),
@@ -4448,170 +6861,243 @@ static void build_world_surfaces(void) {
         soil_color
     ));
 
-    for (size_t index = 0u; index < scene_layout_count(); ++index) {
-        const float x_origin = kBlockLayout[index].origin.x;
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const MDTBFloat4 road_color = road_surface_color_for_class(spine->road_class);
+        const MDTBFloat4 curb_color = curb_surface_color_for_class(spine->road_class);
+        const MDTBFloat4 sidewalk_color = sidewalk_surface_color_for_class(spine->road_class);
+        const float curb_half_width = fmaxf((profile->curb_outer - profile->road_half_width) * 0.5f, 0.05f);
+        const float curb_center_offset = profile->road_half_width + curb_half_width;
+        const float sidewalk_half_width = fmaxf((profile->sidewalk_outer - profile->curb_outer) * 0.5f, 0.8f);
+        const float sidewalk_center_offset = profile->curb_outer + sidewalk_half_width;
 
-        if (layout_has_prior_x(index)) {
+        if (spine->axis != MDTBRoadAxisNorthSouth) {
             continue;
         }
 
         push_scene_box(make_box(
-            make_float3(x_origin, kRoadHeight * 0.5f, 0.0f),
-            make_float3(kRoadHalfWidth, kRoadHeight * 0.5f, kPlayableHalfLength + 4.0f),
+            make_float3(spine->coordinate, kRoadHeight * 0.5f, 0.0f),
+            make_float3(profile->road_half_width, kRoadHeight * 0.5f, kPlayableHalfLength + 4.0f),
             road_color
         ));
 
         for (int side = -1; side <= 1; side += 2) {
             push_scene_box(make_box(
-                make_float3(x_origin + ((float)side * 6.08f), 0.09f, 0.0f),
-                make_float3(0.20f, 0.09f, kPlayableHalfLength + 4.0f),
+                make_float3(spine->coordinate + ((float)side * curb_center_offset), 0.09f, 0.0f),
+                make_float3(curb_half_width, 0.09f, kPlayableHalfLength + 4.0f),
                 curb_color
             ));
 
             push_scene_box(make_box(
-                make_float3(x_origin + ((float)side * 9.18f), kSidewalkHeight * 0.5f, 0.0f),
-                make_float3(2.82f, kSidewalkHeight * 0.5f, kPlayableHalfLength + 4.0f),
+                make_float3(spine->coordinate + ((float)side * sidewalk_center_offset), kSidewalkHeight * 0.5f, 0.0f),
+                make_float3(sidewalk_half_width, kSidewalkHeight * 0.5f, kPlayableHalfLength + 4.0f),
                 sidewalk_color
             ));
         }
     }
 
-    for (size_t index = 0u; index < scene_layout_count(); ++index) {
-        const float z_origin = kBlockLayout[index].origin.z;
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const MDTBFloat4 road_color = road_surface_color_for_class(spine->road_class);
+        const MDTBFloat4 curb_color = curb_surface_color_for_class(spine->road_class);
+        const MDTBFloat4 sidewalk_color = sidewalk_surface_color_for_class(spine->road_class);
+        const float curb_half_width = fmaxf((profile->curb_outer - profile->road_half_width) * 0.5f, 0.05f);
+        const float curb_center_offset = profile->road_half_width + curb_half_width;
+        const float sidewalk_half_width = fmaxf((profile->sidewalk_outer - profile->curb_outer) * 0.5f, 0.8f);
+        const float sidewalk_center_offset = profile->curb_outer + sidewalk_half_width;
 
-        if (layout_has_prior_z(index)) {
+        if (spine->axis != MDTBRoadAxisEastWest) {
             continue;
         }
 
         push_scene_box(make_box(
-            make_float3(0.0f, kRoadHeight * 0.5f, z_origin),
-            make_float3(kPlayableHalfWidth + 4.0f, kRoadHeight * 0.5f, kRoadHalfWidth),
+            make_float3(0.0f, kRoadHeight * 0.5f, spine->coordinate),
+            make_float3(kPlayableHalfWidth + 4.0f, kRoadHeight * 0.5f, profile->road_half_width),
             road_color
         ));
 
         for (int side = -1; side <= 1; side += 2) {
             push_scene_box(make_box(
-                make_float3(0.0f, 0.09f, z_origin + ((float)side * 6.08f)),
-                make_float3(kPlayableHalfWidth + 4.0f, 0.09f, 0.20f),
+                make_float3(0.0f, 0.09f, spine->coordinate + ((float)side * curb_center_offset)),
+                make_float3(kPlayableHalfWidth + 4.0f, 0.09f, curb_half_width),
                 curb_color
             ));
 
             push_scene_box(make_box(
-                make_float3(0.0f, kSidewalkHeight * 0.5f, z_origin + ((float)side * 9.18f)),
-                make_float3(kPlayableHalfWidth + 4.0f, kSidewalkHeight * 0.5f, 2.82f),
+                make_float3(0.0f, kSidewalkHeight * 0.5f, spine->coordinate + ((float)side * sidewalk_center_offset)),
+                make_float3(kPlayableHalfWidth + 4.0f, kSidewalkHeight * 0.5f, sidewalk_half_width),
                 sidewalk_color
             ));
         }
     }
+
+    build_road_class_features();
 }
 
 static void build_road_markings(void) {
     const MDTBFloat4 stripe_color = make_float4(0.89f, 0.82f, 0.20f, 1.0f);
+    const MDTBFloat4 edge_line_color = make_float4(0.90f, 0.90f, 0.88f, 1.0f);
+    const int vertical_segment_count = (int)ceilf((kPlayableHalfLength + 8.0f) / 20.0f);
+    const int horizontal_segment_count = (int)ceilf((kPlayableHalfWidth + 8.0f) / 24.0f);
 
-    for (size_t layout_index = 0u; layout_index < scene_layout_count(); ++layout_index) {
-        const float x_origin = kBlockLayout[layout_index].origin.x;
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const float avenue_boundary_offset = profile->lane_offset + 1.2f;
 
-        if (layout_has_prior_x(layout_index)) {
+        if (spine->axis != MDTBRoadAxisNorthSouth) {
             continue;
         }
 
-        for (int segment = -6; segment <= 6; ++segment) {
+        for (int segment = -vertical_segment_count; segment <= vertical_segment_count; ++segment) {
             const float center = (float)segment * 20.0f;
-            int inside_intersection = 0;
+            if (!road_spine_segment_hits_intersection(spine, center)) {
+                if (spine->road_class == MDTBRoadClassBoulevard) {
+                    for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
+                        push_scene_box(make_box(
+                            make_float3(spine->coordinate - profile->median_half_width, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
+                            make_float3(0.09f, 0.01f, 1.2f),
+                            stripe_color
+                        ));
+                        push_scene_box(make_box(
+                            make_float3(spine->coordinate + profile->median_half_width, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
+                            make_float3(0.09f, 0.01f, 1.2f),
+                            stripe_color
+                        ));
+                    }
+                } else {
+                    for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
+                        push_scene_box(make_box(
+                            make_float3(spine->coordinate, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
+                            make_float3(0.13f, 0.01f, 1.2f),
+                            stripe_color
+                        ));
+                    }
 
-            for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
-                if (fabsf(x_origin - kBlockLayout[block_index].origin.x) > 0.01f) {
-                    continue;
-                }
-
-                if (fabsf(center - kBlockLayout[block_index].origin.z) <= kIntersectionClear) {
-                    inside_intersection = 1;
-                    break;
+                    if (spine->road_class == MDTBRoadClassAvenue) {
+                        push_scene_box(make_box(
+                            make_float3(spine->coordinate - avenue_boundary_offset, kRoadHeight + 0.01f, center),
+                            make_float3(0.07f, 0.01f, 0.9f),
+                            edge_line_color
+                        ));
+                        push_scene_box(make_box(
+                            make_float3(spine->coordinate + avenue_boundary_offset, kRoadHeight + 0.01f, center),
+                            make_float3(0.07f, 0.01f, 0.9f),
+                            edge_line_color
+                        ));
+                    }
                 }
             }
+        }
+    }
 
-            if (!inside_intersection) {
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const float avenue_boundary_offset = profile->lane_offset + 1.2f;
+
+        if (spine->axis != MDTBRoadAxisEastWest) {
+            continue;
+        }
+
+        for (int segment = -horizontal_segment_count; segment <= horizontal_segment_count; ++segment) {
+            const float center_x = (float)segment * 24.0f;
+            if (road_spine_segment_hits_intersection(spine, center_x)) {
+                continue;
+            }
+
+            if (spine->road_class == MDTBRoadClassBoulevard) {
                 for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
                     push_scene_box(make_box(
-                        make_float3(x_origin, kRoadHeight + 0.01f, center + ((float)stripe_index * 4.4f)),
-                        make_float3(0.13f, 0.01f, 1.2f),
+                        make_float3(center_x + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, spine->coordinate - profile->median_half_width),
+                        make_float3(1.4f, 0.01f, 0.09f),
                         stripe_color
+                    ));
+                    push_scene_box(make_box(
+                        make_float3(center_x + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, spine->coordinate + profile->median_half_width),
+                        make_float3(1.4f, 0.01f, 0.09f),
+                        stripe_color
+                    ));
+                }
+            } else {
+                for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
+                    push_scene_box(make_box(
+                        make_float3(center_x + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, spine->coordinate),
+                        make_float3(1.4f, 0.01f, 0.13f),
+                        stripe_color
+                    ));
+                }
+
+                if (spine->road_class == MDTBRoadClassAvenue) {
+                    push_scene_box(make_box(
+                        make_float3(center_x, kRoadHeight + 0.01f, spine->coordinate - avenue_boundary_offset),
+                        make_float3(0.9f, 0.01f, 0.07f),
+                        edge_line_color
+                    ));
+                    push_scene_box(make_box(
+                        make_float3(center_x, kRoadHeight + 0.01f, spine->coordinate + avenue_boundary_offset),
+                        make_float3(0.9f, 0.01f, 0.07f),
+                        edge_line_color
                     ));
                 }
             }
         }
     }
 
-    for (size_t layout_index = 0u; layout_index < scene_layout_count(); ++layout_index) {
-        const float z_origin = kBlockLayout[layout_index].origin.z;
-
-        if (layout_has_prior_z(layout_index)) {
-            continue;
-        }
-
-        for (int segment = -6; segment <= 6; ++segment) {
-            const float center_x = (float)segment * 24.0f;
-            int inside_intersection = 0;
-
-            for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
-                if (fabsf(z_origin - kBlockLayout[block_index].origin.z) > 0.01f) {
-                    continue;
-                }
-
-                if (fabsf(center_x - kBlockLayout[block_index].origin.x) <= kIntersectionClear) {
-                    inside_intersection = 1;
-                    break;
-                }
-            }
-
-            if (inside_intersection) {
-                continue;
-            }
-
-            for (int stripe_index = -1; stripe_index <= 1; ++stripe_index) {
-                push_scene_box(make_box(
-                    make_float3(center_x + ((float)stripe_index * 5.0f), kRoadHeight + 0.01f, z_origin),
-                    make_float3(1.4f, 0.01f, 0.13f),
-                    stripe_color
-                ));
-            }
-        }
-    }
-
     for (size_t block_index = 0u; block_index < scene_layout_count(); ++block_index) {
-        const float x_origin = kBlockLayout[block_index].origin.x;
-        const float z_origin = kBlockLayout[block_index].origin.z;
+        const MDTBBlockDescriptor *block = &kBlockLayout[block_index];
+        const MDTBIntersectionProfile profile = intersection_profile_for_block(block);
+        const MDTBRoadProfile *vertical_road =
+            profile.vertical != NULL
+            ? road_profile_for_class(profile.vertical->road_class)
+            : road_profile_for_class(MDTBRoadClassAvenue);
+        const MDTBRoadProfile *horizontal_road =
+            profile.horizontal != NULL
+            ? road_profile_for_class(profile.horizontal->road_class)
+            : road_profile_for_class(MDTBRoadClassAvenue);
+        const float x_origin = block->origin.x;
+        const float z_origin = block->origin.z;
+        const float vertical_crosswalk_offset = profile.vertical != NULL ? profile.vertical->crosswalk_offset : kCrosswalkOffset;
+        const float horizontal_crosswalk_offset = profile.horizontal != NULL ? profile.horizontal->crosswalk_offset : kCrosswalkOffset;
+        const float northsouth_stop_bar_offset = profile.horizontal != NULL ? profile.horizontal->stop_bar_offset : 6.65f;
+        const float eastwest_stop_bar_offset = profile.vertical != NULL ? profile.vertical->stop_bar_offset : 6.65f;
+        const float northsouth_stop_bar_half_width = fmaxf(vertical_road->road_half_width - 0.9f, 4.35f);
+        const float eastwest_stop_bar_half_width = fmaxf(horizontal_road->road_half_width - 0.9f, 4.35f);
+        const float northsouth_arrow_offset = profile.vertical != NULL ? profile.vertical->arrow_offset : 18.5f;
+        const float eastwest_arrow_offset = profile.horizontal != NULL ? profile.horizontal->arrow_offset : 18.5f;
 
-        push_crosswalk_x(x_origin - kCrosswalkOffset, z_origin);
-        push_crosswalk_x(x_origin + kCrosswalkOffset, z_origin);
-        push_crosswalk_z(x_origin, z_origin - kCrosswalkOffset);
-        push_crosswalk_z(x_origin, z_origin + kCrosswalkOffset);
+        push_crosswalk_x(x_origin - vertical_crosswalk_offset, z_origin);
+        push_crosswalk_x(x_origin + vertical_crosswalk_offset, z_origin);
+        push_crosswalk_z(x_origin, z_origin - horizontal_crosswalk_offset);
+        push_crosswalk_z(x_origin, z_origin + horizontal_crosswalk_offset);
 
         push_scene_box(make_box(
-            make_float3(x_origin, kRoadHeight + 0.01f, z_origin - 6.65f),
-            make_float3(4.65f, 0.01f, 0.12f),
+            make_float3(x_origin, kRoadHeight + 0.01f, z_origin - northsouth_stop_bar_offset),
+            make_float3(northsouth_stop_bar_half_width, 0.01f, 0.12f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(x_origin, kRoadHeight + 0.01f, z_origin + 6.65f),
-            make_float3(4.65f, 0.01f, 0.12f),
+            make_float3(x_origin, kRoadHeight + 0.01f, z_origin + northsouth_stop_bar_offset),
+            make_float3(northsouth_stop_bar_half_width, 0.01f, 0.12f),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(x_origin - 6.65f, kRoadHeight + 0.01f, z_origin),
-            make_float3(0.12f, 0.01f, 4.65f),
+            make_float3(x_origin - eastwest_stop_bar_offset, kRoadHeight + 0.01f, z_origin),
+            make_float3(0.12f, 0.01f, eastwest_stop_bar_half_width),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
         push_scene_box(make_box(
-            make_float3(x_origin + 6.65f, kRoadHeight + 0.01f, z_origin),
-            make_float3(0.12f, 0.01f, 4.65f),
+            make_float3(x_origin + eastwest_stop_bar_offset, kRoadHeight + 0.01f, z_origin),
+            make_float3(0.12f, 0.01f, eastwest_stop_bar_half_width),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
 
-        push_lane_arrow_z(x_origin, z_origin - 18.5f, -1.0f);
-        push_lane_arrow_z(x_origin, z_origin + 18.5f, 1.0f);
-        push_lane_arrow_x(x_origin - 18.5f, z_origin, -1.0f);
-        push_lane_arrow_x(x_origin + 18.5f, z_origin, 1.0f);
+        push_lane_arrow_z(x_origin, z_origin - northsouth_arrow_offset, -1.0f);
+        push_lane_arrow_z(x_origin, z_origin + northsouth_arrow_offset, 1.0f);
+        push_lane_arrow_x(x_origin - eastwest_arrow_offset, z_origin, -1.0f);
+        push_lane_arrow_x(x_origin + eastwest_arrow_offset, z_origin, 1.0f);
     }
 }
 
@@ -4674,15 +7160,78 @@ static void build_side_buildings(const MDTBBlockDescriptor *block, int x_sign) {
 }
 
 static void build_intersection_props(const MDTBBlockDescriptor *block) {
-    push_signal_pole(block->origin.x - 8.9f, block->origin.z - 8.9f);
-    push_signal_pole(block->origin.x + 8.9f, block->origin.z - 8.9f);
-    push_signal_pole(block->origin.x - 8.9f, block->origin.z + 8.9f);
-    push_signal_pole(block->origin.x + 8.9f, block->origin.z + 8.9f);
+    const MDTBIntersectionProfile profile = intersection_profile_for_block(block);
+    const uint32_t dominant_road_class =
+        (profile.vertical != NULL && profile.vertical->road_class == MDTBRoadClassBoulevard) ||
+        (profile.horizontal != NULL && profile.horizontal->road_class == MDTBRoadClassBoulevard)
+        ? MDTBRoadClassBoulevard
+        : (profile.vertical != NULL
+            ? profile.vertical->road_class
+            : (profile.horizontal != NULL ? profile.horizontal->road_class : MDTBRoadClassAvenue));
+    const float chunk_plaza_scale = profile.chunk != NULL ? profile.chunk->corner_plaza_scale : 1.0f;
+    const float chunk_planter_scale = profile.chunk != NULL ? profile.chunk->planter_scale : 1.0f;
+    const float chunk_refuge_scale = profile.chunk != NULL ? profile.chunk->refuge_scale : 1.0f;
+    const float vertical_plaza_scale = profile.vertical != NULL ? profile.vertical->plaza_scale : 1.0f;
+    const float horizontal_plaza_scale = profile.horizontal != NULL ? profile.horizontal->plaza_scale : 1.0f;
+    const float signal_x = profile.vertical != NULL ? profile.vertical->signal_offset : 8.9f;
+    const float signal_z = profile.horizontal != NULL ? profile.horizontal->signal_offset : 8.9f;
+    const float planter_x = profile.vertical != NULL ? profile.vertical->planter_offset : 10.2f;
+    const float planter_z = profile.horizontal != NULL ? profile.horizontal->planter_offset : 10.2f;
+    const float corner_pad_half_x = 1.0f + (vertical_plaza_scale * 0.48f) + ((chunk_plaza_scale - 1.0f) * 0.55f);
+    const float corner_pad_half_z = 1.0f + (horizontal_plaza_scale * 0.48f) + ((chunk_plaza_scale - 1.0f) * 0.55f);
+    const float corner_pad_offset_x = signal_x - fminf(corner_pad_half_x * 0.35f, 0.70f);
+    const float corner_pad_offset_z = signal_z - fminf(corner_pad_half_z * 0.35f, 0.70f);
+    const float planter_size = 0.42f + (chunk_planter_scale * 0.12f);
+    const float bollard_outer_x = signal_x + 3.0f + ((vertical_plaza_scale - 1.0f) * 0.4f);
+    const float bollard_outer_z = signal_z + 3.0f + ((horizontal_plaza_scale - 1.0f) * 0.4f);
+    const float bollard_inner_x = fmaxf(signal_x - 1.55f, 6.9f);
+    const float bollard_inner_z = fmaxf(signal_z - 1.55f, 6.9f);
+    const MDTBFloat4 plaza_color = sidewalk_surface_color_for_class(dominant_road_class);
+    const MDTBFloat4 refuge_color = curb_surface_color_for_class(dominant_road_class);
 
-    push_planter(block->origin.x - 10.2f, block->origin.z - 10.2f, 0.56f);
-    push_planter(block->origin.x + 10.2f, block->origin.z - 10.2f, 0.56f);
-    push_planter(block->origin.x - 10.2f, block->origin.z + 10.2f, 0.56f);
-    push_planter(block->origin.x + 10.2f, block->origin.z + 10.2f, 0.56f);
+    for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
+        for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
+            push_corner_plaza_pad(
+                block->origin,
+                (float)x_sign * corner_pad_offset_x,
+                (float)z_sign * corner_pad_offset_z,
+                corner_pad_half_x,
+                corner_pad_half_z,
+                plaza_color
+            );
+            push_signal_pole(
+                block->origin.x + ((float)x_sign * signal_x),
+                block->origin.z + ((float)z_sign * signal_z)
+            );
+            push_planter(
+                block->origin.x + ((float)x_sign * planter_x),
+                block->origin.z + ((float)z_sign * planter_z),
+                planter_size
+            );
+        }
+    }
+
+    if (profile.vertical != NULL && profile.vertical->road_class == MDTBRoadClassBoulevard) {
+        const MDTBRoadProfile *vertical_road = road_profile_for_class(profile.vertical->road_class);
+        const float refuge_half_x = fmaxf(vertical_road->median_half_width + 0.22f, 0.65f);
+        const float refuge_half_z = 1.08f + (chunk_refuge_scale * 0.28f);
+        const float refuge_z = (profile.horizontal != NULL ? profile.horizontal->crosswalk_offset : kCrosswalkOffset) + 3.6f;
+        const float refuge_planter_size = 0.28f + (chunk_planter_scale * 0.08f);
+
+        push_refuge_island(block->origin.x, block->origin.z - refuge_z, refuge_half_x, refuge_half_z, refuge_planter_size, refuge_color);
+        push_refuge_island(block->origin.x, block->origin.z + refuge_z, refuge_half_x, refuge_half_z, refuge_planter_size, refuge_color);
+    }
+
+    if (profile.horizontal != NULL && profile.horizontal->road_class == MDTBRoadClassBoulevard) {
+        const MDTBRoadProfile *horizontal_road = road_profile_for_class(profile.horizontal->road_class);
+        const float refuge_half_x = 1.08f + (chunk_refuge_scale * 0.28f);
+        const float refuge_half_z = fmaxf(horizontal_road->median_half_width + 0.22f, 0.65f);
+        const float refuge_x = (profile.vertical != NULL ? profile.vertical->crosswalk_offset : kCrosswalkOffset) + 3.6f;
+        const float refuge_planter_size = 0.28f + (chunk_planter_scale * 0.08f);
+
+        push_refuge_island(block->origin.x - refuge_x, block->origin.z, refuge_half_x, refuge_half_z, refuge_planter_size, refuge_color);
+        push_refuge_island(block->origin.x + refuge_x, block->origin.z, refuge_half_x, refuge_half_z, refuge_planter_size, refuge_color);
+    }
 
     push_prop(
         offset_point(block->origin, 11.4f, 1.15f, -16.0f),
@@ -4716,14 +7265,14 @@ static void build_intersection_props(const MDTBBlockDescriptor *block) {
         1
     );
 
-    push_bollard(block->origin.x - 11.9f, block->origin.z - 7.4f, 0.92f);
-    push_bollard(block->origin.x - 11.9f, block->origin.z + 7.4f, 0.92f);
-    push_bollard(block->origin.x + 11.9f, block->origin.z - 7.4f, 0.92f);
-    push_bollard(block->origin.x + 11.9f, block->origin.z + 7.4f, 0.92f);
-    push_bollard(block->origin.x - 7.4f, block->origin.z - 11.9f, 0.92f);
-    push_bollard(block->origin.x + 7.4f, block->origin.z - 11.9f, 0.92f);
-    push_bollard(block->origin.x - 7.4f, block->origin.z + 11.9f, 0.92f);
-    push_bollard(block->origin.x + 7.4f, block->origin.z + 11.9f, 0.92f);
+    push_bollard(block->origin.x - bollard_outer_x, block->origin.z - bollard_inner_z, 0.92f);
+    push_bollard(block->origin.x - bollard_outer_x, block->origin.z + bollard_inner_z, 0.92f);
+    push_bollard(block->origin.x + bollard_outer_x, block->origin.z - bollard_inner_z, 0.92f);
+    push_bollard(block->origin.x + bollard_outer_x, block->origin.z + bollard_inner_z, 0.92f);
+    push_bollard(block->origin.x - bollard_inner_x, block->origin.z - bollard_outer_z, 0.92f);
+    push_bollard(block->origin.x + bollard_inner_x, block->origin.z - bollard_outer_z, 0.92f);
+    push_bollard(block->origin.x - bollard_inner_x, block->origin.z + bollard_outer_z, 0.92f);
+    push_bollard(block->origin.x + bollard_inner_x, block->origin.z + bollard_outer_z, 0.92f);
 }
 
 static void build_intersection_dynamic_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
@@ -4816,72 +7365,75 @@ static void build_residential_dynamic_props(const MDTBBlockDescriptor *block, ui
 }
 
 static void build_hub_frontage(const MDTBBlockDescriptor *block) {
+    const float x_origin = block->origin.x;
     const float z_origin = block->origin.z;
+    const MDTBFrontageProfile profile = frontage_profile_for_block(block);
 
-    push_store_awning_x(-42.0f, z_origin - 13.45f, 4.65f, 1.0f);
-    push_newsstand(-45.5f, z_origin - 11.25f, 1);
-    push_trash_bin(-38.6f, z_origin - 11.0f);
-    push_prop(make_float3(-40.9f, 0.38f, z_origin - 11.1f), make_float3(0.42f, 0.38f, 0.42f), make_float4(0.55f, 0.43f, 0.30f, 1.0f), 1);
-    push_prop(make_float3(-39.8f, 0.62f, z_origin - 11.0f), make_float3(0.34f, 0.62f, 0.28f), make_float4(0.19f, 0.35f, 0.56f, 1.0f), 1);
+    push_store_awning_x(x_origin - 42.0f, z_origin - profile.shopfront_z, 4.65f * profile.primary_awning_scale, 1.0f);
+    push_newsstand(x_origin - 45.5f, z_origin - (profile.furniture_z + 0.15f), 1);
+    push_trash_bin(x_origin - 38.6f, z_origin - profile.furniture_z);
+    push_prop(make_float3(x_origin - 40.9f, 0.38f, z_origin - (profile.furniture_z + 0.10f)), make_float3(0.42f, 0.38f, 0.42f), make_float4(0.55f, 0.43f, 0.30f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 39.8f, 0.62f, z_origin - profile.furniture_z), make_float3(0.34f, 0.62f, 0.28f), make_float4(0.19f, 0.35f, 0.56f, 1.0f), 1);
 
     for (int bollard = 0; bollard < 4; ++bollard) {
-        push_bollard(-46.8f + ((float)bollard * 2.1f), z_origin - 10.1f, 0.86f);
+        push_bollard(x_origin - 46.8f + ((float)bollard * 2.1f), z_origin - (profile.furniture_z - 0.60f), 0.86f);
     }
 
-    push_store_awning_x(-18.0f, z_origin - 13.65f, 3.35f, 1.0f);
-    push_store_awning_x(18.0f, z_origin - 13.25f, 3.75f, 1.0f);
-    push_store_awning_x(33.0f, z_origin - 13.65f, 2.95f, 1.0f);
-    push_newsstand(12.6f, z_origin - 10.75f, 1);
-    push_newsstand(28.9f, z_origin - 10.65f, 1);
-    push_trash_bin(-22.1f, z_origin - 10.7f);
-    push_trash_bin(36.5f, z_origin - 10.8f);
-    push_bench(23.9f, z_origin - 10.3f);
+    push_store_awning_x(x_origin - 18.0f, z_origin - (profile.shopfront_z + 0.20f), 3.35f * profile.secondary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 18.0f, z_origin - (profile.shopfront_z - 0.20f), 3.75f * profile.secondary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 33.0f, z_origin - (profile.shopfront_z + 0.20f), 2.95f * profile.secondary_awning_scale, 1.0f);
+    push_newsstand(x_origin + 12.6f, z_origin - (profile.furniture_z + 0.05f), 1);
+    push_newsstand(x_origin + 28.9f, z_origin - (profile.furniture_z - 0.05f), 1);
+    push_trash_bin(x_origin - 22.1f, z_origin - profile.furniture_z);
+    push_trash_bin(x_origin + 36.5f, z_origin - (profile.furniture_z + 0.10f));
+    push_bench(x_origin + 23.9f, z_origin - (profile.furniture_z - 0.40f));
 
-    push_store_awning_x(-18.0f, z_origin + 13.65f, 3.35f, -1.0f);
-    push_store_awning_x(18.0f, z_origin + 13.25f, 3.75f, -1.0f);
-    push_store_awning_x(33.0f, z_origin + 13.65f, 2.95f, -1.0f);
-    push_newsstand(-13.1f, z_origin + 10.7f, 1);
-    push_newsstand(23.1f, z_origin + 10.7f, 1);
-    push_trash_bin(-22.3f, z_origin + 10.85f);
-    push_trash_bin(36.4f, z_origin + 10.9f);
-    push_bench(27.4f, z_origin + 10.4f);
+    push_store_awning_x(x_origin - 18.0f, z_origin + (profile.shopfront_z + 0.20f), 3.35f * profile.secondary_awning_scale, -1.0f);
+    push_store_awning_x(x_origin + 18.0f, z_origin + (profile.shopfront_z - 0.20f), 3.75f * profile.secondary_awning_scale, -1.0f);
+    push_store_awning_x(x_origin + 33.0f, z_origin + (profile.shopfront_z + 0.20f), 2.95f * profile.secondary_awning_scale, -1.0f);
+    push_newsstand(x_origin - 13.1f, z_origin + profile.furniture_z, 1);
+    push_newsstand(x_origin + 23.1f, z_origin + profile.furniture_z, 1);
+    push_trash_bin(x_origin - 22.3f, z_origin + (profile.furniture_z + 0.15f));
+    push_trash_bin(x_origin + 36.4f, z_origin + (profile.furniture_z + 0.20f));
+    push_bench(x_origin + 27.4f, z_origin + (profile.furniture_z - 0.30f));
 
-    push_bench(-10.7f, z_origin - 31.5f);
-    push_trash_bin(-13.0f, z_origin - 32.4f);
-    push_prop(make_float3(-11.2f, 2.05f, z_origin - 34.0f), make_float3(0.12f, 2.05f, 0.12f), make_float4(0.36f, 0.37f, 0.39f, 1.0f), 1);
-    push_prop(make_float3(-11.2f, 3.42f, z_origin - 34.0f), make_float3(1.08f, 0.12f, 0.12f), make_float4(0.83f, 0.75f, 0.49f, 1.0f), 0);
+    push_bench(x_origin - 10.7f, z_origin - (profile.rear_anchor_z - 2.30f));
+    push_trash_bin(x_origin - 13.0f, z_origin - (profile.rear_anchor_z - 1.40f));
+    push_prop(make_float3(x_origin - 11.2f, 2.05f, z_origin - profile.rear_anchor_z), make_float3(0.12f, 2.05f, 0.12f), make_float4(0.36f, 0.37f, 0.39f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 11.2f, 3.42f, z_origin - profile.rear_anchor_z), make_float3(1.08f, 0.12f, 0.12f), make_float4(0.83f, 0.75f, 0.49f, 1.0f), 0);
 
-    push_bench(9.8f, z_origin + 31.7f);
-    push_trash_bin(12.2f, z_origin + 32.4f);
-    push_prop(make_float3(10.8f, 1.28f, z_origin + 34.0f), make_float3(0.12f, 1.28f, 1.05f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
-    push_prop(make_float3(10.1f, 2.34f, z_origin + 34.0f), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
+    push_bench(x_origin + 9.8f, z_origin + (profile.rear_anchor_z - 2.10f));
+    push_trash_bin(x_origin + 12.2f, z_origin + (profile.rear_anchor_z - 1.40f));
+    push_prop(make_float3(x_origin + 10.8f, 1.28f, z_origin + profile.rear_anchor_z), make_float3(0.12f, 1.28f, 1.05f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(x_origin + 10.1f, 2.34f, z_origin + profile.rear_anchor_z), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
 }
 
 static void build_mixed_use_frontage(const MDTBBlockDescriptor *block) {
     const float x_origin = block->origin.x;
     const float z_origin = block->origin.z;
+    const MDTBFrontageProfile profile = frontage_profile_for_block(block);
 
-    push_store_awning_x(x_origin - 19.5f, z_origin - 13.4f, 3.8f, 1.0f);
-    push_store_awning_x(x_origin + 11.5f, z_origin - 13.2f, 4.8f, 1.0f);
-    push_store_awning_x(x_origin + 31.0f, z_origin + 13.4f, 3.4f, -1.0f);
-    push_bus_shelter(x_origin - 21.8f, z_origin - 16.0f);
-    push_newsstand(x_origin - 6.2f, z_origin - 10.7f, 1);
-    push_newsstand(x_origin + 25.6f, z_origin + 10.8f, 1);
-    push_trash_bin(x_origin - 25.2f, z_origin + 10.8f);
-    push_trash_bin(x_origin + 8.6f, z_origin - 10.8f);
-    push_bench(x_origin + 19.6f, z_origin - 10.3f);
-    push_bench(x_origin - 11.8f, z_origin + 10.3f);
-    push_planter(x_origin - 32.0f, z_origin - 12.2f, 0.60f);
-    push_planter(x_origin + 36.2f, z_origin + 12.0f, 0.58f);
-    push_prop(make_float3(x_origin + 6.2f, kSidewalkHeight + 2.15f, z_origin - 13.0f), make_float3(2.2f, 0.16f, 0.20f), make_float4(0.92f, 0.63f, 0.22f, 1.0f), 0);
-    push_prop(make_float3(x_origin + 33.8f, kSidewalkHeight + 2.2f, z_origin + 13.2f), make_float3(1.9f, 0.16f, 0.20f), make_float4(0.28f, 0.66f, 0.84f, 1.0f), 0);
-    push_prop(make_float3(x_origin - 33.6f, 1.28f, z_origin + 13.0f), make_float3(0.12f, 1.28f, 1.08f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
-    push_prop(make_float3(x_origin - 34.3f, 2.34f, z_origin + 13.0f), make_float3(1.06f, 0.12f, 1.24f), make_float4(0.74f, 0.79f, 0.82f, 1.0f), 0);
+    push_store_awning_x(x_origin - 19.5f, z_origin - (profile.shopfront_z + 0.10f), 3.8f * profile.primary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 11.5f, z_origin - (profile.shopfront_z - 0.10f), 4.8f * profile.primary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 31.0f, z_origin + (profile.shopfront_z + 0.10f), 3.4f * profile.secondary_awning_scale, -1.0f);
+    push_bus_shelter(x_origin - 21.8f, z_origin - profile.transit_stop_z);
+    push_newsstand(x_origin - 6.2f, z_origin - profile.furniture_z, 1);
+    push_newsstand(x_origin + 25.6f, z_origin + (profile.furniture_z + 0.10f), 1);
+    push_trash_bin(x_origin - 25.2f, z_origin + (profile.furniture_z + 0.10f));
+    push_trash_bin(x_origin + 8.6f, z_origin - (profile.furniture_z + 0.10f));
+    push_bench(x_origin + 19.6f, z_origin - (profile.furniture_z - 0.40f));
+    push_bench(x_origin - 11.8f, z_origin + (profile.furniture_z - 0.40f));
+    push_planter(x_origin - 32.0f, z_origin - (profile.shopfront_z - 1.10f), profile.planter_size + 0.02f);
+    push_planter(x_origin + 36.2f, z_origin + (profile.shopfront_z - 1.30f), profile.planter_size);
+    push_prop(make_float3(x_origin + 6.2f, kSidewalkHeight + 2.15f, z_origin - (profile.shopfront_z - 0.30f)), make_float3(2.2f, 0.16f, 0.20f), make_float4(0.92f, 0.63f, 0.22f, 1.0f), 0);
+    push_prop(make_float3(x_origin + 33.8f, kSidewalkHeight + 2.2f, z_origin + (profile.shopfront_z - 0.10f)), make_float3(1.9f, 0.16f, 0.20f), make_float4(0.28f, 0.66f, 0.84f, 1.0f), 0);
+    push_prop(make_float3(x_origin - 33.6f, 1.28f, z_origin + (profile.shopfront_z - 0.30f)), make_float3(0.12f, 1.28f, 1.08f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 34.3f, 2.34f, z_origin + (profile.shopfront_z - 0.30f)), make_float3(1.06f, 0.12f, 1.24f), make_float4(0.74f, 0.79f, 0.82f, 1.0f), 0);
 
-    push_low_fence_run_x(z_origin - 46.2f, x_origin + 25.0f, x_origin + 48.0f);
-    push_low_fence_run_z(x_origin + 48.0f, z_origin - 46.2f, z_origin - 27.8f);
-    push_low_fence_run_x(z_origin + 45.8f, x_origin - 49.0f, x_origin - 28.0f);
-    push_low_fence_run_z(x_origin - 49.0f, z_origin + 28.4f, z_origin + 45.8f);
+    push_low_fence_run_x(z_origin - profile.rear_fence_z, x_origin + 25.0f, x_origin + 48.0f);
+    push_low_fence_run_z(x_origin + 48.0f, z_origin - profile.rear_fence_z, z_origin - 27.8f);
+    push_low_fence_run_x(z_origin + profile.rear_fence_z, x_origin - 49.0f, x_origin - 28.0f);
+    push_low_fence_run_z(x_origin - 49.0f, z_origin + 28.4f, z_origin + profile.rear_fence_z);
 }
 
 static void build_service_court_annex(const MDTBBlockDescriptor *block, uint32_t block_index) {
@@ -5056,6 +7608,8 @@ static void build_mixed_use_block(const MDTBBlockDescriptor *block, uint32_t blo
 }
 
 static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    const float x_origin = block->origin.x;
+    const MDTBFrontageProfile profile = frontage_profile_for_block(block);
     build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
@@ -5063,77 +7617,126 @@ static void build_hub_block(const MDTBBlockDescriptor *block, uint32_t block_ind
     build_frontage_for_block(block);
     build_hub_dynamic_props(block, block_index);
 
-    push_corner_store_landmark(-42.0f, block->origin.z - 17.2f);
-    push_billboard(-23.5f, block->origin.z - 45.5f, 5.4f, 1.45f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
-    push_half_court(35.0f, block->origin.z + 35.0f);
-    push_billboard(46.0f, block->origin.z + 12.5f, 4.8f, 1.35f, 1, make_float4(0.29f, 0.53f, 0.67f, 1.0f));
-    push_carport_landmark(39.5f, block->origin.z - 37.5f);
+    push_corner_store_landmark(x_origin - 42.0f, block->origin.z - 17.2f);
+    push_billboard(x_origin - 23.5f, block->origin.z - 45.5f, 5.4f, 1.45f, 0, make_float4(0.88f, 0.63f, 0.24f, 1.0f));
+    push_half_court(x_origin + 35.0f, block->origin.z + 35.0f);
+    push_billboard(x_origin + 46.0f, block->origin.z + 12.5f, 4.8f, 1.35f, 1, make_float4(0.29f, 0.53f, 0.67f, 1.0f));
+    push_carport_landmark(x_origin + 39.5f, block->origin.z - 37.5f);
 
-    push_low_fence_run_x(block->origin.z - 47.6f, 28.0f, 50.2f);
-    push_low_fence_run_z(28.0f, block->origin.z - 47.6f, block->origin.z - 28.6f);
-    push_low_fence_run_x(block->origin.z + 46.3f, -50.0f, -29.6f);
-    push_low_fence_run_z(-29.6f, block->origin.z + 28.8f, block->origin.z + 46.3f);
+    push_low_fence_run_x(block->origin.z - (profile.rear_fence_z + 1.1f), x_origin + 28.0f, x_origin + 50.2f);
+    push_low_fence_run_z(x_origin + 28.0f, block->origin.z - (profile.rear_fence_z + 1.1f), block->origin.z - 28.6f);
+    push_low_fence_run_x(block->origin.z + (profile.rear_fence_z - 0.2f), x_origin - 50.0f, x_origin - 29.6f);
+    push_low_fence_run_z(x_origin - 29.6f, block->origin.z + 28.8f, block->origin.z + (profile.rear_fence_z - 0.2f));
 
-    push_interest_point(make_float3(0.0f, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
-    push_interest_point(make_float3(-10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
-    push_interest_point(make_float3(10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
-    push_interest_point(make_float3(-14.4f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
-    push_interest_point(make_float3(42.0f, kSidewalkHeight, block->origin.z - 17.2f), 8.0f, MDTBInterestPointLandmark, block_index);
-    push_interest_point(make_float3(35.0f, kSidewalkHeight, block->origin.z + 35.0f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(x_origin, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
+    push_interest_point(make_float3(x_origin - 10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(x_origin + 10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(x_origin - 14.4f, kSidewalkHeight, block->origin.z + 2.8f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    push_interest_point(make_float3(x_origin + 42.0f, kSidewalkHeight, block->origin.z - 17.2f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(x_origin + 35.0f, kSidewalkHeight, block->origin.z + 35.0f), 8.0f, MDTBInterestPointLandmark, block_index);
     build_hotspot_hooks(block, block_index);
     build_vehicle_handoff_hooks(block, block_index);
 }
 
 static void build_residential_frontage(const MDTBBlockDescriptor *block) {
+    const float x_origin = block->origin.x;
     const float z_origin = block->origin.z;
+    const MDTBFrontageProfile profile = frontage_profile_for_block(block);
 
-    push_store_awning_x(-18.0f, z_origin - 13.6f, 3.1f, 1.0f);
-    push_store_awning_x(19.0f, z_origin - 13.1f, 2.8f, 1.0f);
-    push_store_awning_x(-18.0f, z_origin + 13.4f, 2.6f, -1.0f);
-    push_newsstand(-12.6f, z_origin + 10.7f, 1);
-    push_newsstand(22.4f, z_origin - 10.7f, 1);
-    push_trash_bin(-22.0f, z_origin - 10.9f);
-    push_trash_bin(34.8f, z_origin + 10.8f);
-    push_bench(24.0f, z_origin - 10.4f);
-    push_bench(-22.8f, z_origin + 10.3f);
+    push_store_awning_x(x_origin - 18.0f, z_origin - (profile.shopfront_z + 0.20f), 3.1f * profile.secondary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 19.0f, z_origin - (profile.shopfront_z - 0.30f), 2.8f * profile.secondary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin - 18.0f, z_origin + (profile.shopfront_z + 0.05f), 2.6f * profile.secondary_awning_scale, -1.0f);
+    push_newsstand(x_origin - 12.6f, z_origin + profile.furniture_z, 1);
+    push_newsstand(x_origin + 22.4f, z_origin - profile.furniture_z, 1);
+    push_trash_bin(x_origin - 22.0f, z_origin - (profile.furniture_z + 0.20f));
+    push_trash_bin(x_origin + 34.8f, z_origin + (profile.furniture_z + 0.10f));
+    push_bench(x_origin + 24.0f, z_origin - (profile.furniture_z - 0.30f));
+    push_bench(x_origin - 22.8f, z_origin + (profile.furniture_z - 0.40f));
 
-    push_bus_shelter(11.2f, z_origin - 16.2f);
-    push_apartment_entry(-41.6f, z_origin + 15.0f);
-    push_prop(make_float3(-43.0f, kSidewalkHeight + 3.45f, z_origin + 15.0f), make_float3(1.85f, 0.14f, 3.0f), make_float4(0.86f, 0.78f, 0.42f, 1.0f), 0);
-    push_prop(make_float3(39.0f, kSidewalkHeight + 1.2f, z_origin + 33.8f), make_float3(0.14f, 1.2f, 1.3f), make_float4(0.29f, 0.31f, 0.33f, 1.0f), 1);
-    push_prop(make_float3(38.4f, kSidewalkHeight + 2.1f, z_origin + 33.8f), make_float3(0.92f, 0.10f, 1.48f), make_float4(0.72f, 0.80f, 0.84f, 1.0f), 0);
+    push_bus_shelter(x_origin + 11.2f, z_origin - profile.transit_stop_z);
+    push_apartment_entry(x_origin - 41.6f, z_origin + (profile.transit_stop_z - 1.25f));
+    push_prop(make_float3(x_origin - 43.0f, kSidewalkHeight + 3.45f, z_origin + (profile.transit_stop_z - 1.25f)), make_float3(1.85f, 0.14f, 3.0f), make_float4(0.86f, 0.78f, 0.42f, 1.0f), 0);
+    push_prop(make_float3(x_origin + 39.0f, kSidewalkHeight + 1.2f, z_origin + profile.rear_anchor_z), make_float3(0.14f, 1.2f, 1.3f), make_float4(0.29f, 0.31f, 0.33f, 1.0f), 1);
+    push_prop(make_float3(x_origin + 38.4f, kSidewalkHeight + 2.1f, z_origin + profile.rear_anchor_z), make_float3(0.92f, 0.10f, 1.48f), make_float4(0.72f, 0.80f, 0.84f, 1.0f), 0);
 
-    push_low_fence_run_x(z_origin + 46.2f, -48.0f, -28.2f);
-    push_low_fence_run_z(-48.0f, z_origin + 28.5f, z_origin + 46.2f);
-    push_low_fence_run_x(z_origin + 46.0f, 29.0f, 48.5f);
-    push_low_fence_run_z(48.5f, z_origin + 29.0f, z_origin + 46.0f);
+    push_low_fence_run_x(z_origin + profile.rear_fence_z, x_origin - 48.0f, x_origin - 28.2f);
+    push_low_fence_run_z(x_origin - 48.0f, z_origin + 28.5f, z_origin + profile.rear_fence_z);
+    push_low_fence_run_x(z_origin + (profile.rear_fence_z - 0.20f), x_origin + 29.0f, x_origin + 48.5f);
+    push_low_fence_run_z(x_origin + 48.5f, z_origin + 29.0f, z_origin + (profile.rear_fence_z - 0.20f));
 }
 
 static void build_service_spur_frontage(const MDTBBlockDescriptor *block) {
     const float x_origin = block->origin.x;
     const float z_origin = block->origin.z;
+    const MDTBFloat4 loading_zone_color = make_float4(0.86f, 0.74f, 0.26f, 1.0f);
+    const MDTBFloat4 loading_fill_color = make_float4(0.31f, 0.28f, 0.20f, 1.0f);
+    const MDTBFrontageProfile profile = frontage_profile_for_block(block);
 
-    push_store_awning_x(x_origin - 23.0f, z_origin - 13.4f, 3.1f, 1.0f);
-    push_store_awning_x(x_origin + 6.5f, z_origin - 13.0f, 4.3f, 1.0f);
-    push_store_awning_x(x_origin + 29.8f, z_origin + 13.3f, 2.8f, -1.0f);
-    push_bus_shelter(x_origin + 18.6f, z_origin + 16.2f);
-    push_newsstand(x_origin - 8.8f, z_origin - 10.8f, 1);
-    push_newsstand(x_origin + 22.8f, z_origin + 10.8f, 1);
-    push_trash_bin(x_origin - 26.4f, z_origin + 10.7f);
-    push_trash_bin(x_origin + 10.8f, z_origin - 10.9f);
-    push_bench(x_origin - 14.6f, z_origin + 10.3f);
-    push_bench(x_origin + 16.6f, z_origin - 10.4f);
-    push_planter(x_origin - 31.4f, z_origin - 12.1f, 0.64f);
-    push_planter(x_origin + 35.0f, z_origin + 12.0f, 0.54f);
-    push_prop(make_float3(x_origin + 2.8f, kSidewalkHeight + 2.18f, z_origin - 13.0f), make_float3(2.5f, 0.18f, 0.20f), make_float4(0.92f, 0.71f, 0.24f, 1.0f), 0);
-    push_prop(make_float3(x_origin + 29.8f, kSidewalkHeight + 2.18f, z_origin + 13.1f), make_float3(1.68f, 0.18f, 0.20f), make_float4(0.33f, 0.68f, 0.82f, 1.0f), 0);
-    push_prop(make_float3(x_origin - 28.2f, 1.18f, z_origin + 12.8f), make_float3(0.14f, 1.18f, 1.18f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
-    push_prop(make_float3(x_origin - 28.9f, 2.18f, z_origin + 12.8f), make_float3(1.22f, 0.12f, 1.36f), make_float4(0.76f, 0.81f, 0.84f, 1.0f), 0);
+    push_store_awning_x(x_origin - 23.0f, z_origin - (profile.shopfront_z + 0.15f), 3.1f * profile.secondary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 6.5f, z_origin - (profile.shopfront_z - 0.25f), 4.3f * profile.primary_awning_scale, 1.0f);
+    push_store_awning_x(x_origin + 29.8f, z_origin + (profile.shopfront_z + 0.05f), 2.8f * profile.secondary_awning_scale, -1.0f);
+    push_bus_shelter(x_origin + 18.6f, z_origin + profile.transit_stop_z);
+    push_newsstand(x_origin - 8.8f, z_origin - (profile.furniture_z + 0.10f), 1);
+    push_newsstand(x_origin + 22.8f, z_origin + (profile.furniture_z + 0.10f), 1);
+    push_trash_bin(x_origin - 26.4f, z_origin + profile.furniture_z);
+    push_trash_bin(x_origin + 10.8f, z_origin - (profile.furniture_z + 0.20f));
+    push_bench(x_origin - 14.6f, z_origin + (profile.furniture_z - 0.40f));
+    push_bench(x_origin + 16.6f, z_origin - (profile.furniture_z - 0.30f));
+    push_planter(x_origin - 31.4f, z_origin - (profile.shopfront_z - 1.15f), profile.planter_size + 0.08f);
+    push_planter(x_origin + 35.0f, z_origin + (profile.shopfront_z - 1.25f), profile.planter_size - 0.02f);
+    push_prop(make_float3(x_origin + 2.8f, kSidewalkHeight + 2.18f, z_origin - (profile.shopfront_z - 0.25f)), make_float3(2.5f, 0.18f, 0.20f), make_float4(0.92f, 0.71f, 0.24f, 1.0f), 0);
+    push_prop(make_float3(x_origin + 29.8f, kSidewalkHeight + 2.18f, z_origin + (profile.shopfront_z - 0.15f)), make_float3(1.68f, 0.18f, 0.20f), make_float4(0.33f, 0.68f, 0.82f, 1.0f), 0);
+    push_prop(make_float3(x_origin - 28.2f, 1.18f, z_origin + (profile.shopfront_z - 0.45f)), make_float3(0.14f, 1.18f, 1.18f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
+    push_prop(make_float3(x_origin - 28.9f, 2.18f, z_origin + (profile.shopfront_z - 0.45f)), make_float3(1.22f, 0.12f, 1.36f), make_float4(0.76f, 0.81f, 0.84f, 1.0f), 0);
 
-    push_low_fence_run_x(z_origin - 46.2f, x_origin + 26.8f, x_origin + 48.4f);
-    push_low_fence_run_z(x_origin + 48.4f, z_origin - 46.2f, z_origin - 26.8f);
-    push_low_fence_run_x(z_origin + 45.8f, x_origin - 49.2f, x_origin - 30.0f);
-    push_low_fence_run_z(x_origin - 49.2f, z_origin + 29.0f, z_origin + 45.8f);
+    push_scene_box(make_box(
+        make_float3(x_origin - 21.6f, kRoadHeight + 0.01f, z_origin - profile.loading_zone_z),
+        make_float3(8.8f * profile.loading_zone_half_x_scale, 0.01f, profile.loading_zone_half_z),
+        loading_fill_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + 15.2f, kRoadHeight + 0.01f, z_origin + profile.loading_zone_z),
+        make_float3(10.4f * profile.loading_zone_half_x_scale, 0.01f, profile.loading_zone_half_z),
+        loading_fill_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - 21.6f, kRoadHeight + 0.02f, z_origin - (profile.loading_zone_z + (profile.loading_zone_half_z + 0.06f))),
+        make_float3(8.8f * profile.loading_zone_half_x_scale, 0.01f, 0.08f),
+        loading_zone_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - 21.6f, kRoadHeight + 0.02f, z_origin - (profile.loading_zone_z - (profile.loading_zone_half_z + 0.06f))),
+        make_float3(8.8f * profile.loading_zone_half_x_scale, 0.01f, 0.08f),
+        loading_zone_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + 15.2f, kRoadHeight + 0.02f, z_origin + (profile.loading_zone_z + (profile.loading_zone_half_z + 0.06f))),
+        make_float3(10.4f * profile.loading_zone_half_x_scale, 0.01f, 0.08f),
+        loading_zone_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + 15.2f, kRoadHeight + 0.02f, z_origin + (profile.loading_zone_z - (profile.loading_zone_half_z + 0.06f))),
+        make_float3(10.4f * profile.loading_zone_half_x_scale, 0.01f, 0.08f),
+        loading_zone_color
+    ));
+
+    for (int stripe = 0; stripe < 4; ++stripe) {
+        push_scene_box(make_box(
+            make_float3(x_origin - 27.8f + ((float)stripe * 4.0f), kRoadHeight + 0.02f, z_origin - profile.loading_zone_z),
+            make_float3(1.05f, 0.01f, 0.08f),
+            loading_zone_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x_origin + 8.6f + ((float)stripe * 4.4f), kRoadHeight + 0.02f, z_origin + profile.loading_zone_z),
+            make_float3(1.15f, 0.01f, 0.08f),
+            loading_zone_color
+        ));
+    }
+
+    push_low_fence_run_x(z_origin - (profile.rear_fence_z + 0.30f), x_origin + 26.8f, x_origin + 48.4f);
+    push_low_fence_run_z(x_origin + 48.4f, z_origin - (profile.rear_fence_z + 0.30f), z_origin - 26.8f);
+    push_low_fence_run_x(z_origin + (profile.rear_fence_z - 0.10f), x_origin - 49.2f, x_origin - 30.0f);
+    push_low_fence_run_z(x_origin - 49.2f, z_origin + 29.0f, z_origin + (profile.rear_fence_z - 0.10f));
 }
 
 static void build_frontage_for_block(const MDTBBlockDescriptor *block) {
@@ -5284,6 +7887,7 @@ static void build_combat_sandbox_props(void) {
 }
 
 static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t block_index) {
+    const float x_origin = block->origin.x;
     build_block_lot_surfaces(block);
     build_side_buildings(block, -1);
     build_side_buildings(block, 1);
@@ -5291,17 +7895,17 @@ static void build_residential_block(const MDTBBlockDescriptor *block, uint32_t b
     build_frontage_for_block(block);
     build_residential_dynamic_props(block, block_index);
 
-    push_billboard(-24.0f, block->origin.z - 42.0f, 4.8f, 1.25f, 0, make_float4(0.36f, 0.63f, 0.29f, 1.0f));
-    push_billboard(46.0f, block->origin.z + 18.5f, 4.6f, 1.25f, 1, make_float4(0.86f, 0.55f, 0.21f, 1.0f));
-    push_parked_car(-38.5f, block->origin.z - 35.2f, 1.15f, 2.2f, make_float4(0.22f, 0.48f, 0.63f, 1.0f));
-    push_parked_car(35.8f, block->origin.z + 35.6f, 1.15f, 2.2f, make_float4(0.58f, 0.38f, 0.25f, 1.0f));
+    push_billboard(x_origin - 24.0f, block->origin.z - 42.0f, 4.8f, 1.25f, 0, make_float4(0.36f, 0.63f, 0.29f, 1.0f));
+    push_billboard(x_origin + 46.0f, block->origin.z + 18.5f, 4.6f, 1.25f, 1, make_float4(0.86f, 0.55f, 0.21f, 1.0f));
+    push_parked_car(x_origin - 38.5f, block->origin.z - 35.2f, 1.15f, 2.2f, make_float4(0.22f, 0.48f, 0.63f, 1.0f));
+    push_parked_car(x_origin + 35.8f, block->origin.z + 35.6f, 1.15f, 2.2f, make_float4(0.58f, 0.38f, 0.25f, 1.0f));
 
-    push_interest_point(make_float3(0.0f, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
-    push_interest_point(make_float3(-10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
-    push_interest_point(make_float3(10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
-    push_interest_point(make_float3(11.2f, kSidewalkHeight, block->origin.z - 16.2f), 8.0f, MDTBInterestPointLandmark, block_index);
-    push_interest_point(make_float3(-41.6f, kSidewalkHeight, block->origin.z + 15.0f), 8.0f, MDTBInterestPointLandmark, block_index);
-    push_interest_point(make_float3(35.8f, kSidewalkHeight, block->origin.z + 35.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
+    push_interest_point(make_float3(x_origin, kSidewalkHeight, block->origin.z), 18.0f, MDTBInterestPointStreamingAnchor, block_index);
+    push_interest_point(make_float3(x_origin - 10.0f, kSidewalkHeight, block->origin.z - 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(x_origin + 10.0f, kSidewalkHeight, block->origin.z + 10.0f), 5.0f, MDTBInterestPointPedestrianSpawn, block_index);
+    push_interest_point(make_float3(x_origin + 11.2f, kSidewalkHeight, block->origin.z - 16.2f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(x_origin - 41.6f, kSidewalkHeight, block->origin.z + 15.0f), 8.0f, MDTBInterestPointLandmark, block_index);
+    push_interest_point(make_float3(x_origin + 35.8f, kSidewalkHeight, block->origin.z + 35.6f), 5.5f, MDTBInterestPointVehicleSpawn, block_index);
     build_hotspot_hooks(block, block_index);
     build_vehicle_handoff_hooks(block, block_index);
 }
@@ -5311,12 +7915,14 @@ static void build_scene(void) {
     g_collision_box_count = 0u;
     g_block_count = 0u;
     g_road_link_count = 0u;
+    g_road_spine_count = 0u;
     g_vehicle_anchor_count = 0u;
     g_interest_point_count = 0u;
     g_dynamic_prop_count = 0u;
     g_population_profile_count = 0u;
     g_traffic_occupancy_count = 0u;
     clear_scene_scope();
+    rebuild_road_spines();
 
     build_world_surfaces();
     build_road_markings();
@@ -5365,22 +7971,25 @@ static void ensure_scene_initialized(void) {
 static MDTBGroundInfo ground_info(float x, float z) {
     MDTBGroundInfo info;
     float distance_to_road = 1000000.0f;
+    const MDTBRoadProfile *nearest_profile = road_profile_for_class(MDTBRoadClassResidentialStreet);
     int on_road = 0;
 
-    for (size_t index = 0u; index < scene_layout_count(); ++index) {
-        const float x_distance = fmaxf(fabsf(x - kBlockLayout[index].origin.x) - kRoadHalfWidth, 0.0f);
-        distance_to_road = fminf(distance_to_road, x_distance);
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const float lateral_distance =
+            spine->axis == MDTBRoadAxisNorthSouth
+            ? fabsf(x - spine->coordinate)
+            : fabsf(z - spine->coordinate);
+        const float road_distance =
+            fmaxf(lateral_distance - profile->road_half_width, 0.0f);
 
-        if (fabsf(x - kBlockLayout[index].origin.x) <= kRoadHalfWidth) {
-            on_road = 1;
+        if (road_distance < distance_to_road) {
+            distance_to_road = road_distance;
+            nearest_profile = profile;
         }
-    }
 
-    for (size_t index = 0u; index < scene_layout_count(); ++index) {
-        const float corridor_distance = fmaxf(fabsf(z - kBlockLayout[index].origin.z) - kRoadHalfWidth, 0.0f);
-        distance_to_road = fminf(distance_to_road, corridor_distance);
-
-        if (fabsf(z - kBlockLayout[index].origin.z) <= kRoadHalfWidth) {
+        if (lateral_distance <= profile->road_half_width) {
             on_road = 1;
         }
     }
@@ -5391,14 +8000,18 @@ static MDTBGroundInfo ground_info(float x, float z) {
         return info;
     }
 
-    if (distance_to_road <= (kCurbOuter - kRoadHalfWidth)) {
-        const float ramp = clampf(distance_to_road / (kCurbOuter - kRoadHalfWidth), 0.0f, 1.0f);
+    if (distance_to_road <= (nearest_profile->curb_outer - nearest_profile->road_half_width)) {
+        const float ramp = clampf(
+            distance_to_road / (nearest_profile->curb_outer - nearest_profile->road_half_width),
+            0.0f,
+            1.0f
+        );
         info.height = kRoadHeight + ((kSidewalkHeight - kRoadHeight) * ramp);
         info.surface_kind = MDTBSurfaceCurb;
         return info;
     }
 
-    if (distance_to_road <= (kSidewalkOuter - kRoadHalfWidth)) {
+    if (distance_to_road <= (nearest_profile->sidewalk_outer - nearest_profile->road_half_width)) {
         info.height = kSidewalkHeight;
         info.surface_kind = MDTBSurfaceSidewalk;
         return info;
@@ -5883,7 +8496,9 @@ static void step_vehicle_movement(MDTBEngineState *state, MDTBInputFrame input, 
 
     if (state->active_link_index < g_road_link_count) {
         const MDTBRoadLink *link = &g_road_links[state->active_link_index];
-        const float desired_lane_offset = vehicle_lane_offset_for_heading(link->axis, state->active_vehicle_heading, tuning->travel_lane_offset);
+        const MDTBRoadProfile *profile = road_profile_for_link(link);
+        const float lane_magnitude = fmaxf(profile->lane_offset, tuning->travel_lane_offset * 0.9f);
+        const float desired_lane_offset = vehicle_lane_offset_for_heading(link->axis, state->active_vehicle_heading, lane_magnitude);
         if (link->axis == MDTBRoadAxisNorthSouth) {
             const float desired_x = link->midpoint.x + desired_lane_offset;
             const float corrected_x = resolve_collision_axis_with_radius(
@@ -5971,6 +8586,12 @@ void mdtb_engine_init(MDTBEngineState *state) {
     state->territory_commit_state = MDTBTerritoryCommitNone;
     state->territory_commit_timer = 0.0f;
     state->territory_commit_progress = 0.0f;
+    state->territory_resolve_state = MDTBTerritoryResolveNone;
+    state->territory_resolve_timer = 0.0f;
+    state->territory_resolve_progress = 0.0f;
+    state->territory_reapproach_mode = MDTBTerritoryReapproachNone;
+    state->territory_reapproach_timer = 0.0f;
+    state->territory_preferred_side = 0.0f;
     state->target_yaw = state->camera.yaw;
     state->target_pitch = state->camera.pitch;
     state->actor_heading = state->camera.yaw;

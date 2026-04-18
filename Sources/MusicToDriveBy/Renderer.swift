@@ -47,6 +47,8 @@ private struct SceneRoadLink {
     var midpoint: SIMD3<Float>
     var length: Float
     var axis: UInt32
+    var roadClass: UInt32
+    var corridor: UInt32
 }
 
 private struct SceneVehicleAnchor {
@@ -121,7 +123,7 @@ private struct AmbientFrame {
 
 @MainActor
 final class Renderer: NSObject, MTKViewDelegate {
-    private static let dynamicVertexBudget = 256 * 36
+    private static let dynamicVertexBudget = 512 * 36
     private static let vehicleMountRadius: Float = 3.6
 
     private let device: MTLDevice
@@ -312,7 +314,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             fovY: (isThirdPerson ? (isVehicleTraversal ? 68 : 70) : (isVehicleTraversal ? 78 : 74)) * (.pi / 180),
             aspect: aspect,
             nearZ: 0.1,
-            farZ: 200
+            farZ: 520
         )
 
         let viewMatrix = simd_float4x4.lookAt(
@@ -367,7 +369,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotFPS = latestFPS
         let snapshotCameraMode = Self.cameraModeLabel(engineState.camera.mode, traversalMode: engineState.traversal_mode)
         let snapshotSurface = Self.surfaceLabel(engineState.surface_kind)
-        let snapshotLayout = "\(blocks.count) blocks / \(Self.chunkCount(blocks)) chunks / \(roadLinks.count) links / \(vehicleAnchors.count) staged veh / \(trafficOccupancies.count) occ / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic / \(latestVisibleStaticBoxCount)/\(staticSceneBoxes.count) static"
+        let snapshotLayout = "\(blocks.count) blocks / \(Self.districtCount(blocks)) districts / \(Self.chunkCount(blocks)) tiles / \(Self.corridorCount(roadLinks)) corridors / \(roadLinks.count) links / \(vehicleAnchors.count) staged veh / \(trafficOccupancies.count) occ / \(interestPoints.count) hooks / \(dynamicProps.count) dynamic / \(latestVisibleStaticBoxCount)/\(staticSceneBoxes.count) static"
         let snapshotActivity = Self.activitySummary(state: engineState, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints, populationProfiles: populationProfiles, trafficOccupancies: trafficOccupancies, vehicleAnchors: vehicleAnchors)
         let snapshotVehicle = Self.vehicleStatusSummary(state: engineState, vehicleAnchors: vehicleAnchors, blocks: blocks)
         let snapshotCombat = Self.combatSummary(state: engineState)
@@ -376,7 +378,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let snapshotHazard = Self.trafficHazardSummary(state: engineState, trafficHazard: trafficHazard)
         let snapshotBlock = Self.blockSummary(state: engineState, blocks: blocks, populationProfiles: populationProfiles)
         let snapshotNearestHook = Self.nearestInterestPointSummary(for: actorPosition, interestPoints: interestPoints, blocks: blocks)
-        let snapshotHUD = Self.combatHUDModel(state: engineState, interactionSummary: snapshotInteraction, trafficHazard: trafficHazard)
+        let snapshotHUD = Self.combatHUDModel(state: engineState, interactionSummary: snapshotInteraction, trafficHazard: trafficHazard, blocks: blocks, roadLinks: roadLinks)
 
         viewModel?.update(
             actorPosition: actorPosition,
@@ -518,7 +520,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 toBlockIndex: link.to_block_index,
                 midpoint: SIMD3<Float>(link.midpoint.x, link.midpoint.y, link.midpoint.z),
                 length: link.length,
-                axis: link.axis
+                axis: link.axis,
+                roadClass: link.road_class,
+                corridor: link.corridor
             )
         }
     }
@@ -657,17 +661,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         vertices.reserveCapacity(staticSceneBoxes.count * 36)
 
         for sceneBox in staticSceneBoxes {
-            if sceneBox.layer == UInt32(MDTBSceneLayerBlockOwned) {
-                let blockIndex = Int(sceneBox.blockIndex)
-                guard blockIndex < blocks.count else {
-                    continue
-                }
-
-                if !activeChunkIndices.contains(Int(blocks[blockIndex].chunkIndex)) {
-                    continue
-                }
-            }
-
             if sceneBox.layer != UInt32(MDTBSceneLayerShared) && sceneBox.layer != UInt32(MDTBSceneLayerBlockOwned) {
                 continue
             }
@@ -1415,23 +1408,35 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func pedestrianTint(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictMarketSpur):
-            return SIMD4<Float>(0.31, 0.62, 0.78, 1.0)
-        case UInt32(MDTBDistrictMapleHeights):
-            return SIMD4<Float>(0.44, 0.60, 0.34, 1.0)
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+            return SIMD4<Float>(0.84, 0.61, 0.28, 1.0)
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+            return SIMD4<Float>(0.50, 0.67, 0.38, 1.0)
+        case UInt32(MDTBDistrictCrenshawCorridor):
+            return SIMD4<Float>(0.28, 0.66, 0.74, 1.0)
+        case UInt32(MDTBDistrictVermontSquare):
+            return SIMD4<Float>(0.43, 0.57, 0.78, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone):
+            return SIMD4<Float>(0.70, 0.46, 0.36, 1.0)
         default:
-            return SIMD4<Float>(0.82, 0.44, 0.24, 1.0)
+            return SIMD4<Float>(0.79, 0.40, 0.28, 1.0)
         }
     }
 
     private static func vehicleTint(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictMarketSpur):
-            return SIMD4<Float>(0.83, 0.54, 0.22, 1.0)
-        case UInt32(MDTBDistrictMapleHeights):
-            return SIMD4<Float>(0.34, 0.52, 0.70, 1.0)
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+            return SIMD4<Float>(0.76, 0.48, 0.22, 1.0)
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+            return SIMD4<Float>(0.32, 0.53, 0.30, 1.0)
+        case UInt32(MDTBDistrictCrenshawCorridor):
+            return SIMD4<Float>(0.26, 0.60, 0.70, 1.0)
+        case UInt32(MDTBDistrictVermontSquare):
+            return SIMD4<Float>(0.34, 0.50, 0.76, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone):
+            return SIMD4<Float>(0.56, 0.42, 0.38, 1.0)
         default:
-            return SIMD4<Float>(0.72, 0.42, 0.26, 1.0)
+            return SIMD4<Float>(0.68, 0.40, 0.24, 1.0)
         }
     }
 
@@ -1770,6 +1775,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         let territoryCommitWindow = territoryCommitState == UInt32(MDTBTerritoryCommitWindow) && territoryCommitTimer > 0.05
         let territoryCommitActive = territoryCommitState == UInt32(MDTBTerritoryCommitActive) && territoryCommitProgress > 0.01
         let territoryCommitComplete = territoryCommitState == UInt32(MDTBTerritoryCommitComplete) && territoryCommitTimer > 0.05
+        let territoryResolveState = state.territory_resolve_state
+        let territoryResolveTimer = max(state.territory_resolve_timer, 0.0)
+        let territoryResolveProgress = min(max(state.territory_resolve_progress, 0.0), 1.0)
+        let territoryResolveWindow = territoryResolveState == UInt32(MDTBTerritoryResolveWindow) && territoryResolveTimer > 0.05
+        let territoryResolveHold = territoryResolveState == UInt32(MDTBTerritoryResolveHold) && territoryResolveTimer > 0.05
+        let territoryResolvePullout = territoryResolveState == UInt32(MDTBTerritoryResolvePullout) && territoryResolveTimer > 0.05
+        let territoryResolveHeld = territoryResolveHold && territoryResolveProgress > 0.99
+        let territoryResolveClean = territoryResolvePullout && territoryResolveProgress > 0.99
+        let territoryReclaimReturn = Self.territoryReclaimReturnActive(state: state)
+        let territoryRetakeReturn = Self.territoryRetakeReturnActive(state: state)
+        let territoryReclaimFeint = Self.territoryReclaimFeint(state: state)
+        let territoryReclaimCommit = Self.territoryReclaimCommit(state: state)
+        let territoryReclaimCounterStep = Self.territoryReclaimCounterStep(state: state)
+        let territoryRetakeChallenge = Self.territoryRetakeChallenge(state: state)
+        let territoryRetakeCommit = Self.territoryRetakeCommit(state: state)
+        let territoryRetakeCrossAngle = Self.territoryRetakeCrossAngle(state: state)
+        let territoryReturnPulse = 0.78 + (sin(elapsedTime * 5.2) * 0.16)
+        let territoryReturnStrength = min(max(state.territory_reapproach_timer / 5.4, 0.0), 1.0)
         let playerInCover = state.combat_player_in_cover != 0
         let focusOccluded = state.combat_focus_occluded != 0
         let playerDamagePulse = min(max(state.player_damage_pulse, 0.0), 1.0)
@@ -2294,34 +2317,169 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        if territoryCommitWindow || territoryCommitActive || territoryCommitComplete {
-            let commitAnchor = territoryClaimed && territoryInnerVisual > 0.10
-                ? territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * (territoryCommitComplete ? 0.74 : (territoryCommitActive ? 0.58 : 0.34)))
-                : territoryPatrolPosition + (territoryPatrolForward * (territoryCommitWindow ? 0.18 : 0.30))
-            let commitColor: SIMD4<Float> = territoryCommitComplete
-                ? SIMD4<Float>(0.76, 0.96, 0.42, 0.60)
-                : (territoryCommitActive
-                    ? SIMD4<Float>(1.0, 0.78, 0.26, 0.56)
-                    : SIMD4<Float>(0.96, 0.62, 0.22, 0.46))
-            let commitPulse = 0.80 + (sin(elapsedTime * (territoryCommitComplete ? 4.8 : 6.2)) * 0.16)
+        if territoryReclaimReturn || territoryRetakeReturn {
+            let biasAnchor: SIMD3<Float>
+            let biasColor: SIMD4<Float>
+
+            if territoryReclaimFeint {
+                biasAnchor = territoryReclaimCounterStep
+                    ? territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.32)
+                    : territoryPatrolPosition + (territoryPatrolForward * 0.18)
+                biasColor = territoryReclaimCounterStep
+                    ? SIMD4<Float>(0.66, 1.0, 0.56, 0.36 + territoryReturnStrength * 0.18)
+                    : SIMD4<Float>(0.72, 0.98, 0.48, 0.34 + territoryReturnStrength * 0.18)
+            } else if territoryReclaimCommit {
+                biasAnchor = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.82)
+                biasColor = SIMD4<Float>(0.46, 0.98, 0.54, 0.36 + territoryReturnStrength * 0.18)
+            } else if territoryRetakeChallenge {
+                biasAnchor = territoryRetakeCrossAngle
+                    ? territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.22)
+                    : territoryPatrolPosition + (territoryPatrolForward * 0.26)
+                biasColor = territoryRetakeCrossAngle
+                    ? SIMD4<Float>(1.0, 0.82, 0.30, 0.38 + territoryReturnStrength * 0.18)
+                    : SIMD4<Float>(1.0, 0.76, 0.26, 0.36 + territoryReturnStrength * 0.18)
+            } else if territoryRetakeCommit {
+                biasAnchor = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.42)
+                biasColor = SIMD4<Float>(0.98, 0.62, 0.22, 0.36 + territoryReturnStrength * 0.18)
+            } else if territoryReclaimReturn {
+                biasAnchor = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * (territoryClaimed ? 0.76 : 0.58))
+                biasColor = SIMD4<Float>(0.58, 0.98, 0.50, 0.34 + territoryReturnStrength * 0.18)
+            } else {
+                biasAnchor = territoryPatrolPosition + (territoryPatrolForward * 0.30)
+                biasColor = SIMD4<Float>(1.0, 0.68, 0.24, 0.34 + territoryReturnStrength * 0.18)
+            }
+
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(biasAnchor.x, biasAnchor.y + 0.03, biasAnchor.z),
+                halfExtents: SIMD3<Float>(0.28 + territoryReturnStrength * 0.12, 0.02, 0.28 + territoryReturnStrength * 0.12),
+                yaw: 0.0,
+                color: biasColor
+            ))
+            vertices.append(contentsOf: makeWorldBoxVertices(
+                center: SIMD3<Float>(biasAnchor.x, biasAnchor.y + 1.22, biasAnchor.z),
+                halfExtents: SIMD3<Float>(0.08 + territoryReturnStrength * 0.04, 0.32 + territoryReturnStrength * 0.12, 0.08 + territoryReturnStrength * 0.04),
+                yaw: elapsedTime * 1.8,
+                color: animatedColor(biasColor, intensity: territoryReturnPulse)
+            ))
+
+            if territoryReclaimReturn && territoryInnerVisual > 0.08 {
+                let reclaimMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.64)
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: SIMD3<Float>(reclaimMidpoint.x, reclaimMidpoint.y + 0.05, reclaimMidpoint.z),
+                    halfExtents: SIMD3<Float>(0.10 + territoryReturnStrength * 0.04, 0.02, 0.44 + territoryReturnStrength * 0.16),
+                    yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                    color: SIMD4<Float>(0.62, 0.96, 0.44, 0.16 + territoryReturnStrength * 0.12)
+                ))
+                if territoryReclaimFeint {
+                    vertices.append(contentsOf: makeWorldBoxVertices(
+                        center: territoryPatrolPosition + (territoryPatrolForward * 0.26) + SIMD3<Float>(0.0, 0.07, 0.0),
+                        halfExtents: SIMD3<Float>(0.20 + territoryReturnStrength * 0.08, 0.03, 0.10 + territoryReturnStrength * 0.04),
+                        yaw: territoryPatrolHeading,
+                        color: SIMD4<Float>(0.84, 1.0, 0.46, 0.18 + territoryReturnStrength * 0.10)
+                    ))
+                    if territoryReclaimCounterStep {
+                        let counterMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.42)
+                        vertices.append(contentsOf: makeWorldBoxVertices(
+                            center: SIMD3<Float>(counterMidpoint.x, counterMidpoint.y + 0.08, counterMidpoint.z),
+                            halfExtents: SIMD3<Float>(0.12 + territoryReturnStrength * 0.04, 0.03, 0.34 + territoryReturnStrength * 0.14),
+                            yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                            color: SIMD4<Float>(0.74, 1.0, 0.54, 0.22 + territoryReturnStrength * 0.12)
+                        ))
+                        vertices.append(contentsOf: makeWorldBoxVertices(
+                            center: territoryInnerPosition - (territoryInnerForward * 0.18) + SIMD3<Float>(0.0, 0.10, 0.0),
+                            halfExtents: SIMD3<Float>(0.10 + territoryReturnStrength * 0.04, 0.03, 0.20 + territoryReturnStrength * 0.08),
+                            yaw: territoryInnerHeading,
+                            color: SIMD4<Float>(0.68, 0.96, 0.44, 0.18 + territoryReturnStrength * 0.10)
+                        ))
+                    }
+                }
+            } else if territoryRetakeReturn {
+                vertices.append(contentsOf: makeWorldBoxVertices(
+                    center: territoryPatrolPosition + (territoryPatrolForward * 0.34) + SIMD3<Float>(0.0, 0.08, 0.0),
+                    halfExtents: SIMD3<Float>(0.22 + territoryReturnStrength * 0.08, 0.03, 0.18 + territoryReturnStrength * 0.06),
+                    yaw: territoryPatrolHeading,
+                    color: SIMD4<Float>(1.0, 0.72, 0.22, 0.18 + territoryReturnStrength * 0.10)
+                ))
+                if territoryRetakeChallenge {
+                    let challengeMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.24)
+                    vertices.append(contentsOf: makeWorldBoxVertices(
+                        center: SIMD3<Float>(challengeMidpoint.x, challengeMidpoint.y + 0.06, challengeMidpoint.z),
+                        halfExtents: SIMD3<Float>(0.10 + territoryReturnStrength * 0.04, 0.03, 0.30 + territoryReturnStrength * 0.12),
+                        yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                        color: SIMD4<Float>(1.0, 0.78, 0.26, 0.20 + territoryReturnStrength * 0.10)
+                    ))
+                    if territoryRetakeCrossAngle {
+                        let angleMidpoint = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.34)
+                        vertices.append(contentsOf: makeWorldBoxVertices(
+                            center: SIMD3<Float>(angleMidpoint.x, angleMidpoint.y + 0.08, angleMidpoint.z),
+                            halfExtents: SIMD3<Float>(0.12 + territoryReturnStrength * 0.04, 0.03, 0.36 + territoryReturnStrength * 0.14),
+                            yaw: atan2f(territoryInnerPosition.x - territoryPatrolPosition.x, territoryInnerPosition.z - territoryPatrolPosition.z),
+                            color: SIMD4<Float>(1.0, 0.84, 0.30, 0.24 + territoryReturnStrength * 0.12)
+                        ))
+                        vertices.append(contentsOf: makeWorldBoxVertices(
+                            center: territoryPatrolPosition + (territoryPatrolForward * 0.18) + SIMD3<Float>(0.0, 0.11, 0.0),
+                            halfExtents: SIMD3<Float>(0.12 + territoryReturnStrength * 0.04, 0.03, 0.22 + territoryReturnStrength * 0.08),
+                            yaw: territoryPatrolHeading,
+                            color: SIMD4<Float>(1.0, 0.72, 0.20, 0.18 + territoryReturnStrength * 0.10)
+                        ))
+                    }
+                }
+            }
+        }
+
+        if territoryCommitWindow || territoryCommitActive || territoryCommitComplete || territoryResolveWindow || territoryResolveHold || territoryResolvePullout {
+            let markerProgress = territoryResolveWindow || territoryResolveHold || territoryResolvePullout
+                ? territoryResolveProgress
+                : territoryCommitProgress
+            let commitAnchor: SIMD3<Float>
+            if territoryResolveHold {
+                commitAnchor = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.82)
+            } else if territoryResolvePullout {
+                commitAnchor = territoryPatrolPosition - (territoryPatrolForward * 0.26)
+            } else if territoryResolveWindow {
+                commitAnchor = territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * 0.62)
+            } else {
+                commitAnchor = territoryClaimed && territoryInnerVisual > 0.10
+                    ? territoryPatrolPosition + ((territoryInnerPosition - territoryPatrolPosition) * (territoryCommitComplete ? 0.74 : (territoryCommitActive ? 0.58 : 0.34)))
+                    : territoryPatrolPosition + (territoryPatrolForward * (territoryCommitWindow ? 0.18 : 0.30))
+            }
+            let commitColor: SIMD4<Float>
+            if territoryResolveHeld {
+                commitColor = SIMD4<Float>(0.56, 0.98, 0.54, 0.60)
+            } else if territoryResolveHold {
+                commitColor = SIMD4<Float>(0.96, 0.88, 0.30, 0.58)
+            } else if territoryResolveClean {
+                commitColor = SIMD4<Float>(0.48, 0.92, 1.0, 0.60)
+            } else if territoryResolvePullout {
+                commitColor = SIMD4<Float>(0.28, 0.76, 1.0, 0.54)
+            } else if territoryResolveWindow {
+                commitColor = SIMD4<Float>(0.94, 0.84, 0.34, 0.50)
+            } else if territoryCommitComplete {
+                commitColor = SIMD4<Float>(0.76, 0.96, 0.42, 0.60)
+            } else if territoryCommitActive {
+                commitColor = SIMD4<Float>(1.0, 0.78, 0.26, 0.56)
+            } else {
+                commitColor = SIMD4<Float>(0.96, 0.62, 0.22, 0.46)
+            }
+            let commitPulse = 0.80 + (sin(elapsedTime * ((territoryResolveHold || territoryResolvePullout) ? 5.0 : (territoryCommitComplete ? 4.8 : 6.2))) * 0.16)
 
             vertices.append(contentsOf: makeWorldBoxVertices(
                 center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 0.04, commitAnchor.z),
-                halfExtents: SIMD3<Float>(0.20 + territoryCommitProgress * 0.16, 0.02, 0.20 + territoryCommitProgress * 0.16),
+                halfExtents: SIMD3<Float>(0.20 + markerProgress * 0.16, 0.02, 0.20 + markerProgress * 0.16),
                 yaw: 0.0,
                 color: animatedColor(commitColor, intensity: commitPulse)
             ))
             vertices.append(contentsOf: makeWorldBoxVertices(
                 center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 1.20, commitAnchor.z),
-                halfExtents: SIMD3<Float>(0.08 + territoryCommitProgress * 0.04, 0.30 + territoryCommitProgress * 0.12, 0.08 + territoryCommitProgress * 0.04),
+                halfExtents: SIMD3<Float>(0.08 + markerProgress * 0.04, 0.30 + markerProgress * 0.12, 0.08 + markerProgress * 0.04),
                 yaw: elapsedTime * 1.4,
-                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.14, 1.0), commitColor.z, 0.52), intensity: 0.90 + territoryCommitProgress * 0.12)
+                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.14, 1.0), commitColor.z, 0.52), intensity: 0.90 + markerProgress * 0.12)
             ))
             vertices.append(contentsOf: makeWorldBoxVertices(
                 center: SIMD3<Float>(commitAnchor.x, commitAnchor.y + 2.02, commitAnchor.z),
-                halfExtents: SIMD3<Float>(0.10 + territoryCommitProgress * 0.08, 0.05, 0.10 + territoryCommitProgress * 0.08),
+                halfExtents: SIMD3<Float>(0.10 + markerProgress * 0.08, 0.05, 0.10 + markerProgress * 0.08),
                 yaw: elapsedTime * 2.0,
-                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.18, 1.0), min(commitColor.z + 0.06, 1.0), 0.66), intensity: 0.92 + territoryCommitProgress * 0.14)
+                color: animatedColor(SIMD4<Float>(commitColor.x, min(commitColor.y + 0.18, 1.0), min(commitColor.z + 0.06, 1.0), 0.66), intensity: 0.92 + markerProgress * 0.14)
             ))
         }
 
@@ -2876,9 +3034,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         return ScenePopulationProfile(
             blockIndex: UInt32(blockIndex),
-            pedestrianDensity: block.district == UInt32(MDTBDistrictMapleHeights) ? 0.56 : 0.72,
-            vehicleDensity: block.district == UInt32(MDTBDistrictMapleHeights) ? 0.38 : 0.64,
-            ambientEnergy: block.district == UInt32(MDTBDistrictMapleHeights) ? 0.48 : 0.76,
+            pedestrianDensity: (block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark)) ? 0.56 : 0.72,
+            vehicleDensity: (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 0.82 : (block.kind == UInt32(MDTBBlockKindResidential) ? 0.42 : 0.64),
+            ambientEnergy: block.district == UInt32(MDTBDistrictFlorenceFirestone) ? 0.72 : ((block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark)) ? 0.50 : 0.78),
             travelBias: (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 0.82 : 0.56,
             styleFlags: styleFlags
         )
@@ -2886,12 +3044,18 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func districtAmbientColor(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictMapleHeights):
-            return SIMD4<Float>(0.50, 0.68, 0.40, 1.0)
-        case UInt32(MDTBDistrictMarketSpur):
-            return SIMD4<Float>(0.28, 0.66, 0.84, 1.0)
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+            return SIMD4<Float>(0.86, 0.58, 0.24, 1.0)
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+            return SIMD4<Float>(0.46, 0.68, 0.38, 1.0)
+        case UInt32(MDTBDistrictCrenshawCorridor):
+            return SIMD4<Float>(0.30, 0.66, 0.78, 1.0)
+        case UInt32(MDTBDistrictVermontSquare):
+            return SIMD4<Float>(0.40, 0.56, 0.82, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone):
+            return SIMD4<Float>(0.68, 0.46, 0.34, 1.0)
         default:
-            return SIMD4<Float>(0.88, 0.56, 0.24, 1.0)
+            return SIMD4<Float>(0.78, 0.42, 0.26, 1.0)
         }
     }
 
@@ -2942,6 +3106,34 @@ final class Renderer: NSObject, MTKViewDelegate {
         Set(blocks.map { Int($0.chunkIndex) }).count
     }
 
+    private static func districtCount(_ blocks: [SceneBlock]) -> Int {
+        Set(blocks.map { Int($0.district) }).count
+    }
+
+    private static func corridorCount(_ roadLinks: [SceneRoadLink]) -> Int {
+        Set(roadLinks.map { Int($0.corridor) }).count
+    }
+
+    private static func mapStatus(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink]) -> (title: String, detail: String) {
+        let district = state.active_block_index < blocks.count ? districtLabel(blocks[Int(state.active_block_index)].district) : "Outside map coverage"
+        let chunk = activeChunkLabel(state: state, blocks: blocks)
+        let districtCoverage = districtCount(blocks)
+        let corridorCoverage = corridorCount(roadLinks)
+
+        if state.active_link_index < roadLinks.count {
+            let link = roadLinks[Int(state.active_link_index)]
+            return (
+                "\(district) / \(corridorLabel(link.corridor))",
+                "\(roadClassLabel(link.roadClass)) / \(chunk) / \(districtCoverage) districts / \(corridorCoverage) named roads"
+            )
+        }
+
+        return (
+            district,
+            "\(chunk) / \(districtCoverage) districts / \(corridorCoverage) named roads"
+        )
+    }
+
     private static func activitySummary(state: MDTBEngineState, blocks: [SceneBlock], roadLinks: [SceneRoadLink], interestPoints: [SceneInterestPoint], populationProfiles: [ScenePopulationProfile], trafficOccupancies: [SceneTrafficOccupancy], vehicleAnchors: [SceneVehicleAnchor]) -> String {
         let blockLabel = blockName(for: state.active_block_index, blocks: blocks)
         let linkLabel = linkSummary(for: state.active_link_index, roadLinks: roadLinks, blocks: blocks)
@@ -2950,7 +3142,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let visibleBlocks = visibleBlockCount(state: state, blocks: blocks, roadLinks: roadLinks)
         let hotspots = hotspotCount(state: state, blocks: blocks, roadLinks: roadLinks, interestPoints: interestPoints)
         let stagedVehicles = stagedVehicleCount(state: state, blocks: blocks, roadLinks: roadLinks, vehicleAnchors: vehicleAnchors)
-        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) visible / \(hotspots) hot / \(stagedVehicles) staged / \(trafficOccupancies.count) occ / \(population.livePedestrians) live ped / \(population.reactingPedestrians) reacting / \(population.liveVehicles) live veh / \(population.yieldingVehicles) easing / \(linkLabel)"
+        return "\(blockLabel) / \(chunkLabelValue) / \(visibleBlocks) local / \(districtCount(blocks)) districts / \(corridorCount(roadLinks)) named roads / \(hotspots) hot / \(stagedVehicles) staged / \(trafficOccupancies.count) occ / \(population.livePedestrians) live ped / \(population.reactingPedestrians) reacting / \(population.liveVehicles) live veh / \(population.yieldingVehicles) easing / \(linkLabel)"
     }
 
     private static func blockSummary(state: MDTBEngineState, blocks: [SceneBlock], populationProfiles: [ScenePopulationProfile]) -> String {
@@ -2962,7 +3154,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let block = blocks[blockIndex]
         let profile = populationProfile(for: blockIndex, block: block, populationProfiles: populationProfiles)
         let territoryTail = territoryStatusSummary(state: state).map { " / \($0)" } ?? ""
-        return "\(blockKindLabel(block.kind)) / \(districtLabel(block.district)) / \(tagLabel(block.tagMask)) / \(frontageTemplateLabel(block.frontageTemplate)) / \(chunkLabel(block.chunkIndex)) / \(profileSummary(profile))\(territoryTail) / r \(formatScalar(block.activationRadius))"
+        return "\(districtLabel(block.district)) / \(blockKindLabel(block.kind)) / \(tagLabel(block.tagMask)) / \(frontageTemplateLabel(block.frontageTemplate)) / \(chunkLabel(block.chunkIndex)) / \(profileSummary(profile))\(territoryTail) / r \(formatScalar(block.activationRadius))"
     }
 
     private static func nearestInterestPointSummary(for position: SIMD3<Float>, interestPoints: [SceneInterestPoint], blocks: [SceneBlock]) -> String {
@@ -3192,7 +3384,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "none"
         }
 
-        return blockKindLabel(blocks[Int(index)].kind)
+        let block = blocks[Int(index)]
+        return "\(districtLabel(block.district)) \(blockKindLabel(block.kind))"
     }
 
     private static func linkSummary(for index: UInt32, roadLinks: [SceneRoadLink], blocks: [SceneBlock]) -> String {
@@ -3201,8 +3394,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let link = roadLinks[Int(index)]
-        let axis = link.axis == UInt32(MDTBRoadAxisNorthSouth) ? "n-s" : "e-w"
-        return "\(axis) \(blockName(for: link.fromBlockIndex, blocks: blocks))->\(blockName(for: link.toBlockIndex, blocks: blocks))"
+        let axis = link.axis == UInt32(MDTBRoadAxisNorthSouth) ? "north-south" : "east-west"
+        return "\(corridorLabel(link.corridor)) / \(roadClassLabel(link.roadClass)) / \(axis)"
     }
 
     private static func profileSummary(_ profile: ScenePopulationProfile) -> String {
@@ -3420,7 +3613,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         return "traffic calm \(formatScalar(trafficHazard))"
     }
 
-    private static func combatHUDModel(state: MDTBEngineState, interactionSummary: String, trafficHazard: Float) -> CombatHUDModel {
+    private static func combatHUDModel(state: MDTBEngineState, interactionSummary: String, trafficHazard: Float, blocks: [SceneBlock], roadLinks: [SceneRoadLink]) -> CombatHUDModel {
         let healthRatio = Double(max(0.0, min(state.player_health / 100.0, 1.0)))
         let anchorLabel = lookoutAnchorLabel(state.combat_hostile_anchor_index)
         let focusLabel = combatTargetLabel(state.combat_focus_target_kind)
@@ -3449,11 +3642,29 @@ final class Renderer: NSObject, MTKViewDelegate {
         let territoryCommitLive = territoryCommitActive(state: state)
         let territoryCommitResolved = territoryCommitComplete(state: state)
         let territoryCommitProgress = min(max(state.territory_commit_progress, 0.0), 1.0)
+        let territoryResolveWindowOpen = territoryResolveWindowActive(state: state)
+        let territoryResolveHoldLive = territoryResolveHoldActive(state: state)
+        let territoryResolvePulloutLive = territoryResolvePulloutActive(state: state)
+        let territoryResolveProgress = min(max(state.territory_resolve_progress, 0.0), 1.0)
+        let territoryResolveHeld = territoryResolveHoldLive && territoryResolveProgress > 0.99
+        let territoryResolveClean = territoryResolvePulloutLive && territoryResolveProgress > 0.99
+        let territoryReclaimReturn = territoryReclaimReturnActive(state: state)
+        let territoryRetakeReturn = territoryRetakeReturnActive(state: state)
+        let territoryReclaimFeint = territoryReclaimFeint(state: state)
+        let territoryReclaimCommit = territoryReclaimCommit(state: state)
+        let territoryReclaimCounter = territoryReclaimCounterStep(state: state)
+        let territoryRetakeChallenge = territoryRetakeChallenge(state: state)
+        let territoryRetakeCommit = territoryRetakeCommit(state: state)
+        let territoryRetakeCross = territoryRetakeCrossAngle(state: state)
+        let territoryPreferredShoulder = territoryPreferredShoulderLabel(state: state)
+        let lookoutShoulder = lookoutAnchorShoulderLabel(state.combat_hostile_anchor_index)
+        let territoryReapproachTimer = formatScalar(state.territory_reapproach_timer)
         let lookoutTitle = territoryClaimed
             ? "\(territoryFactionLabel(state.territory_faction)) lookout \(anchorLabel)"
             : "Lookout \(anchorLabel)"
         let isCritical = isResetting || state.player_health <= 35.0 || (state.combat_hostile_attack_windup > 0.0 && state.combat_player_in_cover == 0)
         let systemStatus = systemicHUDStatus(state: state, trafficHazard: trafficHazard)
+        let mapStatus = mapStatus(state: state, blocks: blocks, roadLinks: roadLinks)
 
         let title: String
         let subtitle: String
@@ -3471,6 +3682,190 @@ final class Renderer: NSObject, MTKViewDelegate {
             healthDetail = "Encounter recenter \(formatScalar(state.player_reset_timer))s"
             encounterTitle = "Lookout reset"
             encounterDetail = "Green window in \(formatScalar(state.player_reset_timer))s"
+        } else if territoryResolveHeld || territoryResolveClean || territoryResolveHoldLive || territoryResolvePulloutLive || territoryResolveWindowOpen {
+            if territoryResolveHeld {
+                title = "Pocket Reclaim"
+                subtitle = territoryPreferredShoulder != nil
+                    ? (isVehicleMode
+                        ? "You held the break and the block is reclaiming deeper around the \(territoryPreferredShoulder!) shoulder of the vehicle pocket"
+                        : "You held the break and the block is reclaiming deeper around the \(territoryPreferredShoulder!) shoulder of the pocket")
+                    : (isVehicleMode
+                        ? "You held the break and the block is reclaiming deeper around the vehicle pocket"
+                        : "You held the break and the block is reclaiming deeper around the pocket")
+                healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                    ? (territoryPreferredShoulder != nil
+                        ? "Recovery in \(formatScalar(state.player_recovery_delay))s / \(territoryPreferredShoulder!) shoulder reclaim live"
+                        : "Recovery in \(formatScalar(state.player_recovery_delay))s / reclaim live")
+                    : (territoryPreferredShoulder != nil
+                        ? "\(territoryPreferredShoulder!) shoulder reclaim live / pressure still hot"
+                        : "Reclaim live / pressure still hot")
+                encounterTitle = lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? lookoutTitle
+                    : "Pocket reclaim"
+                encounterDetail = lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? "\(anchorLabel) is leaning into the \(territoryPreferredShoulder!) shoulder reclaim \(formatScalar(state.territory_resolve_timer))s"
+                    : (territoryPreferredShoulder != nil
+                        ? "Reclaim \(formatScalar(state.territory_resolve_timer))s / \(territoryPreferredShoulder!) shoulder carry"
+                        : "Reclaim \(formatScalar(state.territory_resolve_timer))s / deep \(formatScalar(state.territory_deep_watch))")
+            } else if territoryResolveClean {
+                title = "Edge Retaking"
+                subtitle = searchActive
+                    ? (territoryPreferredShoulder != nil
+                        ? "You got out clean, but the \(territoryPreferredShoulder!) shoulder is sealing behind your exit"
+                        : "You got out clean, but the edge is sealing behind your exit")
+                    : (territoryPreferredShoulder != nil
+                        ? "Runner and post are resealing the \(territoryPreferredShoulder!) shoulder of the lane mouth behind you"
+                        : "Runner and post are resealing the lane mouth behind you")
+                healthDetail = searchActive
+                    ? (territoryPreferredShoulder != nil
+                        ? "Exit search \(formatScalar(state.combat_hostile_search_timer))s / \(territoryPreferredShoulder!) shoulder resealing"
+                        : "Exit search \(formatScalar(state.combat_hostile_search_timer))s / edge resealing")
+                    : (territoryPreferredShoulder != nil
+                        ? "Street settling while the \(territoryPreferredShoulder!) shoulder retakes"
+                        : "Street settling while the edge retakes")
+                encounterTitle = lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? lookoutTitle
+                    : "Edge retake"
+                encounterDetail = lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? (searchActive
+                        ? "\(anchorLabel) is checking the \(territoryPreferredShoulder!) shoulder while it reseals \(formatScalar(state.combat_hostile_search_timer))s"
+                        : "\(anchorLabel) is sealing the \(territoryPreferredShoulder!) shoulder \(formatScalar(state.territory_resolve_timer))s")
+                    : (territoryPreferredShoulder != nil
+                        ? "Retake \(formatScalar(state.territory_resolve_timer))s / \(territoryPreferredShoulder!) shoulder sealing"
+                        : "Retake \(formatScalar(state.territory_resolve_timer))s / front \(formatScalar(state.territory_front_watch))")
+            } else if territoryResolveHoldLive {
+                title = "Hold The Pocket"
+                subtitle = territoryPreferredShoulder != nil
+                    ? "Stay inside a beat longer and force the block to reclaim deeper turf on the \(territoryPreferredShoulder!) shoulder"
+                    : "Stay inside a beat longer and force the block to reclaim deeper turf"
+                healthDetail = state.player_health < 100.0 && state.player_recovery_delay > 0.0
+                    ? "Recovery in \(formatScalar(state.player_recovery_delay))s"
+                    : (territoryPreferredShoulder != nil
+                        ? "Hold inside until the \(territoryPreferredShoulder!) shoulder carry lands"
+                        : "Hold inside until the follow-through lands")
+                encounterTitle = "Pocket reclaim"
+                encounterDetail = territoryPreferredShoulder != nil
+                    ? "Hold \(formatScalar(territoryResolveProgress)) / \(territoryPreferredShoulder!) shoulder"
+                    : "Hold \(formatScalar(territoryResolveProgress)) / \(formatScalar(state.territory_resolve_timer))s"
+            } else if territoryResolvePulloutLive {
+                title = "Pull Out Clean"
+                subtitle = territoryPreferredShoulder != nil
+                    ? "Back out through the mouth before the \(territoryPreferredShoulder!) shoulder reseal locks in"
+                    : "Back out through the mouth before the edge retake locks in"
+                healthDetail = searchActive
+                    ? "Exit search already live"
+                    : (territoryPreferredShoulder != nil
+                        ? "Leave cleanly while the \(territoryPreferredShoulder!) shoulder is still yours"
+                        : "Leave cleanly while the break is still yours")
+                encounterTitle = "Edge retake"
+                encounterDetail = territoryPreferredShoulder != nil
+                    ? "Pullout \(formatScalar(territoryResolveProgress)) / \(territoryPreferredShoulder!) shoulder"
+                    : "Pullout \(formatScalar(territoryResolveProgress)) / \(formatScalar(state.territory_resolve_timer))s"
+            } else {
+                title = "Resolve Beat"
+                subtitle = "Hold the pocket or peel out before the block chooses reclaim or retake"
+                healthDetail = "Choose the follow-through"
+                encounterTitle = "Line follow-through"
+                encounterDetail = "Choose \(formatScalar(state.territory_resolve_timer))s / break is live"
+            }
+        } else if territoryReclaimReturn || territoryRetakeReturn {
+            if territoryReclaimReturn {
+                if territoryReclaimFeint {
+                    title = "Pocket Feint"
+                    subtitle = territoryReclaimCounter
+                        ? (territoryPreferredShoulder != nil
+                            ? "Runner is counter-stepping off the \(territoryPreferredShoulder!) shoulder while the inner post turns the next angle deeper"
+                            : "Runner is counter-stepping off the mouth while the inner post turns the next angle deeper")
+                        : "The edge is showing soft, but the inner post is already waiting deeper for the next commit"
+                    healthDetail = territoryReclaimCounter
+                        ? (territoryPreferredShoulder != nil
+                            ? "Reclaim return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder favored"
+                            : "Reclaim return \(territoryReapproachTimer)s / counter-step live")
+                        : "Reclaim return \(territoryReapproachTimer)s / soft edge, deep pickup"
+                    encounterTitle = "Reclaim feint"
+                    encounterDetail = territoryReclaimCounter
+                        ? (territoryPreferredShoulder != nil
+                            ? "Counter-step \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder"
+                            : "Counter-step \(territoryReapproachTimer)s / deep \(formatScalar(state.territory_deep_watch))")
+                        : "Feint \(territoryReapproachTimer)s / deep \(formatScalar(state.territory_deep_watch))"
+                } else if territoryReclaimCommit {
+                    title = "Reclaim Commit"
+                    subtitle = territoryPreferredShoulder != nil
+                        ? "You took the softer \(territoryPreferredShoulder!) shoulder and the block is snapping the next handoff deeper around that pocket"
+                        : "You took the softer mouth and the block is snapping the next handoff deeper around the pocket"
+                    healthDetail = territoryPreferredShoulder != nil
+                        ? "Reclaim return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder carrying deeper"
+                        : "Reclaim return \(territoryReapproachTimer)s / pocket committing"
+                    encounterTitle = "Reclaim commit"
+                    encounterDetail = territoryPreferredShoulder != nil
+                        ? "Commit \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder carry"
+                        : "Commit \(territoryReapproachTimer)s / deep \(formatScalar(state.territory_deep_watch))"
+                } else {
+                    title = territoryClaimed ? "Reclaim Return" : "Pocket Remembered"
+                    subtitle = territoryClaimed
+                        ? (territoryPreferredShoulder != nil
+                            ? "The lane mouth is looser on the \(territoryPreferredShoulder!) shoulder, but the inner post and lookout are reading the next pass deeper"
+                            : "The lane mouth is looser, but the inner post and lookout are reading the next pass deeper")
+                        : "The last hold still hangs over the block, so the pocket is waking faster than the edge"
+                    healthDetail = territoryClaimed
+                        ? (territoryPreferredShoulder != nil
+                            ? "Reclaim return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder remembered"
+                            : "Reclaim return \(territoryReapproachTimer)s / deep watch carries")
+                        : "Pocket memory \(territoryReapproachTimer)s / mouth lighter"
+                    encounterTitle = "Pocket memory"
+                    encounterDetail = "Return \(territoryReapproachTimer)s / deep \(formatScalar(state.territory_deep_watch))"
+                }
+            } else {
+                if territoryRetakeChallenge {
+                    title = "Edge Challenge"
+                    subtitle = territoryRetakeCross
+                        ? (territoryPreferredShoulder != nil
+                            ? "Runner and post are cross-angling the \(territoryPreferredShoulder!) shoulder of the lane mouth before the heavier recommit lands"
+                            : "Runner and post are cross-angling the lane mouth before the heavier recommit lands")
+                        : (searchActive
+                            ? "The last pullout is still on the lane mouth and the lookout is checking whether you really want back in"
+                            : "The runner and post are throwing an earlier challenge at the mouth before they commit deeper")
+                    healthDetail = territoryRetakeCross
+                        ? (territoryPreferredShoulder != nil
+                            ? "Retake return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder favored"
+                            : "Retake return \(territoryReapproachTimer)s / cross-angle live")
+                        : (searchActive
+                            ? "Search \(formatScalar(state.combat_hostile_search_timer))s / challenge still live"
+                            : "Retake return \(territoryReapproachTimer)s / edge challenging early")
+                    encounterTitle = "Edge challenge"
+                    encounterDetail = territoryRetakeCross
+                        ? (territoryPreferredShoulder != nil
+                            ? "Cross-angle \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder"
+                            : "Cross-angle \(territoryReapproachTimer)s / front \(formatScalar(state.territory_front_watch))")
+                        : "Challenge \(territoryReapproachTimer)s / front \(formatScalar(state.territory_front_watch))"
+                } else if territoryRetakeCommit {
+                    title = "Retake Commit"
+                    subtitle = territoryPreferredShoulder != nil
+                        ? "You hit the early \(territoryPreferredShoulder!) shoulder challenge and the block is recommitting through that side instead of giving the same cold lane"
+                        : "You hit the early challenge and the block is recommitting through the mouth instead of giving the same cold lane"
+                    healthDetail = territoryPreferredShoulder != nil
+                        ? "Retake return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder resealing"
+                        : "Retake return \(territoryReapproachTimer)s / recommit live"
+                    encounterTitle = "Retake commit"
+                    encounterDetail = territoryPreferredShoulder != nil
+                        ? "Recommit \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder seal"
+                        : "Recommit \(territoryReapproachTimer)s / front \(formatScalar(state.territory_front_watch))"
+                } else {
+                    title = territoryClaimed ? "Retake Return" : "Edge Remembered"
+                    subtitle = searchActive
+                        ? "The clean exit is still sitting on the lane mouth while the lookout checks the return"
+                        : (territoryPreferredShoulder != nil
+                            ? "Runner and post are meeting this pass earlier on the \(territoryPreferredShoulder!) shoulder than the last one"
+                            : "Runner and post are meeting this pass at the edge sooner than the last one")
+                    healthDetail = searchActive
+                        ? "Search \(formatScalar(state.combat_hostile_search_timer))s / edge still remembered"
+                        : (territoryPreferredShoulder != nil
+                            ? "Retake return \(territoryReapproachTimer)s / \(territoryPreferredShoulder!) shoulder remembered"
+                            : "Retake return \(territoryReapproachTimer)s / mouth closing early")
+                    encounterTitle = "Edge memory"
+                    encounterDetail = "Return \(territoryReapproachTimer)s / front \(formatScalar(state.territory_front_watch))"
+                }
+            }
         } else if isVehicleMode {
             title = searchActive
                 ? "Vehicle Escape"
@@ -3501,7 +3896,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                         : (territoryPatrolBrace
                             ? "The runner is locking the vehicle line back down"
                             : (territoryPatrolReform
-                            ? "The runner is reforming the vehicle line after the clear"
+                            ? (recoveryActive && territoryPreferredShoulder != nil
+                                ? "The runner is reforming the \(territoryPreferredShoulder!) shoulder while spillback reopens the vehicle line"
+                                : "The runner is reforming the vehicle line after the clear")
                             : (territoryPatrolScreen
                             ? "The sidewalk runner is screening the vehicle at the lane mouth"
                             : "A court-set runner is reading the vehicle before the line"))))
@@ -3568,7 +3965,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 } else if territoryPatrolBrace {
                     encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / line locking"
                 } else if territoryPatrolReform {
-                    encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
+                    encounterDetail = recoveryActive && territoryPreferredShoulder != nil
+                        ? "Reform \(formatScalar(state.territory_patrol_alert)) / \(territoryPreferredShoulder!) shoulder spillback"
+                        : "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
                 } else if territoryPatrolScreen {
                     encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / entry pinched"
                 } else {
@@ -3632,7 +4031,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                     : (territoryPatrolBrace
                         ? "The runner is locking the line back down"
                         : (territoryPatrolReform
-                        ? "The runner is reforming the line after the clear"
+                        ? (recoveryActive && territoryPreferredShoulder != nil
+                            ? "The runner is reforming the \(territoryPreferredShoulder!) shoulder while spillback reopens the lane"
+                            : "The runner is reforming the line after the clear")
                         : (territoryPatrolScreen
                         ? "The sidewalk runner is stepping across the lane mouth"
                         : "A court-set runner is posted outside the lane mouth"))))
@@ -3647,7 +4048,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             } else if territoryPatrolBrace {
                 encounterDetail = "Brace \(formatScalar(state.territory_patrol_alert)) / line locking"
             } else if territoryPatrolReform {
-                encounterDetail = "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
+                encounterDetail = recoveryActive && territoryPreferredShoulder != nil
+                    ? "Reform \(formatScalar(state.territory_patrol_alert)) / \(territoryPreferredShoulder!) shoulder spillback"
+                    : "Reform \(formatScalar(state.territory_patrol_alert)) / line retaking"
             } else if territoryPatrolScreen {
                 encounterDetail = "Screen \(formatScalar(state.territory_patrol_alert)) / lane mouth pinched"
             } else {
@@ -3751,7 +4154,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 ? "The territory is cooling, but the block still remembers you"
                 : (state.combat_hostile_reacquire_timer > 0.0
                 ? "The lookout is reset, but the block is still settling"
-                : "Traffic and civilians are finding their default rhythm again")
+                : (territoryPreferredShoulder != nil
+                    ? "The \(territoryPreferredShoulder!) shoulder is reopening while the block settles"
+                    : "Traffic and civilians are finding their default rhythm again"))
             healthDetail = state.player_health < 100.0
                 ? (state.player_recovery_delay > 0.0
                     ? "Recovery \(formatScalar(state.player_recovery_delay))s / block settling"
@@ -3821,6 +4226,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             encounterDetail: encounterDetail,
             systemTitle: systemTitle,
             systemDetail: systemDetail,
+            mapTitle: mapStatus.title,
+            mapDetail: mapStatus.detail,
             promptText: interactionSummary,
             isCritical: isCritical,
             isVehicleMode: isVehicleMode,
@@ -3840,6 +4247,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "backline"
         default:
             return "lane"
+        }
+    }
+
+    private static func lookoutAnchorShoulderLabel(_ value: UInt32) -> String? {
+        switch value {
+        case 0:
+            return "left"
+        case 2, 3:
+            return "right"
+        default:
+            return nil
         }
     }
 
@@ -3863,22 +4281,169 @@ final class Renderer: NSObject, MTKViewDelegate {
         let territoryCommitWindowOpen = territoryCommitWindowActive(state: state)
         let territoryCommitLive = territoryCommitActive(state: state)
         let territoryCommitResolved = territoryCommitComplete(state: state)
+        let territoryResolveWindowOpen = territoryResolveWindowActive(state: state)
+        let territoryResolveHoldLive = territoryResolveHoldActive(state: state)
+        let territoryResolvePulloutLive = territoryResolvePulloutActive(state: state)
+        let territoryResolveProgress = min(max(state.territory_resolve_progress, 0.0), 1.0)
+        let territoryResolveHeld = territoryResolveHoldLive && territoryResolveProgress > 0.99
+        let territoryResolveClean = territoryResolvePulloutLive && territoryResolveProgress > 0.99
+        let territoryReclaimReturn = territoryReclaimReturnActive(state: state)
+        let territoryRetakeReturn = territoryRetakeReturnActive(state: state)
+        let territoryReclaimFeint = territoryReclaimFeint(state: state)
+        let territoryReclaimCommit = territoryReclaimCommit(state: state)
+        let territoryReclaimCounter = territoryReclaimCounterStep(state: state)
+        let territoryRetakeChallenge = territoryRetakeChallenge(state: state)
+        let territoryRetakeCommit = territoryRetakeCommit(state: state)
+        let territoryRetakeCross = territoryRetakeCrossAngle(state: state)
+        let territoryPreferredShoulder = territoryPreferredShoulderLabel(state: state)
+        let anchorLabel = lookoutAnchorLabel(state.combat_hostile_anchor_index)
+        let lookoutShoulder = lookoutAnchorShoulderLabel(state.combat_hostile_anchor_index)
+        let searchActive = state.combat_hostile_search_timer > 0.0
+        let recoveryActive = streetRecoveryIntensity(state: state) > 0.08
+        let lateFallback = territoryLateFallbackActive(state: state)
+        let approachCarry = territoryApproachCarryActive(state: state)
+        let coldWatchCarry = territoryColdWatchCarryActive(state: state)
+        let coldStartCarry = territoryColdStartCarryActive(state: state)
+
+        if state.player_reset_timer > 0.0 {
+            return "encounter reset \(formatScalar(state.player_reset_timer))s / regroup before re-engaging"
+        }
+
+        if let pickupPrompt = pickupPrompt(state: state) {
+            return pickupPrompt
+        }
+
+        if territoryResolveHeld {
+            return territoryPreferredShoulder != nil && lookoutShoulder == territoryPreferredShoulder
+                ? "held pocket / \(anchorLabel) is leaning into the \(territoryPreferredShoulder!) shoulder reclaim"
+                : (territoryPreferredShoulder != nil
+                    ? "held pocket / court-set reclaim is building deeper on the \(territoryPreferredShoulder!) shoulder around you"
+                    : "held pocket / court-set reclaim is building deeper around you")
+        }
+
+        if territoryResolveClean {
+            return searchActive
+                ? (territoryPreferredShoulder != nil && lookoutShoulder == territoryPreferredShoulder
+                    ? "clean pullout / \(anchorLabel) is checking the \(territoryPreferredShoulder!) shoulder while the reseal closes"
+                    : (territoryPreferredShoulder != nil
+                        ? "clean pullout / edge retake and exit search are closing on the \(territoryPreferredShoulder!) shoulder behind you"
+                        : "clean pullout / edge retake and exit search are closing behind you"))
+                : (territoryPreferredShoulder != nil && lookoutShoulder == territoryPreferredShoulder
+                    ? "clean pullout / \(anchorLabel) and the edge are sealing the \(territoryPreferredShoulder!) shoulder behind you"
+                    : (territoryPreferredShoulder != nil
+                        ? "clean pullout / runner and post are resealing the \(territoryPreferredShoulder!) shoulder of the lane mouth behind you"
+                        : "clean pullout / runner and post are resealing the lane mouth behind you"))
+        }
+
+        if territoryResolveHoldLive {
+            return territoryPreferredShoulder != nil
+                ? "hold the pocket and force a deeper reclaim beat on the \(territoryPreferredShoulder!) shoulder"
+                : "hold the pocket and force a deeper reclaim beat"
+        }
+
+        if territoryResolvePulloutLive {
+            return territoryPreferredShoulder != nil
+                ? "pull out clean now before the \(territoryPreferredShoulder!) shoulder reseal locks in"
+                : "pull out clean now before the edge retake locks in"
+        }
+
+        if territoryResolveWindowOpen {
+            return "line broken / hold the pocket or pull out before the block retakes the edge"
+        }
+
+        if territoryReclaimReturn {
+            return territoryReclaimFeint
+                ? (territoryReclaimCounter
+                    ? (territoryPreferredShoulder != nil
+                        ? "reclaim feint / runner peels off the \(territoryPreferredShoulder!) shoulder while the post turns the next angle deeper"
+                        : "reclaim feint / runner is peeling off the mouth while the post turns the next angle deeper")
+                    : "reclaim feint / the edge is soft, but the post is baiting the next commit deeper")
+                : (territoryReclaimCommit
+                    ? (territoryPreferredShoulder != nil
+                        ? "reclaim commit / you took the softer \(territoryPreferredShoulder!) shoulder and the pocket is waking fast there"
+                        : "reclaim commit / you took the softer mouth and the pocket is waking fast")
+                    : (territoryClaimed
+                        ? (territoryPreferredShoulder != nil
+                            ? "reclaim return / the \(territoryPreferredShoulder!) shoulder eased off but the pocket is waking deeper on this pass"
+                            : "reclaim return / the edge eased off but the pocket is waking deeper on this pass")
+                        : "pocket remembered / the runner is lighter at the mouth while the post waits deeper"))
+        }
+
+        if territoryRetakeReturn {
+            return territoryRetakeChallenge
+                ? (territoryRetakeCross
+                    ? (territoryPreferredShoulder != nil
+                        ? "edge challenge / runner and post are cross-angling the \(territoryPreferredShoulder!) shoulder before the heavier recommit"
+                        : "edge challenge / runner and post are cross-angling the mouth before the heavier recommit")
+                    : (searchActive
+                        ? "edge challenge / the lane mouth is testing you early while exit search still echoes"
+                        : "edge challenge / runner and post are checking the return at the mouth before deeper commit"))
+                : (territoryRetakeCommit
+                    ? (territoryPreferredShoulder != nil
+                        ? "retake commit / you hit the \(territoryPreferredShoulder!) shoulder challenge and the block is recommitting through that side"
+                        : "retake commit / you hit the challenge and the block is recommitting through the mouth")
+                    : (searchActive
+                        ? "retake return / the lane mouth is locking up early while exit search still echoes"
+                        : (territoryPreferredShoulder != nil
+                            ? "edge remembered / runner and post are answering earlier on the \(territoryPreferredShoulder!) shoulder"
+                            : "edge remembered / runner and post are answering earlier at the lane mouth")))
+        }
+
+        if territoryCommitResolved {
+            return "line broken / hold the pocket or pull out on your terms"
+        }
+
+        if territoryCommitLive {
+            return "push is counting / stay inside the pocket until the beat lands"
+        }
+
+        if territoryCommitWindowOpen {
+            return "hardened \(territoryName) line / push through now before the window settles"
+        }
+
+        if lateFallback {
+            if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
+                return territoryPreferredShoulder != nil && lookoutShoulder == territoryPreferredShoulder
+                    ? "late fallback / \(anchorLabel) and the vehicle line are settling back onto the \(territoryPreferredShoulder!) shoulder"
+                    : (territoryPreferredShoulder != nil
+                        ? "late fallback / court-set is settling the vehicle line back onto the \(territoryPreferredShoulder!) shoulder"
+                        : "late fallback / court-set is settling the vehicle line")
+            }
+
+            return territoryPreferredShoulder != nil && lookoutShoulder == territoryPreferredShoulder
+                ? "late fallback / \(anchorLabel) and the line are settling back onto the \(territoryPreferredShoulder!) shoulder"
+                : (territoryPreferredShoulder != nil
+                    ? "late fallback / court-set is settling the line back onto the \(territoryPreferredShoulder!) shoulder"
+                    : "late fallback / court-set is settling the line")
+        }
 
         if state.traversal_mode == UInt32(MDTBTraversalModeVehicle) {
             guard state.equipped_weapon_kind != UInt32(MDTBEquippedWeaponNone) else {
                 if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
-                    return "hot \(territoryName) block / vehicle re-entry is being read fast"
+                    return territoryPreferredShoulder != nil
+                        ? "hot \(territoryName) block / vehicle re-entry is being read fast on the \(territoryPreferredShoulder!) shoulder"
+                        : "hot \(territoryName) block / vehicle re-entry is being read fast"
                 }
                 if !territoryClaimed && territoryPatrolWatch {
                     return territoryPatrolHandoff
                         ? "court-set runner is turning the vehicle toward the lane before the line"
                         : (territoryPatrolBrace
-                            ? "court-set line is hardening again / step back in and the vehicle clamp locks up"
+                            ? (coldStartCarry && territoryPreferredShoulder != nil
+                                ? "court-set line is carrying the last \(territoryPreferredShoulder!) shoulder into a cold vehicle clamp"
+                                : "court-set line is hardening again / step back in and the vehicle clamp locks up")
                             : (territoryPatrolReform
-                            ? "court-set line is reforming after the clear / feint in again and the vehicle screen closes back up"
+                            ? (recoveryActive && territoryPreferredShoulder != nil
+                                ? "court-set line is reforming the \(territoryPreferredShoulder!) shoulder while spillback reopens that vehicle lane"
+                                : "court-set line is reforming after the clear / feint in again and the vehicle screen closes back up")
                             : (territoryPatrolScreen
-                            ? "court-set runner is screening the vehicle at the lane mouth / the line is pinching"
-                            : "court-set runner is posted on the sidewalk ahead / the vehicle is being read early")))
+                            ? (coldStartCarry && territoryPreferredShoulder != nil
+                                ? "court-set runner is carrying the last \(territoryPreferredShoulder!) shoulder into this cold vehicle screen"
+                                : "court-set runner is screening the vehicle at the lane mouth / the line is pinching")
+                            : (approachCarry && territoryPreferredShoulder != nil
+                                ? "court-set runner is drifting into the last \(territoryPreferredShoulder!) shoulder before the outside vehicle watch fully forms"
+                                : (coldWatchCarry && territoryPreferredShoulder != nil
+                                    ? "court-set runner is carrying the last \(territoryPreferredShoulder!) shoulder into the first outside vehicle watch"
+                                    : "court-set runner is posted on the sidewalk ahead / the vehicle is being read early")))))
                 }
                 if territoryClaimed && territoryWatch > 0.12 {
                     if territoryDeeper {
@@ -3911,26 +4476,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                 return "pistol stowed while driving"
             }
             return "\(equippedWeaponLabel(state.equipped_weapon_kind)) stowed while driving"
-        }
-
-        if state.player_reset_timer > 0.0 {
-            return "encounter reset \(formatScalar(state.player_reset_timer))s / regroup before re-engaging"
-        }
-
-        if let pickupPrompt = pickupPrompt(state: state) {
-            return pickupPrompt
-        }
-
-        if territoryCommitResolved {
-            return "line broken / hold the pocket or pull out on your terms"
-        }
-
-        if territoryCommitLive {
-            return "push is counting / stay inside the pocket until the beat lands"
-        }
-
-        if territoryCommitWindowOpen {
-            return "hardened \(territoryName) line / push through now before the window settles"
         }
 
         let switchHint = weaponSwitchHint(state: state)
@@ -3994,18 +4539,30 @@ final class Renderer: NSObject, MTKViewDelegate {
                 return "press 1 or 2 to equip a weapon"
             }
             if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
-                return "burned \(territoryName) block / keep moving or rearm at the lane pickups"
+                return territoryPreferredShoulder != nil
+                    ? "burned \(territoryName) block / the \(territoryPreferredShoulder!) shoulder is still the fast read, so keep moving or rearm at the lane pickups"
+                    : "burned \(territoryName) block / keep moving or rearm at the lane pickups"
             }
             if !territoryClaimed && territoryPatrolWatch {
                 return territoryPatrolHandoff
                     ? "court-set runner is turning the lane inward before the line"
                     : (territoryPatrolBrace
-                        ? "court-set line is hardening again / step back in and the clamp locks up"
+                        ? (coldStartCarry && territoryPreferredShoulder != nil
+                            ? "court-set line is carrying the last \(territoryPreferredShoulder!) shoulder into a cold clamp"
+                            : "court-set line is hardening again / step back in and the clamp locks up")
                         : (territoryPatrolReform
-                        ? "court-set line is reforming after the clear / step back in and the screen closes again"
+                        ? (recoveryActive && territoryPreferredShoulder != nil
+                            ? "court-set line is reforming the \(territoryPreferredShoulder!) shoulder while spillback reopens the lane"
+                            : "court-set line is reforming after the clear / step back in and the screen closes again")
                         : (territoryPatrolScreen
-                        ? "court-set runner is screening the lane mouth / step in and the deeper post wakes"
-                        : "court-set runner is posted on the sidewalk ahead / the lane mouth is being watched")))
+                        ? (coldStartCarry && territoryPreferredShoulder != nil
+                            ? "court-set runner is carrying the last \(territoryPreferredShoulder!) shoulder into this cold screen"
+                            : "court-set runner is screening the lane mouth / step in and the deeper post wakes")
+                        : (approachCarry && territoryPreferredShoulder != nil
+                            ? "court-set runner is drifting into the last \(territoryPreferredShoulder!) shoulder before the outside watch fully forms"
+                            : (coldWatchCarry && territoryPreferredShoulder != nil
+                                ? "court-set runner is carrying the last \(territoryPreferredShoulder!) shoulder into the first outside watch"
+                                : "court-set runner is posted on the sidewalk ahead / the lane mouth is being watched")))))
             }
             if state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary) || (territoryClaimed && territorySkimming && territoryWatch > 0.08) {
                 return territoryPatrolBrace
@@ -4145,6 +4702,28 @@ final class Renderer: NSObject, MTKViewDelegate {
             alert: state.combat_hostile_alert
         )
         summary += " @\(lookoutAnchorLabel(state.combat_hostile_anchor_index))"
+        if let preferredShoulder = territoryPreferredShoulderLabel(state: state),
+           lookoutAnchorShoulderLabel(state.combat_hostile_anchor_index) == preferredShoulder {
+            if state.territory_resolve_state == UInt32(MDTBTerritoryResolveHold) && state.territory_resolve_timer > 0.05 {
+                summary += " \(preferredShoulder)-carry"
+            } else if state.territory_resolve_state == UInt32(MDTBTerritoryResolvePullout) && state.territory_resolve_timer > 0.05 {
+                summary += " \(preferredShoulder)-seal"
+            } else if streetRecoveryIntensity(state: state) > 0.08 {
+                summary += " \(preferredShoulder)-reopen"
+            } else if streetNormalizingIntensity(state: state) > 0.12 {
+                summary += " \(preferredShoulder)-settle"
+            } else if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) && state.territory_reentry_timer > 0.0 {
+                summary += " \(preferredShoulder)-hot"
+            } else if territoryLateFallbackActive(state: state) {
+                summary += " \(preferredShoulder)-fallback"
+            } else if territoryApproachCarryActive(state: state) {
+                summary += " \(preferredShoulder)-approach"
+            } else if territoryColdWatchCarryActive(state: state) {
+                summary += " \(preferredShoulder)-watch"
+            } else if territoryColdStartCarryActive(state: state) {
+                summary += " \(preferredShoulder)-cold"
+            }
+        }
 
         if state.combat_hostile_search_timer > 0.0 {
             summary += " search \(formatScalar(state.combat_hostile_search_timer))s"
@@ -4332,6 +4911,252 @@ final class Renderer: NSObject, MTKViewDelegate {
             state.territory_commit_timer > 0.05
     }
 
+    private static func territoryResolveStateLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryResolveWindow):
+            return "window"
+        case UInt32(MDTBTerritoryResolveHold):
+            return "hold"
+        case UInt32(MDTBTerritoryResolvePullout):
+            return "pull"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func territoryReapproachStateLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBTerritoryReapproachReclaim):
+            return "reclaim"
+        case UInt32(MDTBTerritoryReapproachRetake):
+            return "retake"
+        default:
+            return "idle"
+        }
+    }
+
+    private static func territoryResolveWindowActive(state: MDTBEngineState) -> Bool {
+        state.territory_resolve_state == UInt32(MDTBTerritoryResolveWindow) &&
+            state.territory_resolve_timer > 0.05
+    }
+
+    private static func territoryResolveHoldActive(state: MDTBEngineState) -> Bool {
+        state.territory_resolve_state == UInt32(MDTBTerritoryResolveHold) &&
+            state.territory_resolve_timer > 0.05
+    }
+
+    private static func territoryResolvePulloutActive(state: MDTBEngineState) -> Bool {
+        state.territory_resolve_state == UInt32(MDTBTerritoryResolvePullout) &&
+            state.territory_resolve_timer > 0.05
+    }
+
+    private static func territoryReclaimReturnActive(state: MDTBEngineState) -> Bool {
+        state.territory_reapproach_mode == UInt32(MDTBTerritoryReapproachReclaim) &&
+            state.territory_reapproach_timer > 0.05
+    }
+
+    private static func territoryRetakeReturnActive(state: MDTBEngineState) -> Bool {
+        state.territory_reapproach_mode == UInt32(MDTBTerritoryReapproachRetake) &&
+            state.territory_reapproach_timer > 0.05
+    }
+
+    private static func territoryReclaimFeint(state: MDTBEngineState) -> Bool {
+        territoryReclaimReturnActive(state: state) &&
+            territorySkimmingLine(state: state) &&
+            territoryPatrolScreening(state: state) &&
+            !territoryEntryClamped(state: state) &&
+            state.territory_inner_state == UInt32(MDTBTerritoryPatrolHandoff) &&
+            state.territory_inner_alert > 0.12
+    }
+
+    private static func territoryReclaimCommit(state: MDTBEngineState) -> Bool {
+        territoryReclaimReturnActive(state: state) &&
+            territoryPushingDeeper(state: state) &&
+            (state.territory_patrol_state == UInt32(MDTBTerritoryPatrolHandoff) ||
+             state.territory_patrol_state == UInt32(MDTBTerritoryPatrolClear) ||
+             state.territory_inner_state == UInt32(MDTBTerritoryPatrolHandoff)) &&
+            (state.territory_patrol_alert > 0.12 || state.territory_inner_alert > 0.12)
+    }
+
+    private static func territoryRetakeChallenge(state: MDTBEngineState) -> Bool {
+        territoryRetakeReturnActive(state: state) &&
+            territorySkimmingLine(state: state) &&
+            (territoryPatrolHardening(state: state) ||
+             territoryPatrolScreening(state: state) ||
+             territoryEntryClamped(state: state)) &&
+            state.territory_patrol_alert > 0.12
+    }
+
+    private static func territoryRetakeCommit(state: MDTBEngineState) -> Bool {
+        territoryRetakeReturnActive(state: state) &&
+            territoryPushingDeeper(state: state) &&
+            (state.territory_patrol_state == UInt32(MDTBTerritoryPatrolBrace) ||
+             state.territory_patrol_state == UInt32(MDTBTerritoryPatrolHandoff) ||
+             state.territory_inner_state == UInt32(MDTBTerritoryPatrolBrace) ||
+             state.territory_inner_state == UInt32(MDTBTerritoryPatrolHandoff)) &&
+            (state.territory_patrol_alert > 0.12 || state.territory_inner_alert > 0.12)
+    }
+
+    private static func territoryWrappedAngle(_ value: Float) -> Float {
+        var wrapped = value
+        while wrapped <= -.pi {
+            wrapped += (.pi * 2.0)
+        }
+        while wrapped > .pi {
+            wrapped -= (.pi * 2.0)
+        }
+        return wrapped
+    }
+
+    private static func territoryAngleSeparation(_ a: Float, _ b: Float) -> Float {
+        abs(territoryWrappedAngle(a - b))
+    }
+
+    private static func territoryPreferredSideBias(state: MDTBEngineState) -> Float {
+        max(-1.0, min(state.territory_preferred_side, 1.0))
+    }
+
+    private static func territoryPreferredShoulderLabel(state: MDTBEngineState) -> String? {
+        let bias = territoryPreferredSideBias(state: state)
+        guard abs(bias) > 0.22 else {
+            return nil
+        }
+        return bias < 0.0 ? "left" : "right"
+    }
+
+    private static func territoryPreferredShoulderTag(state: MDTBEngineState) -> String? {
+        guard let shoulder = territoryPreferredShoulderLabel(state: state) else {
+            return nil
+        }
+        return shoulder == "left" ? "sideL" : "sideR"
+    }
+
+    private static func territoryLateFallbackActive(state: MDTBEngineState) -> Bool {
+        guard territoryPreferredShoulderLabel(state: state) != nil else {
+            return false
+        }
+
+        let boundaryOrOpen =
+            state.territory_phase == UInt32(MDTBTerritoryPhaseNone) ||
+            state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary)
+        let patrolFallback =
+            state.territory_patrol_state == UInt32(MDTBTerritoryPatrolCooldown) ||
+            state.territory_patrol_state == UInt32(MDTBTerritoryPatrolWatch) ||
+            state.territory_patrol_state == UInt32(MDTBTerritoryPatrolReform) ||
+            state.territory_inner_state == UInt32(MDTBTerritoryPatrolCooldown) ||
+            state.territory_inner_state == UInt32(MDTBTerritoryPatrolReform)
+
+        return boundaryOrOpen &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseHot) &&
+            state.territory_watch_timer > 0.0 &&
+            state.territory_heat > 0.04 &&
+            streetRecoveryIntensity(state: state) <= 0.08 &&
+            streetNormalizingIntensity(state: state) <= 0.12 &&
+            patrolFallback
+    }
+
+    private static func territoryColdStartCarryActive(state: MDTBEngineState) -> Bool {
+        guard territoryPreferredShoulderLabel(state: state) != nil else {
+            return false
+        }
+
+        let boundaryApproach =
+            state.territory_phase == UInt32(MDTBTerritoryPhaseNone) ||
+            state.territory_phase == UInt32(MDTBTerritoryPhaseBoundary)
+        let coldCommitBeat =
+            territoryPatrolScreening(state: state) ||
+            territoryPatrolHardening(state: state) ||
+            state.territory_inner_state == UInt32(MDTBTerritoryPatrolBrace)
+
+        return boundaryApproach &&
+            !territoryLateFallbackActive(state: state) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseHot) &&
+            state.territory_reentry_timer <= 0.0 &&
+            state.territory_reapproach_timer <= 0.05 &&
+            state.territory_resolve_timer <= 0.05 &&
+            state.combat_hostile_search_timer <= 0.0 &&
+            streetRecoveryIntensity(state: state) <= 0.08 &&
+            streetNormalizingIntensity(state: state) <= 0.12 &&
+            state.territory_watch_timer > 0.0 &&
+            state.territory_heat > 0.04 &&
+            state.territory_heat < 0.24 &&
+            coldCommitBeat &&
+            !territoryReclaimReturnActive(state: state) &&
+            !territoryRetakeReturnActive(state: state)
+    }
+
+    private static func territoryApproachCarryActive(state: MDTBEngineState) -> Bool {
+        guard territoryPreferredShoulderLabel(state: state) != nil else {
+            return false
+        }
+
+        let farApproachWatch =
+            state.territory_phase == UInt32(MDTBTerritoryPhaseNone) &&
+            state.territory_patrol_state == UInt32(MDTBTerritoryPatrolWatch) &&
+            state.territory_patrol_alert > 0.08 &&
+            state.territory_inner_state != UInt32(MDTBTerritoryPatrolBrace) &&
+            state.territory_inner_state != UInt32(MDTBTerritoryPatrolHandoff) &&
+            state.territory_front_watch < 0.12 &&
+            state.territory_heat < 0.14
+
+        return farApproachWatch &&
+            !territoryLateFallbackActive(state: state) &&
+            !territoryColdStartCarryActive(state: state) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseHot) &&
+            state.territory_reentry_timer <= 0.0 &&
+            state.territory_reapproach_timer <= 0.05 &&
+            state.territory_resolve_timer <= 0.05 &&
+            state.combat_hostile_search_timer <= 0.0 &&
+            streetRecoveryIntensity(state: state) <= 0.08 &&
+            streetNormalizingIntensity(state: state) <= 0.12 &&
+            state.territory_watch_timer > 0.0 &&
+            state.territory_heat > 0.03 &&
+            !territoryReclaimReturnActive(state: state) &&
+            !territoryRetakeReturnActive(state: state)
+    }
+
+    private static func territoryColdWatchCarryActive(state: MDTBEngineState) -> Bool {
+        guard territoryPreferredShoulderLabel(state: state) != nil else {
+            return false
+        }
+
+        let neutralOutsideWatch =
+            state.territory_phase == UInt32(MDTBTerritoryPhaseNone) &&
+            state.territory_patrol_state == UInt32(MDTBTerritoryPatrolWatch) &&
+            state.territory_patrol_alert > 0.08 &&
+            state.territory_inner_state != UInt32(MDTBTerritoryPatrolBrace) &&
+            state.territory_inner_state != UInt32(MDTBTerritoryPatrolHandoff)
+
+        return neutralOutsideWatch &&
+            !territoryLateFallbackActive(state: state) &&
+            !territoryApproachCarryActive(state: state) &&
+            !territoryColdStartCarryActive(state: state) &&
+            state.territory_phase != UInt32(MDTBTerritoryPhaseHot) &&
+            state.territory_reentry_timer <= 0.0 &&
+            state.territory_reapproach_timer <= 0.05 &&
+            state.territory_resolve_timer <= 0.05 &&
+            state.combat_hostile_search_timer <= 0.0 &&
+            streetRecoveryIntensity(state: state) <= 0.08 &&
+            streetNormalizingIntensity(state: state) <= 0.12 &&
+            state.territory_watch_timer > 0.0 &&
+            state.territory_heat > 0.03 &&
+            state.territory_heat < 0.18 &&
+            !territoryReclaimReturnActive(state: state) &&
+            !territoryRetakeReturnActive(state: state)
+    }
+
+    private static func territoryReclaimCounterStep(state: MDTBEngineState) -> Bool {
+        territoryReclaimFeint(state: state) &&
+            abs(state.territory_patrol_position.x - state.territory_inner_position.x) > 1.0 &&
+            territoryAngleSeparation(state.territory_patrol_heading, state.territory_inner_heading) > 0.45
+    }
+
+    private static func territoryRetakeCrossAngle(state: MDTBEngineState) -> Bool {
+        territoryRetakeChallenge(state: state) &&
+            abs(state.territory_patrol_position.x - state.territory_inner_position.x) > 0.9 &&
+            territoryAngleSeparation(state.territory_patrol_heading, state.territory_inner_heading) > 0.60
+    }
+
     private static func territoryInnerWatchActive(state: MDTBEngineState) -> Bool {
         let innerState = state.territory_inner_state
         return (
@@ -4373,13 +5198,28 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private static func territoryStatusSummary(state: MDTBEngineState) -> String? {
+        let territoryPreferredShoulder = territoryPreferredShoulderLabel(state: state)
+        let territoryShoulderTag = territoryPreferredShoulderTag(state: state)
+        let normalizing = streetNormalizingIntensity(state: state) > 0.12
+        let recovering = streetRecoveryIntensity(state: state) > 0.08
+        let lateFallback = territoryLateFallbackActive(state: state)
+        let approachCarry = territoryApproachCarryActive(state: state)
+        let coldWatchCarry = territoryColdWatchCarryActive(state: state)
+        let coldStartCarry = territoryColdStartCarryActive(state: state)
+
         guard state.territory_faction != UInt32(MDTBTerritoryFactionNone) ||
                 state.territory_heat > 0.05 ||
                 state.territory_reentry_timer > 0.0 ||
+                state.territory_reapproach_mode != UInt32(MDTBTerritoryReapproachNone) ||
+                state.territory_reapproach_timer > 0.05 ||
+                state.territory_resolve_state != UInt32(MDTBTerritoryResolveNone) ||
+                state.territory_resolve_progress > 0.05 ||
                 state.territory_patrol_state != UInt32(MDTBTerritoryPatrolIdle) ||
                 state.territory_patrol_alert > 0.05 ||
                 state.territory_inner_state != UInt32(MDTBTerritoryPatrolIdle) ||
-                state.territory_inner_alert > 0.05 else {
+                state.territory_inner_alert > 0.05 ||
+                normalizing ||
+                recovering else {
             return nil
         }
 
@@ -4418,6 +5258,73 @@ final class Renderer: NSObject, MTKViewDelegate {
         if state.territory_reentry_timer > 0.0 {
             parts.append("r\(formatScalar(state.territory_reentry_timer))s")
         }
+        if state.territory_phase == UInt32(MDTBTerritoryPhaseHot) {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("hot")
+        }
+        if normalizing {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("settle")
+        }
+        if recovering {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("reopen")
+        }
+        if lateFallback {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("fallback")
+        }
+        if approachCarry {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("approach")
+        }
+        if coldWatchCarry {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("prewatch")
+        }
+        if coldStartCarry {
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            parts.append("cold")
+        }
+        if state.territory_reapproach_mode != UInt32(MDTBTerritoryReapproachNone) || state.territory_reapproach_timer > 0.05 {
+            parts.append("return")
+            parts.append(territoryReapproachStateLabel(state.territory_reapproach_mode))
+            if let territoryShoulderTag {
+                parts.append(territoryShoulderTag)
+            }
+            if territoryReclaimFeint(state: state) {
+                parts.append(territoryReclaimCounterStep(state: state) ? "counter" : "feint")
+            } else if territoryReclaimCommit(state: state) {
+                parts.append("deep")
+                if territoryPreferredShoulder != nil {
+                    parts.append("carry")
+                }
+            } else if territoryRetakeChallenge(state: state) {
+                parts.append(territoryRetakeCrossAngle(state: state) ? "angle" : "challenge")
+            } else if territoryRetakeCommit(state: state) {
+                parts.append("recommit")
+                if territoryPreferredShoulder != nil {
+                    parts.append("seal")
+                }
+            }
+            if state.territory_reapproach_timer > 0.0 {
+                parts.append("t\(formatScalar(state.territory_reapproach_timer))s")
+            }
+        }
         if state.territory_commit_state != UInt32(MDTBTerritoryCommitNone) || state.territory_commit_progress > 0.05 {
             parts.append("commit")
             parts.append(territoryCommitStateLabel(state.territory_commit_state))
@@ -4426,6 +5333,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
             if state.territory_commit_progress > 0.05 {
                 parts.append("p\(formatScalar(state.territory_commit_progress))")
+            }
+        }
+        if state.territory_resolve_state != UInt32(MDTBTerritoryResolveNone) || state.territory_resolve_progress > 0.05 {
+            parts.append("resolve")
+            parts.append(territoryResolveStateLabel(state.territory_resolve_state))
+            if let territoryShoulderTag,
+               state.territory_resolve_state == UInt32(MDTBTerritoryResolveHold) || state.territory_resolve_state == UInt32(MDTBTerritoryResolvePullout) {
+                parts.append(territoryShoulderTag)
+                parts.append(state.territory_resolve_state == UInt32(MDTBTerritoryResolveHold) ? "carry" : "seal")
+            }
+            if state.territory_resolve_timer > 0.0 {
+                parts.append("t\(formatScalar(state.territory_resolve_timer))s")
+            }
+            if state.territory_resolve_progress > 0.05 {
+                parts.append("p\(formatScalar(state.territory_resolve_progress))")
             }
         }
         if state.territory_patrol_state != UInt32(MDTBTerritoryPatrolIdle) || state.territory_patrol_alert > 0.05 {
@@ -4450,6 +5372,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         var parts: [String] = []
         let normalizing = streetNormalizingIntensity(state: state) > 0.12
         let recovering = streetRecoveryIntensity(state: state) > 0.08
+        let territoryShoulder = territoryPreferredShoulderLabel(state: state).map { "\($0)-shoulder" }
 
         if state.witness_state != UInt32(MDTBWitnessStateIdle) || state.witness_alert > 0.05 || state.witness_state_timer > 0.0 {
             parts.append(witnessStatusSummary(state: state))
@@ -4468,11 +5391,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         if normalizing {
-            parts.append("normalizing")
+            parts.append(territoryShoulder != nil ? "\(territoryShoulder!) normalizing" : "normalizing")
         }
 
         if recovering {
-            parts.append("reopening \(formatScalar(state.street_recovery_timer))s")
+            parts.append(
+                territoryShoulder != nil
+                    ? "\(territoryShoulder!) reopening \(formatScalar(state.street_recovery_timer))s"
+                    : "reopening \(formatScalar(state.street_recovery_timer))s"
+            )
         }
 
         if let territorySummary = territoryStatusSummary(state: state) {
@@ -4518,22 +5445,55 @@ final class Renderer: NSObject, MTKViewDelegate {
         let territoryCommitLive = territoryCommitActive(state: state)
         let territoryCommitResolved = territoryCommitComplete(state: state)
         let territoryCommitProgress = min(max(state.territory_commit_progress, 0.0), 1.0)
+        let territoryResolveWindowOpen = territoryResolveWindowActive(state: state)
+        let territoryResolveHoldLive = territoryResolveHoldActive(state: state)
+        let territoryResolvePulloutLive = territoryResolvePulloutActive(state: state)
+        let territoryResolveProgress = min(max(state.territory_resolve_progress, 0.0), 1.0)
+        let territoryResolveHeld = territoryResolveHoldLive && territoryResolveProgress > 0.99
+        let territoryResolveClean = territoryResolvePulloutLive && territoryResolveProgress > 0.99
+        let territoryReclaimReturn = territoryReclaimReturnActive(state: state)
+        let territoryRetakeReturn = territoryRetakeReturnActive(state: state)
+        let territoryReclaimFeint = territoryReclaimFeint(state: state)
+        let territoryReclaimCommit = territoryReclaimCommit(state: state)
+        let territoryReclaimCounter = territoryReclaimCounterStep(state: state)
+        let territoryRetakeChallenge = territoryRetakeChallenge(state: state)
+        let territoryRetakeCommit = territoryRetakeCommit(state: state)
+        let territoryRetakeCross = territoryRetakeCrossAngle(state: state)
+        let territoryPreferredShoulder = territoryPreferredShoulderLabel(state: state)
+        let territoryShoulder = territoryPreferredShoulder.map { "\($0) shoulder" }
+        let anchorLabel = lookoutAnchorLabel(state.combat_hostile_anchor_index)
+        let lookoutShoulder = lookoutAnchorShoulderLabel(state.combat_hostile_anchor_index)
+        let territoryReapproachTimer = formatScalar(state.territory_reapproach_timer)
+        let lateFallback = territoryLateFallbackActive(state: state)
+        let approachCarry = territoryApproachCarryActive(state: state)
+        let coldWatchCarry = territoryColdWatchCarryActive(state: state)
+        let coldStartCarry = territoryColdStartCarryActive(state: state)
 
         if normalizing {
             return (
                 "Street normalizing",
                 civilianSources > 0
-                    ? "Civilians are settling while traffic returns to the lane \(incidentTimer)s"
-                    : "Traffic and civilian spillover are easing off the block \(incidentTimer)s"
+                    ? (territoryShoulder != nil
+                        ? "Civilians are settling while traffic eases off the \(territoryShoulder!) \(incidentTimer)s"
+                        : "Civilians are settling while traffic returns to the lane \(incidentTimer)s")
+                    : (territoryShoulder != nil
+                        ? "Traffic and civilian spillover are easing off the \(territoryShoulder!) of the block \(incidentTimer)s"
+                        : "Traffic and civilian spillover are easing off the block \(incidentTimer)s")
             )
         }
 
         if recovering {
             return (
                 "Street reopening",
-                civilianSources > 0
-                    ? "Civilians are drifting back while traffic retakes the block \(recoveryTimer)s"
-                    : "Traffic is reopening the lane and nearby link \(recoveryTimer)s"
+                territoryPatrolReform && territoryShoulder != nil
+                    ? "Traffic is reopening the \(territoryShoulder!) while the boundary reforms there \(recoveryTimer)s"
+                    : (civilianSources > 0
+                        ? (territoryShoulder != nil
+                            ? "Civilians are drifting back while traffic reopens the \(territoryShoulder!) \(recoveryTimer)s"
+                            : "Civilians are drifting back while traffic retakes the block \(recoveryTimer)s")
+                        : (territoryShoulder != nil
+                            ? "Traffic is reopening the \(territoryShoulder!) and nearby link \(recoveryTimer)s"
+                            : "Traffic is reopening the lane and nearby link \(recoveryTimer)s"))
             )
         }
 
@@ -4541,8 +5501,183 @@ final class Renderer: NSObject, MTKViewDelegate {
             return (
                 "Burned territory",
                 searchActive
-                    ? "\(territoryName) block remembers the last pass / lookout search \(searchTimer)s"
-                    : "You re-entered a hot \(territoryName) block / the lookout is already keyed up \(territoryTimer)s"
+                    ? (territoryShoulder != nil
+                        ? "\(territoryName) block remembers the last \(territoryShoulder!) pass / lookout search \(searchTimer)s"
+                        : "\(territoryName) block remembers the last pass / lookout search \(searchTimer)s")
+                    : (territoryShoulder != nil
+                        ? "You re-entered a hot \(territoryName) block / the \(territoryShoulder!) is being read early \(territoryTimer)s"
+                        : "You re-entered a hot \(territoryName) block / the lookout is already keyed up \(territoryTimer)s")
+            )
+        }
+
+        if lateFallback {
+            return (
+                "Line settling",
+                lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? "\(anchorLabel) is hanging on the \(territoryPreferredShoulder!) shoulder while the line settles there"
+                    : (territoryShoulder != nil
+                        ? "The block is settling back onto the \(territoryShoulder!) after the reopen"
+                        : "The block is settling after the reopen")
+            )
+        }
+
+        if approachCarry && !territoryClaimed && territoryPatrolWatch && !incidentActive && !searchActive {
+            return (
+                "Outer post carry",
+                state.traversal_mode == UInt32(MDTBTraversalModeVehicle)
+                    ? (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "\(anchorLabel) is drifting onto the \(territoryPreferredShoulder!) shoulder before the outside vehicle watch fully forms"
+                        : (territoryShoulder != nil
+                            ? "The first outer-post vehicle drift is leaning onto the \(territoryShoulder!) before the outside watch fully forms"
+                            : "The first outer-post vehicle drift is leaning before the outside watch fully forms"))
+                    : (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "\(anchorLabel) is drifting onto the \(territoryPreferredShoulder!) shoulder before the outside watch fully forms"
+                        : (territoryShoulder != nil
+                            ? "The first outer-post drift is leaning onto the \(territoryShoulder!) before the outside watch fully forms"
+                            : "The first outer-post drift is leaning before the outside watch fully forms"))
+            )
+        }
+
+        if coldWatchCarry && !territoryClaimed && territoryPatrolWatch && !incidentActive && !searchActive {
+            return (
+                "Outside watch carry",
+                state.traversal_mode == UInt32(MDTBTraversalModeVehicle)
+                    ? (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "\(anchorLabel) is carrying the \(territoryPreferredShoulder!) shoulder into the first outside vehicle watch"
+                        : (territoryShoulder != nil
+                            ? "The first outside vehicle watch is leaning onto the \(territoryShoulder!) before the screen forms"
+                            : "The first outside vehicle watch is leaning before the screen forms"))
+                    : (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "\(anchorLabel) is carrying the \(territoryPreferredShoulder!) shoulder into the first outside watch"
+                        : (territoryShoulder != nil
+                            ? "The first outside watch is leaning onto the \(territoryShoulder!) before the screen forms"
+                            : "The first outside watch is leaning before the screen forms"))
+            )
+        }
+
+        if coldStartCarry && !territoryClaimed && territoryPatrolWatch && !incidentActive && !searchActive {
+            return (
+                "Cold shoulder carry",
+                state.traversal_mode == UInt32(MDTBTraversalModeVehicle)
+                    ? (territoryPatrolBrace
+                        ? (territoryShoulder != nil
+                            ? "The first cold vehicle clamp is locking on the \(territoryShoulder!) instead of starting from center"
+                            : "The first cold vehicle clamp is locking before the lane can reset")
+                        : (territoryPatrolScreen
+                            ? (territoryShoulder != nil
+                                ? "The first cold vehicle screen is forming on the \(territoryShoulder!) instead of starting from center"
+                                : "The first cold vehicle screen is forming before the lane can reset")
+                            : (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                                ? "\(anchorLabel) is carrying the \(territoryPreferredShoulder!) shoulder into the first cold vehicle read"
+                                : (territoryShoulder != nil
+                                    ? "The first cold vehicle read is leaning onto the \(territoryShoulder!) instead of starting from center"
+                                    : "The first cold vehicle read is leaning before the lane can reset"))))
+                    : (territoryPatrolBrace
+                        ? (territoryShoulder != nil
+                            ? "The first cold clamp is locking on the \(territoryShoulder!) instead of starting from center"
+                            : "The first cold clamp is locking before the lane can reset")
+                        : (territoryPatrolScreen
+                            ? (territoryShoulder != nil
+                                ? "The first cold screen is forming on the \(territoryShoulder!) instead of starting from center"
+                                : "The first cold screen is forming before the lane can reset")
+                            : (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                                ? "\(anchorLabel) is carrying the \(territoryPreferredShoulder!) shoulder into the first cold read"
+                                : (territoryShoulder != nil
+                                    ? "The first cold read is leaning onto the \(territoryShoulder!) instead of starting from center"
+                                    : "The first cold read is leaning before the lane can reset"))))
+            )
+        }
+
+        if territoryResolveHeld {
+            return (
+                "Pocket reclaim",
+                lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                    ? "You held the break / \(anchorLabel) is leaning into the \(territoryPreferredShoulder!) shoulder while reclaim deepens \(formatScalar(state.territory_resolve_timer))s"
+                    : (territoryPreferredShoulder != nil
+                        ? "You held the break / runner and post are reclaiming deeper turf on the \(territoryPreferredShoulder!) shoulder \(formatScalar(state.territory_resolve_timer))s"
+                        : "You held the break / runner and post are reclaiming deeper turf \(formatScalar(state.territory_resolve_timer))s")
+            )
+        }
+
+        if territoryResolveClean {
+            return (
+                "Edge retaking",
+                searchActive
+                    ? (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "You pulled out clean / \(anchorLabel) is checking the \(territoryPreferredShoulder!) shoulder while it reseals \(searchTimer)s"
+                        : (territoryPreferredShoulder != nil
+                            ? "You pulled out clean / the lookout is checking your exit while the \(territoryPreferredShoulder!) shoulder reseals \(searchTimer)s"
+                            : "You pulled out clean / the lookout is checking your exit while the edge reseals \(searchTimer)s"))
+                    : (lookoutShoulder == territoryPreferredShoulder && territoryPreferredShoulder != nil
+                        ? "You pulled out clean / \(anchorLabel) and the edge are sealing the \(territoryPreferredShoulder!) shoulder \(formatScalar(state.territory_resolve_timer))s"
+                        : (territoryPreferredShoulder != nil
+                            ? "You pulled out clean / runner and post are resealing the \(territoryPreferredShoulder!) shoulder of the lane mouth \(formatScalar(state.territory_resolve_timer))s"
+                            : "You pulled out clean / runner and post are resealing the lane mouth \(formatScalar(state.territory_resolve_timer))s"))
+            )
+        }
+
+        if territoryResolveHoldLive {
+            return (
+                "Pocket reclaim live",
+                "Stay inside the pocket \(formatScalar(state.territory_resolve_timer))s / progress \(formatScalar(territoryResolveProgress))"
+            )
+        }
+
+        if territoryResolvePulloutLive {
+            return (
+                "Edge retake live",
+                "Back through the lane mouth \(formatScalar(state.territory_resolve_timer))s / progress \(formatScalar(territoryResolveProgress))"
+            )
+        }
+
+        if territoryResolveWindowOpen {
+            return (
+                "Resolve beat",
+                "Hold the pocket or pull out before the edge retakes \(formatScalar(state.territory_resolve_timer))s"
+            )
+        }
+
+        if territoryReclaimReturn {
+            return (
+                territoryReclaimFeint ? "Reclaim feint" : (territoryReclaimCommit ? "Reclaim commit" : (territoryClaimed ? "Reclaim return" : "Pocket remembered")),
+                territoryReclaimFeint
+                    ? (territoryReclaimCounter
+                        ? (territoryPreferredShoulder != nil
+                            ? "Runner is counter-stepping off the \(territoryPreferredShoulder!) shoulder while the post turns the next deeper angle \(territoryReapproachTimer)s"
+                            : "Runner is counter-stepping off the mouth while the post turns the next deeper angle \(territoryReapproachTimer)s")
+                        : "The mouth is showing soft, but the post is baiting the next deeper pocket \(territoryReapproachTimer)s")
+                    : (territoryReclaimCommit
+                        ? (territoryPreferredShoulder != nil
+                            ? "You took the softer \(territoryPreferredShoulder!) shoulder / runner clears there while the deeper handoff snaps up \(territoryReapproachTimer)s"
+                            : "You took the softer edge / runner clears while the deeper handoff snaps up \(territoryReapproachTimer)s")
+                        : (territorySkimming
+                            ? (territoryPreferredShoulder != nil
+                                ? "The \(territoryPreferredShoulder!) shoulder eased off, but the post and lookout are reading the deeper pocket \(territoryReapproachTimer)s"
+                                : "The lane mouth eased off, but the post and lookout are reading the deeper pocket \(territoryReapproachTimer)s")
+                            : "The last hold still lives in the block / runner clears lighter while the pocket wakes faster \(territoryReapproachTimer)s"))
+            )
+        }
+
+        if territoryRetakeReturn {
+            return (
+                territoryRetakeChallenge ? "Edge challenge" : (territoryRetakeCommit ? "Retake commit" : (territorySkimming ? "Retake return" : "Edge remembered")),
+                territoryRetakeChallenge
+                    ? (territoryRetakeCross
+                        ? (territoryPreferredShoulder != nil
+                            ? "Runner and post are cross-angling the \(territoryPreferredShoulder!) shoulder before the heavier recommit \(territoryReapproachTimer)s"
+                            : "Runner and post are cross-angling the lane mouth before the heavier recommit \(territoryReapproachTimer)s")
+                        : (searchActive
+                            ? "The clean exit is still echoing / the lane mouth is testing the return with search \(searchTimer)s"
+                            : "The last pullout still sits on the edge / runner and post are challenging the mouth early \(territoryReapproachTimer)s"))
+                    : (territoryRetakeCommit
+                        ? (territoryPreferredShoulder != nil
+                            ? "You pushed through the early \(territoryPreferredShoulder!) shoulder challenge / the block is recommitting through that side \(territoryReapproachTimer)s"
+                            : "You pushed through the early challenge / the block is recommitting through the mouth \(territoryReapproachTimer)s")
+                        : (searchActive
+                            ? "The clean exit is still echoing / the lane mouth is locking back up with search \(searchTimer)s"
+                            : (territoryPreferredShoulder != nil
+                                ? "The last pullout still sits on the \(territoryPreferredShoulder!) shoulder / runner and post are answering earlier \(territoryReapproachTimer)s"
+                                : "The last pullout still sits on the edge / runner and post are answering earlier \(territoryReapproachTimer)s")))
             )
         }
 
@@ -4770,12 +5905,22 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func districtLabel(_ value: UInt32) -> String {
         switch value {
-        case UInt32(MDTBDistrictMapleHeights):
-            return "maple-heights"
-        case UInt32(MDTBDistrictMarketSpur):
-            return "market-spur"
+        case UInt32(MDTBDistrictJeffersonPark):
+            return "Jefferson Park"
+        case UInt32(MDTBDistrictExpositionPark):
+            return "Exposition Park"
+        case UInt32(MDTBDistrictLeimertPark):
+            return "Leimert Park"
+        case UInt32(MDTBDistrictCrenshawCorridor):
+            return "Crenshaw Corridor"
+        case UInt32(MDTBDistrictHistoricSouthCentral):
+            return "Historic South Central"
+        case UInt32(MDTBDistrictVermontSquare):
+            return "Vermont Square"
+        case UInt32(MDTBDistrictFlorenceFirestone):
+            return "Florence-Firestone"
         default:
-            return "south-hub"
+            return "West Adams"
         }
     }
 
@@ -4819,10 +5964,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func chunkLabel(_ value: UInt32) -> String {
         switch value {
-        case UInt32(MDTBWorldChunkEastGrid):
-            return "east-grid"
+        case UInt32(MDTBWorldChunkCentralSouth):
+            return "Central South tile"
+        case UInt32(MDTBWorldChunkExpoCrenshaw):
+            return "Expo-Crenshaw tile"
+        case UInt32(MDTBWorldChunkFlorenceVermont):
+            return "Florence-Vermont tile"
         default:
-            return "west-grid"
+            return "Mid-city West tile"
         }
     }
 
@@ -4833,7 +5982,41 @@ final class Renderer: NSObject, MTKViewDelegate {
         case UInt32(MDTBBlockKindMixedUse):
             return "mixed-use"
         default:
-            return "hub"
+            return "civic hub"
+        }
+    }
+
+    private static func roadClassLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBRoadClassAvenue):
+            return "avenue"
+        case UInt32(MDTBRoadClassBoulevard):
+            return "boulevard"
+        case UInt32(MDTBRoadClassConnector):
+            return "connector"
+        default:
+            return "residential street"
+        }
+    }
+
+    private static func corridorLabel(_ value: UInt32) -> String {
+        switch value {
+        case UInt32(MDTBCorridorArlingtonAve):
+            return "Arlington Ave"
+        case UInt32(MDTBCorridorWesternAve):
+            return "Western Ave"
+        case UInt32(MDTBCorridorVermontAve):
+            return "Vermont Ave"
+        case UInt32(MDTBCorridorAdamsBlvd):
+            return "Adams Blvd"
+        case UInt32(MDTBCorridorJeffersonBlvd):
+            return "Jefferson Blvd"
+        case UInt32(MDTBCorridorExpositionBlvd):
+            return "Exposition Blvd"
+        case UInt32(MDTBCorridorMartinLutherKingBlvd):
+            return "Martin Luther King Jr Blvd"
+        default:
+            return "Crenshaw Blvd"
         }
     }
 
