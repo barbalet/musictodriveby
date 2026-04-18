@@ -2,9 +2,9 @@
 
 ## Description
 
-MusicToDriveBy is a first and third person perspective suburban environment generator allowing player to move from first person perspective to third person perspective while being on foot, on bicycle, on motorcycle, moped or car. The game also allows for melee weapon use including rocks, knives, machetes, pistols, revolvers, rifles, sawn off shot guns, shot guns, AK47s and M16s with the related caliber bullets, shotgun shells and rifle cartridges and clips.
+MusicToDriveBy is a first and third person perspective open-world Los Angeles environment generator allowing player to move from first person perspective to third person perspective while being on foot, on bicycle, on motorcycle, moped or car. The game also allows for melee weapon use including rocks, knives, machetes, pistols, revolvers, rifles, sawn off shot guns, shot guns, AK47s and M16s with the related caliber bullets, shotgun shells and rifle cartridges and clips.
 
-The environment is  South Central Los Angeles with the gangs identified:
+The environment is the full Los Angeles gang-map footprint identified here:
 
 https://www.google.com/maps/d/u/0/viewer?mid=1ul5yqMj7_JgM5xpfOn5gtlO-bTk&ll=33.98203848816218%2C-118.45161449214874&z=9
 
@@ -12,14 +12,14 @@ The game is aesthetically similar to the Grand Theft Auto series of first and th
 
 The game is written in Metal with SwiftUI and a C engine core.
 
-Please plan for the cycles needed to create this game allowing for 100 cycles or so until completion.
+Please plan for the cycles needed to create this game allowing for 125 cycles or so until completion.
 
 ### Current Cycle 
 
-55
+56
 
-Cycle 54 was completed on April 17, 2026.
-See `docs/cycles/cycle-54.md` for the cycle report.
+Cycle 55 was completed on April 18, 2026.
+See `docs/cycles/cycle-55.md` for the cycle report.
 
 ### Cycle Plan
 
@@ -161,7 +161,7 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - Add world partitioning for distant skyline layers, district silhouettes, freeway signage, tree lines, traffic density and pedestrian density at scale.
 - Profile CPU, GPU, memory and bandwidth around realistic asset density rather than around graybox assumptions.
 - Ensure that road continuity, district continuity and mission continuity survive long-distance traversal without visible seams or pop-in that would break immersion.
-- Milestone: end this phase with a stable large-world traversal alpha that can cross a substantial Los Angeles-inspired area at professional visual quality.
+- Milestone: end this phase with a stable large-world traversal alpha that can cross a substantial portion of the linked Los Angeles gang-map footprint at professional visual quality.
 
 **Cycles 75-79: Character, vehicle and traffic visual uplift**
 
@@ -190,18 +190,59 @@ The first goal is not full content coverage. The first goal is a playable vertic
 **Cycles 90-94: Professional UX, polish and certification-level hardening**
 
 - Rework HUD, pause, map, settings, onboarding and accessibility so the presentation quality matches the improved world.
-- Add a polished world map that reflects the larger Los Angeles-inspired road coverage, district naming and mission routing.
+- Add a polished world map that reflects the larger linked Los Angeles gang-map road coverage, district naming and mission routing.
 - Run focused polish passes on collision, AI navigation, streaming edges, mission handoffs, vehicle routing, spawn masking and save stability in the realistic large world.
 - Capture benchmark visual targets and close the gap between in-engine results and the intended professional-quality bar.
 - Milestone: end this phase with a beta-quality build that looks, feels and navigates like a professional open-world game slice.
 
-**Cycles 95-99: Final world polish, optimization and ship readiness**
+**Cycles 95-99: Regional beta foundation and full-map production prep**
 
-- Eliminate the remaining prototype-looking assets, flat lighting cases, blocky silhouettes, weak skyline reads and immersion-breaking seams.
-- Optimize for stable long-session traversal across the many-mile map on target hardware with realistic traffic, pedestrians, lighting and mission activity active.
-- Finalize bug burn-down for traversal, combat, traffic, streaming, save/load, UI, mission flow and district presentation.
-- Prepare release-quality capture, documentation, credits and packaging only after the in-game quality bar is met.
-- Make the final ship or continued-production call based on whether the game now meets a professional visual standard, not merely on feature completeness.
+- Lock the streaming, save, mission, routing, and profiling foundations needed to expand from a high-quality many-mile slice to the full linked Los Angeles gang-map footprint.
+- Eliminate the remaining blockers that would make a whole-map build unstable, including hitching under longer routes, weak world-map readability, fragile encounter persistence, and district-to-district seam issues.
+- Convert the current “beta-quality slice” goal into a “beta-quality regional foundation” goal so the team is not pretending the project is done while large portions of the required city footprint are still missing.
+- End this phase with a stable regional build that proves the current toolchain can scale to full-map production instead of stopping at a limited-area ship candidate.
+
+**Post-cycle-99 scope expansion**
+
+- The previous 100-cycle plan assumed that a high-quality large-world slice might be enough to call the game complete.
+- That is no longer the bar. The linked Los Angeles gang map is now the required playable footprint, not just a thematic guide.
+- The next 25 cycles are reserved for full-map reconstruction, whole-city realism, and ship-quality finishing across the entire represented Los Angeles area.
+- No district that still reads as blockout, no major corridor that is still schematic, and no obviously placeholder vehicle, character, or streetscape element counts as acceptable completion.
+
+**Cycles 100-104: Full gang-map geo coverage and corridor completion**
+
+- Ingest or reconstruct the entire linked Los Angeles gang-map footprint into production-ready world partitions, corridor classes, district definitions, and route metadata instead of stopping at a representative subset.
+- Complete continuous major-road, arterial, freeway, alley, frontage-road, and neighborhood-connector coverage across the whole required map so long-distance travel reflects the real city-scale layout.
+- Extend street naming, district naming, map overlays, encounter zoning, and mission-routing hooks across the full playable footprint so the app can reason about the whole map coherently.
+- Deliver a build where the entire gang-map extent is navigable as a connected Los Angeles road skeleton rather than as a premium core surrounded by missing space.
+
+**Cycles 105-109: Full-map parcel, block, and building reconstruction**
+
+- Replace remaining large-form block placeholders across the full map with parcel-aware lot subdivision, realistic block depth, district-specific setbacks, parking logic, and alley or service conditions.
+- Build production neighborhood kits for the major residential, mixed-use, commercial, civic, industrial, and freeway-edge patterns needed across the whole linked map footprint.
+- Push skyline, block massing, curb furniture, fencing, retaining walls, transit edges, and streetscape density until no major district still reads as broad box composition from street level or from driving speed.
+- Milestone: end this phase with the full Los Angeles gang-map footprint reading like a constructed city fabric instead of a partly dressed road skeleton.
+
+**Cycles 110-114: Whole-city simulation, faction deployment, and mission geography**
+
+- Scale traffic, pedestrian life, ambient behaviors, gang territory presence, mission anchors, and district-specific encounter logic across the full world so the complete map feels inhabited instead of only the original core.
+- Re-author faction boundaries, social pressure, mission routes, and traversal beats to align with the entire linked gang map rather than with only the initial South Los Angeles slice.
+- Harden AI navigation, pathfinding costs, spawn masking, and long-route continuity so systems remain believable across many-mile cross-city travel.
+- Deliver a build where the entire required Los Angeles footprint supports free roam, systemic pressure, and mission geography without collapsing into sparse filler between hero zones.
+
+**Cycles 115-119: Full-map art consistency and professional presentation**
+
+- Unify lighting, materials, decals, vegetation, weathering, signage, skyline layering, atmosphere, and district visual identity across the entire map so quality does not drop outside a few polished corridors.
+- Remove the remaining blocky or obviously placeholder forms in buildings, props, vehicles, characters, sidewalks, medians, and roadway edges until the whole city can hold up to close camera framing.
+- Finish the professional world-map, navigation, HUD, and presentation passes so the user experience matches the scale and fidelity of the enlarged Los Angeles world.
+- Milestone: end this phase with a content-complete, professional-quality full-map city pass that covers the whole linked gang-map footprint.
+
+**Cycles 120-124: Final optimization, QA, and ship readiness for the full Los Angeles map**
+
+- Optimize long-session play across the entire world for streaming stability, memory use, GPU cost, traffic load, pedestrian load, and systemic mission activity on target hardware.
+- Run final bug burn-down for traversal, combat, AI, traffic, streaming, save or load, UI, territory logic, and mission continuity at full-map scale instead of only around a smaller representative slice.
+- Capture and compare the game against professional visual and technical targets, and keep cutting weak spots until the whole city meets the bar rather than only the strongest districts.
+- Prepare release-quality capture, documentation, credits, packaging, and final ship review only after the full linked Los Angeles world meets the realism and professionalism requirements.
 
 **Milestone gates**
 
@@ -210,8 +251,12 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - End of Cycle 59: many-mile Los Angeles road foundation in place
 - End of Cycle 74: large-world traversal alpha at production visual density
 - End of Cycle 89: content-complete realistic city pass
-- End of Cycle 94: beta-quality professional world slice
-- End of Cycle 99: ship target or disciplined continuation based on quality bar
+- End of Cycle 94: beta-quality professional regional world slice
+- End of Cycle 99: stable regional beta foundation for full-map production
+- End of Cycle 104: full linked gang-map road and district coverage in engine
+- End of Cycle 109: full-map parcel and building reconstruction baseline
+- End of Cycle 119: content-complete professional full-map city pass
+- End of Cycle 124: ship target or disciplined continuation based on full-map quality bar
 
 ### Build And Run
 
@@ -290,9 +335,12 @@ The first goal is not full content coverage. The first goal is a playable vertic
 - Compare a civic retail block, a transit-market block, a residential court block, and a service-spur block and confirm the shopfront band, furniture lane, shelter setback, and rear-edge spacing no longer sit on one universal frontage depth.
 - Move between western tiles and southern tiles while watching those same frontage types and confirm the chunk or corridor bias now nudges awning span, planter size, rear fence depth, and loading-zone offset instead of every block face reusing the same storefront kit.
 - Check the service-spur mixed-use blocks specifically and confirm the painted loading zones, curb furniture, and rear fence line now stay coordinated with the service frontage profile instead of floating on the old fixed offsets.
+- Walk past ambient pedestrians, the witness, the bystander, and the territory edge agents in third person and confirm they now read with shoulders, separate legs, arms, necks, and heads instead of the older stacked-box mannequin silhouette.
+- Compare staged traffic, ambient traffic, and parked street cars and confirm the bodies now taper into hood, cabin, and roof layers instead of reading as two rectangular slabs.
+- Stop beside a coupe, sedan, bike, or motorcycle and confirm the wheels now read as layered rounded tires with visible hubs rather than as single cube blocks.
 - Treat this whole pass as the first post-milestone faction check: traversal, staged vehicle escape, lane combat, civilian spillover, traffic easing, normalization, reopening, territory crossing, and hot re-entry should now read as one socially structured graybox slice instead of a neutral sandbox.
 
-The current prototype is a macOS graybox sixteen-block Los Angeles reference grid with four authored streaming tiles, named district metadata, named arterial and avenue corridor metadata, shared road-spine descriptors plus road-class cross-section profiles that now drive road surfaces, curb width, sidewalk depth, lane markings, lane pull, and ground queries from the same metadata, explicit corridor and world-chunk descriptor tables that now steer intersection spacing and block-edge treatment, a frontage descriptor layer that now blends frontage template with corridor and chunk bias for shopfront setback, furniture lane spacing, transit-stop stand-off, rear fence depth, awning span, and service loading-zone placement, boulevard-versus-avenue street treatment, intersection-aware crosswalk or stop-bar spacing, corner plaza pads, signal setbacks, and boulevard refuge islands, clearer service-lane loading-zone readouts in the spur blocks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, staged sedan, coupe, moped, bicycle, and motorcycle handoffs with ranked selection cues and lock controls, and an expanding combat scaffold that now includes a lead-pipe pickup, a pistol pickup, weapon-slot switching, ammo and reload state, muzzle and impact feedback, cover-aware firearm blocking, a lookout hostile that can return fire, pressure-anchor-driven hostile repositioning, two authored civilian reaction sources around the lane, ambient pedestrians that can peel away from live incidents, a lightweight hostile last-seen search state, a persistent street-incident layer that spills into the nearest adjacent road links, a distinct street-reopening handoff after normalization, warmer spillover and cooler normalization/reopening ambient-link feedback, and the first faction-territory scaffolding with a readable court-set boundary at the lane mouth, claimed-turf readouts inside the block, a visible court-set sidewalk runner, a second ambient inner post replacing the old deep marker, simple runner-to-post handoff rules, a clearer sidewalk screening beat before full territory commitment, a brief complementary clamp at the boundary when the player hesitates, a lightweight clear-line beat once the inner post or lookout fully owns pressure, a lightweight reform/re-approach beat when the player backs out, a lightweight harden/brace beat when the player recommits during reform, a lightweight lane-mouth commit window once that hardened line is live, a short push-through objective progress and completion beat without a separate mission panel, a tiny follow-through resolve after the line break where the player can either briefly hold the pocket or pull out cleanly, distinct short aftermaths for those two outcomes, a short next-pass memory after each one, a slightly richer edge texture on those returns where held pockets can show a softer reclaim feint before the deeper pocket commits and clean pullouts can throw an earlier edge challenge before recommitting through the mouth, a more active repeated-half-commit answer on top of that texture so shallow recommits and backing-off loops can keep the reclaim side baiting deeper pressure while the retake side hardens the mouth check sooner, a small positional answer on top of those edge beats so the runner can counter-step off the softer mouth while the inner post turns the deeper angle and the retake side can cross-angle the lane mouth before the heavier recommit lands, and now a lightweight remembered shoulder on top of that so repeated left/right approaches can bias which side of the mouth the runner and post answer through on reclaim and retake returns, with that same shoulder now carrying farther through deeper reclaim handoffs and edge reseals instead of flattening back into a neutral follow-through, leaning the lookout anchor plus the broader street/search response toward that same shoulder during held-pocket reclaim and clean-pullout reseal, staying readable through normalization, reopening, and hot re-entry instead of dropping that shoulder memory as soon as the lane cools, pulling reopening spillback plus runner/post boundary reform toward that same shoulder so the block does not reopen from a generic center, leaving a softer same-shoulder late fallback behind after reopening fades so the next quiet line watch does not reset from a neutral default, carrying that remembered shoulder into the first fully cold screen or clamp so the next fresh boundary catch does not snap back to center either, letting that same carry survive one beat earlier into the first neutral outside watch before the colder screen or clamp forms, and now letting it survive one beat earlier again into the runner’s first far-out drift off idle before that outside watch fully forms. The in-scene combat HUD now carries both that territory state and a dedicated map card with district, tile, and corridor readouts alongside the street/system card, so player health, recovery, systemic pressure, faction presence, sidewalk watch, entry screen, entry clamp, clear-line handoff, reform, hardening, commit window, line break, hold-versus-pullout resolve, pocket reclaim, edge retake, reclaim return, reclaim feint, reclaim commit, retake return, edge challenge, retake commit, territory crossing, hostile escalation, and named world context can be read together instead of as unrelated debug fragments. Use the on-screen overlay and the floating controls window together for controls, chunk visibility, staged vehicle prompts, combat state, street pressure, traffic reaction, civilian reaction, territory heat, watch, patrol alert, inner-post alert, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
+The current prototype is a macOS graybox sixteen-block Los Angeles reference grid with four authored streaming tiles, named district metadata, named arterial and avenue corridor metadata, shared road-spine descriptors plus road-class cross-section profiles that now drive road surfaces, curb width, sidewalk depth, lane markings, lane pull, and ground queries from the same metadata, explicit corridor and world-chunk descriptor tables that now steer intersection spacing and block-edge treatment, a frontage descriptor layer that now blends frontage template with corridor and chunk bias for shopfront setback, furniture lane spacing, transit-stop stand-off, rear fence depth, awning span, and service loading-zone placement, boulevard-versus-avenue street treatment, intersection-aware crosswalk or stop-bar spacing, corner plaza pads, signal setbacks, and boulevard refuge islands, clearer service-lane loading-zone readouts in the spur blocks, frontage-template-driven block variants, hotspot hooks, engine-exported traffic occupancy hooks, route-aware placeholder traffic with stop-zone holds and early near-miss hazard pulses, staged sedan, coupe, moped, bicycle, and motorcycle handoffs with ranked selection cues and lock controls, richer non-player civilian and patrol silhouettes with layered shoulders, torsos, arms, legs, necks, and heads instead of simple stacked-box mannequins, and a broader vehicle form pass that now gives staged, ambient, and parked traffic more believable hood, cabin, roof, and rounded-wheel layering rather than two-box car bodies. The combat scaffold still includes a lead-pipe pickup, a pistol pickup, weapon-slot switching, ammo and reload state, muzzle and impact feedback, cover-aware firearm blocking, a lookout hostile that can return fire, pressure-anchor-driven hostile repositioning, two authored civilian reaction sources around the lane, ambient pedestrians that can peel away from live incidents, a lightweight hostile last-seen search state, a persistent street-incident layer that spills into the nearest adjacent road links, a distinct street-reopening handoff after normalization, warmer spillover and cooler normalization/reopening ambient-link feedback, and the first faction-territory scaffolding with a readable court-set boundary at the lane mouth, claimed-turf readouts inside the block, a visible court-set sidewalk runner, a second ambient inner post replacing the old deep marker, simple runner-to-post handoff rules, a clearer sidewalk screening beat before full territory commitment, a brief complementary clamp at the boundary when the player hesitates, a lightweight clear-line beat once the inner post or lookout fully owns pressure, a lightweight reform/re-approach beat when the player backs out, a lightweight harden/brace beat when the player recommits during reform, a lightweight lane-mouth commit window once that hardened line is live, a short push-through objective progress and completion beat without a separate mission panel, a tiny follow-through resolve after the line break where the player can either briefly hold the pocket or pull out cleanly, distinct short aftermaths for those two outcomes, a short next-pass memory after each one, a slightly richer edge texture on those returns where held pockets can show a softer reclaim feint before the deeper pocket commits and clean pullouts can throw an earlier edge challenge before recommitting through the mouth, a more active repeated-half-commit answer on top of that texture so shallow recommits and backing-off loops can keep the reclaim side baiting deeper pressure while the retake side hardens the mouth check sooner, a small positional answer on top of those edge beats so the runner can counter-step off the softer mouth while the inner post turns the deeper angle and the retake side can cross-angle the lane mouth before the heavier recommit lands, and now a lightweight remembered shoulder on top of that so repeated left/right approaches can bias which side of the mouth the runner and post answer through on reclaim and retake returns, with that same shoulder now carrying farther through deeper reclaim handoffs and edge reseals instead of flattening back into a neutral follow-through, leaning the lookout anchor plus the broader street/search response toward that same shoulder during held-pocket reclaim and clean-pullout reseal, staying readable through normalization, reopening, and hot re-entry instead of dropping that shoulder memory as soon as the lane cools, pulling reopening spillback plus runner/post boundary reform toward that same shoulder so the block does not reopen from a generic center, leaving a softer same-shoulder late fallback behind after reopening fades so the next quiet line watch does not reset from a neutral default, carrying that remembered shoulder into the first fully cold screen or clamp so the next fresh boundary catch does not snap back to center either, letting that same carry survive one beat earlier into the first neutral outside watch before the colder screen or clamp forms, and now letting it survive one beat earlier again into the runner’s first far-out drift off idle before that outside watch fully forms. The in-scene combat HUD now carries both that territory state and a dedicated map card with district, tile, and corridor readouts alongside the street/system card, so player health, recovery, systemic pressure, faction presence, sidewalk watch, entry screen, entry clamp, clear-line handoff, reform, hardening, commit window, line break, hold-versus-pullout resolve, pocket reclaim, edge retake, reclaim return, reclaim feint, reclaim commit, retake return, edge challenge, retake commit, territory crossing, hostile escalation, and named world context can be read together instead of as unrelated debug fragments. Use the on-screen overlay and the floating controls window together for controls, chunk visibility, staged vehicle prompts, combat state, street pressure, traffic reaction, civilian reaction, territory heat, watch, patrol alert, inner-post alert, handoff ranking and lock state, grip, lane, bump, recovery, hazard feedback, and active block metadata.
 
 ### Any questions ###
 

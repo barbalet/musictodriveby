@@ -6372,20 +6372,142 @@ static void push_signal_pole(float x, float z) {
     );
 }
 
-static void push_parked_car(float x, float z, float half_x, float half_z, MDTBFloat4 color) {
+static void push_parked_car_wheel(float x, float y, float z, float half_x, float radius, float half_z, MDTBFloat4 tire_color, MDTBFloat4 rim_color) {
+    const float cap_y_offset = radius * 0.54f;
+    const float side_z_offset = half_z * 0.44f;
+
     push_prop(
-        make_float3(x, 0.52f, z),
-        make_float3(half_x, 0.52f, half_z),
+        make_float3(x, y, z),
+        make_float3(half_x, radius * 0.42f, half_z * 0.76f),
+        tire_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + cap_y_offset, z),
+        make_float3(half_x * 0.92f, radius * 0.16f, half_z * 0.54f),
+        tire_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y - cap_y_offset, z),
+        make_float3(half_x * 0.92f, radius * 0.16f, half_z * 0.54f),
+        tire_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z + side_z_offset),
+        make_float3(half_x * 0.88f, radius * 0.28f, half_z * 0.22f),
+        tire_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z - side_z_offset),
+        make_float3(half_x * 0.88f, radius * 0.28f, half_z * 0.22f),
+        tire_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z),
+        make_float3(half_x * 0.56f, radius * 0.18f, half_z * 0.34f),
+        rim_color,
+        0
+    );
+}
+
+static void push_parked_car(float x, float z, float half_x, float half_z, MDTBFloat4 color) {
+    const MDTBFloat4 glass_color = make_float4(0.68f, 0.75f, 0.82f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.13f, 0.15f, 0.17f, 1.0f);
+    const MDTBFloat4 tire_color = make_float4(0.09f, 0.10f, 0.11f, 1.0f);
+    const MDTBFloat4 rim_color = make_float4(0.55f, 0.59f, 0.64f, 1.0f);
+    const float wheel_x = half_x * 0.62f;
+    const float wheel_z = half_z * 0.62f;
+    const float wheel_radius = 0.32f;
+    const float wheel_half_z = 0.16f;
+
+    push_prop(
+        make_float3(x, 0.20f, z + 0.04f),
+        make_float3(half_x * 0.94f, 0.14f, half_z * 0.86f),
+        make_float4(color.x * 0.74f, color.y * 0.74f, color.z * 0.74f, 1.0f),
+        1
+    );
+
+    push_prop(
+        make_float3(x, 0.40f, z + 0.02f),
+        make_float3(half_x, 0.20f, half_z * 0.80f),
         color,
         1
     );
 
     push_prop(
-        make_float3(x, 0.98f, z),
-        make_float3(half_x * 0.55f, 0.34f, half_z * 0.72f),
+        make_float3(x, 0.58f, z + half_z * 0.48f),
+        make_float3(half_x * 0.82f, 0.14f, half_z * 0.30f),
+        make_float4(color.x * 0.90f, color.y * 0.90f, color.z * 0.90f, 1.0f),
+        0
+    );
+
+    push_prop(
+        make_float3(x, 0.56f, z - half_z * 0.54f),
+        make_float3(half_x * 0.78f, 0.12f, half_z * 0.24f),
+        make_float4(color.x * 0.78f, color.y * 0.78f, color.z * 0.78f, 1.0f),
+        0
+    );
+
+    push_prop(
+        make_float3(x, 0.78f, z - half_z * 0.04f),
+        make_float3(half_x * 0.58f, 0.18f, half_z * 0.44f),
         make_float4(color.x * 0.88f, color.y * 0.88f, color.z * 0.88f, 1.0f),
         0
     );
+
+    push_prop(
+        make_float3(x, 1.00f, z - half_z * 0.10f),
+        make_float3(half_x * 0.42f, 0.10f, half_z * 0.20f),
+        make_float4(color.x * 0.72f, color.y * 0.72f, color.z * 0.72f, 1.0f),
+        0
+    );
+
+    push_prop(
+        make_float3(x - half_x * 0.56f, 0.84f, z - half_z * 0.02f),
+        make_float3(0.08f, 0.12f, half_z * 0.48f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x + half_x * 0.56f, 0.84f, z - half_z * 0.02f),
+        make_float3(0.08f, 0.12f, half_z * 0.48f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.86f, z + half_z * 0.34f),
+        make_float3(half_x * 0.40f, 0.10f, half_z * 0.10f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.84f, z - half_z * 0.46f),
+        make_float3(half_x * 0.34f, 0.09f, half_z * 0.10f),
+        glass_color,
+        0
+    );
+
+    push_prop(
+        make_float3(x, 0.30f, z + half_z * 0.90f),
+        make_float3(half_x * 0.70f, 0.06f, 0.08f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.30f, z - half_z * 0.88f),
+        make_float3(half_x * 0.70f, 0.06f, 0.08f),
+        trim_color,
+        0
+    );
+
+    push_parked_car_wheel(x - wheel_x, wheel_radius + 0.06f, z + wheel_z, 0.12f, wheel_radius, wheel_half_z, tire_color, rim_color);
+    push_parked_car_wheel(x + wheel_x, wheel_radius + 0.06f, z + wheel_z, 0.12f, wheel_radius, wheel_half_z, tire_color, rim_color);
+    push_parked_car_wheel(x - wheel_x, wheel_radius + 0.06f, z - wheel_z, 0.12f, wheel_radius, wheel_half_z, tire_color, rim_color);
+    push_parked_car_wheel(x + wheel_x, wheel_radius + 0.06f, z - wheel_z, 0.12f, wheel_radius, wheel_half_z, tire_color, rim_color);
 }
 
 static void push_bollard(float x, float z, float height) {

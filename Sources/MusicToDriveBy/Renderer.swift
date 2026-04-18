@@ -124,14 +124,15 @@ private struct AmbientFrame {
 @MainActor
 final class Renderer: NSObject, MTKViewDelegate {
     private static let dynamicVertexBudget = 512 * 36
+    private static let vertexGrowthStep = 256 * 36
     private static let vehicleMountRadius: Float = 3.6
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
     private let depthState: MTLDepthStencilState
-    private let vertexBuffer: MTLBuffer
-    private let maxVertexCount: Int
+    private var vertexBuffer: MTLBuffer
+    private var maxVertexCount: Int
     private let inputController: InputController
     private let staticSceneBoxes: [SceneStaticBox]
     private let blocks: [SceneBlock]
@@ -185,6 +186,24 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    }
+
+    private func ensureVertexCapacity(requiredCount: Int) -> Bool {
+        guard requiredCount > maxVertexCount else {
+            return true
+        }
+
+        let growthStep = max(Self.vertexGrowthStep, requiredCount - maxVertexCount)
+        let newCapacity = requiredCount + growthStep
+        guard let replacementBuffer = device.makeBuffer(length: MemoryLayout<Vertex>.stride * newCapacity, options: .storageModeShared) else {
+            assertionFailure("Unable to grow vertex buffer for frame requiring \(requiredCount) vertices.")
+            return false
+        }
+
+        replacementBuffer.label = "Graybox Scene"
+        vertexBuffer = replacementBuffer
+        maxVertexCount = newCapacity
+        return true
     }
 
     func draw(in view: MTKView) {
@@ -296,8 +315,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             publishDebugState(vehicleAnchors: vehicleAnchors, trafficOccupancies: trafficOccupancies, trafficHazard: ambientFrame.trafficHazard)
         }
 
-        if drawVertexCount > maxVertexCount {
-            preconditionFailure("Vertex budget exceeded for current frame.")
+        guard ensureVertexCapacity(requiredCount: drawVertexCount) else {
+            return
         }
 
         if !drawVertices.isEmpty {
@@ -1513,17 +1532,115 @@ final class Renderer: NSObject, MTKViewDelegate {
         return lhs + ((rhs - lhs) * t)
     }
 
-    private static func makePedestrianPlaceholderVertices(position: SIMD3<Float>, heading: Float, elapsedTime: Float, tint: SIMD4<Float>) -> [Vertex] {
-        let gaitPhase = elapsedTime * 3.2
-        let stride = sin(gaitPhase) * 0.11
-        let torsoYaw = heading + (sin(gaitPhase * 0.5) * 0.12)
+    private static func makeVehicleLocalPartVertices(position: SIMD3<Float>, localCenter: SIMD3<Float>, halfExtents: SIMD3<Float>, yaw: Float, color: SIMD4<Float>) -> [Vertex] {
+        makeActorPartVertices(
+            position: position,
+            localCenter: localCenter,
+            halfExtents: halfExtents,
+            bodyYaw: yaw,
+            partYaw: yaw,
+            color: color
+        )
+    }
+
+    private static func makeVehicleWheelVertices(position: SIMD3<Float>, yaw: Float, localCenter: SIMD3<Float>, axleHalfWidth: Float, radius: Float, treadHalfDepth: Float, tireColor: SIMD4<Float>, rimColor: SIMD4<Float>) -> [Vertex] {
+        let capYOffset = radius * 0.54
+        let sideZOffset = treadHalfDepth * 0.44
 
         return
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.04, 0.0), halfExtents: SIMD3<Float>(0.24, 0.02, 0.34), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.10, 0.11, 0.13, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, 0.0), halfExtents: SIMD3<Float>(0.20, 0.40, 0.14), bodyYaw: heading, partYaw: torsoYaw, color: tint) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.45, 0.02), halfExtents: SIMD3<Float>(0.14, 0.18, 0.14), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.76, 0.60, 0.49, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.10, 0.22, stride), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.14, 0.17, 0.21, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.10, 0.22, -stride), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.14, 0.17, 0.21, 1.0))
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter,
+                halfExtents: SIMD3<Float>(axleHalfWidth, radius * 0.42, treadHalfDepth * 0.76),
+                yaw: yaw,
+                color: tireColor
+            ) +
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter + SIMD3<Float>(0.0, capYOffset, 0.0),
+                halfExtents: SIMD3<Float>(axleHalfWidth * 0.92, radius * 0.16, treadHalfDepth * 0.54),
+                yaw: yaw,
+                color: tireColor
+            ) +
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter - SIMD3<Float>(0.0, capYOffset, 0.0),
+                halfExtents: SIMD3<Float>(axleHalfWidth * 0.92, radius * 0.16, treadHalfDepth * 0.54),
+                yaw: yaw,
+                color: tireColor
+            ) +
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter + SIMD3<Float>(0.0, 0.0, sideZOffset),
+                halfExtents: SIMD3<Float>(axleHalfWidth * 0.88, radius * 0.28, treadHalfDepth * 0.22),
+                yaw: yaw,
+                color: tireColor
+            ) +
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter - SIMD3<Float>(0.0, 0.0, sideZOffset),
+                halfExtents: SIMD3<Float>(axleHalfWidth * 0.88, radius * 0.28, treadHalfDepth * 0.22),
+                yaw: yaw,
+                color: tireColor
+            ) +
+            makeVehicleLocalPartVertices(
+                position: position,
+                localCenter: localCenter,
+                halfExtents: SIMD3<Float>(axleHalfWidth * 0.56, radius * 0.18, treadHalfDepth * 0.34),
+                yaw: yaw,
+                color: rimColor
+            )
+    }
+
+    private static func makeVehicleLightPairVertices(position: SIMD3<Float>, yaw: Float, lateralOffset: Float, localY: Float, localZ: Float, halfExtents: SIMD3<Float>, color: SIMD4<Float>) -> [Vertex] {
+        makeVehicleLocalPartVertices(
+            position: position,
+            localCenter: SIMD3<Float>(-lateralOffset, localY, localZ),
+            halfExtents: halfExtents,
+            yaw: yaw,
+            color: color
+        ) +
+        makeVehicleLocalPartVertices(
+            position: position,
+            localCenter: SIMD3<Float>(lateralOffset, localY, localZ),
+            halfExtents: halfExtents,
+            yaw: yaw,
+            color: color
+        )
+    }
+
+    private static func makePedestrianPlaceholderVertices(position: SIMD3<Float>, heading: Float, elapsedTime: Float, tint: SIMD4<Float>) -> [Vertex] {
+        let gaitPhase = elapsedTime * 3.2
+        let stride = sin(gaitPhase) * 0.12
+        let torsoYaw = heading + (sin(gaitPhase * 0.5) * 0.08)
+        let headYaw = torsoYaw + (sin(gaitPhase * 0.24) * 0.04)
+        let armSwing = sin(gaitPhase + (.pi * 0.5)) * 0.11
+        let shirtColor = animatedColor(tint, intensity: 0.90)
+        let shoulderColor = animatedColor(tint, intensity: 0.82)
+        let pantsColor = blendedColor(tint, SIMD4<Float>(0.11, 0.12, 0.15, 1.0), amount: 0.68)
+        let shoeColor = SIMD4<Float>(0.08, 0.09, 0.10, 1.0)
+        let skinColor = blendedColor(tint, SIMD4<Float>(0.82, 0.66, 0.54, 1.0), amount: 0.84)
+        let hairColor = blendedColor(tint, SIMD4<Float>(0.16, 0.14, 0.13, 1.0), amount: 0.90)
+
+        return
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.03, 0.02), halfExtents: SIMD3<Float>(0.18, 0.02, 0.28), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.10, 0.11, 0.13, 1.0)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.60, 0.0), halfExtents: SIMD3<Float>(0.18, 0.12, 0.11), bodyYaw: heading, partYaw: heading, color: pantsColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, -0.02), halfExtents: SIMD3<Float>(0.18, 0.20, 0.11), bodyYaw: heading, partYaw: torsoYaw, color: shirtColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.22, 0.02), halfExtents: SIMD3<Float>(0.23, 0.24, 0.12), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.48, 0.0), halfExtents: SIMD3<Float>(0.28, 0.06, 0.10), bodyYaw: heading, partYaw: torsoYaw, color: animatedColor(tint, intensity: 0.96)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.63, 0.0), halfExtents: SIMD3<Float>(0.07, 0.06, 0.06), bodyYaw: heading, partYaw: headYaw, color: skinColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.84, 0.02), halfExtents: SIMD3<Float>(0.15, 0.18, 0.14), bodyYaw: heading, partYaw: headYaw, color: skinColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 2.00, 0.0), halfExtents: SIMD3<Float>(0.16, 0.04, 0.12), bodyYaw: heading, partYaw: headYaw, color: hairColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.12, 0.40, stride * 0.42), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: pantsColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.12, 0.40, -stride * 0.42), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: pantsColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.11, 0.15, stride), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: heading, color: blendedColor(pantsColor, shoeColor, amount: 0.24)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.11, 0.15, -stride), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: heading, color: blendedColor(pantsColor, shoeColor, amount: 0.24)) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.11, 0.03, stride + 0.08), halfExtents: SIMD3<Float>(0.09, 0.03, 0.16), bodyYaw: heading, partYaw: heading, color: shoeColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.11, 0.03, -stride + 0.08), halfExtents: SIMD3<Float>(0.09, 0.03, 0.16), bodyYaw: heading, partYaw: heading, color: shoeColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.28, 1.22, -armSwing * 0.38), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.28, 1.22, armSwing * 0.38), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.30, 0.94, -armSwing * 0.74), halfExtents: SIMD3<Float>(0.06, 0.18, 0.06), bodyYaw: heading, partYaw: torsoYaw, color: skinColor) +
+            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.30, 0.94, armSwing * 0.74), halfExtents: SIMD3<Float>(0.06, 0.18, 0.06), bodyYaw: heading, partYaw: torsoYaw, color: skinColor)
     }
 
     private static func makeVehiclePlaceholderVertices(position: SIMD3<Float>, yaw: Float, elapsedTime: Float, tint: SIMD4<Float>, kind: UInt32, yieldIntensity: Float) -> [Vertex] {
@@ -1531,63 +1648,84 @@ final class Renderer: NSObject, MTKViewDelegate {
         let glassColor = SIMD4<Float>(0.70, 0.78, 0.84, 1.0)
         let trimColor = SIMD4<Float>(0.14, 0.16, 0.18, 1.0)
         let wheelColor = SIMD4<Float>(0.10, 0.11, 0.12, 1.0)
+        let rimColor = SIMD4<Float>(0.56, 0.60, 0.64, 1.0)
         let brakeGlow = 0.22 + yieldIntensity * 0.72
         let tailLightColor = SIMD4<Float>(0.62 + brakeGlow * 0.32, 0.10 + brakeGlow * 0.10, 0.10 + brakeGlow * 0.08, 1.0)
 
         switch kind {
         case UInt32(MDTBVehicleKindBicycle):
             return
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.62, position.z - 0.08), halfExtents: SIMD3<Float>(0.04, 0.14, 0.48), yaw: yaw, color: tint) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.78, position.z - 0.38), halfExtents: SIMD3<Float>(0.24, 0.03, 0.03), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.70, position.z + 0.08), halfExtents: SIMD3<Float>(0.18, 0.03, 0.03), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z + 0.10), halfExtents: SIMD3<Float>(0.04, 0.05, 0.08), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z - 0.54), halfExtents: SIMD3<Float>(0.22, 0.03, 0.03), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z + 0.76), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z - 0.88), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.72, position.z + 0.96), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.84, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.64, position.z - 1.00), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: tailLightColor)
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.36, 0.84), axleHalfWidth: 0.04, radius: 0.26, treadHalfDepth: 0.09, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.36, -0.90), axleHalfWidth: 0.04, radius: 0.26, treadHalfDepth: 0.09, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.64, -0.08), halfExtents: SIMD3<Float>(0.04, 0.14, 0.50), yaw: yaw, color: tint) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.72, 0.12), halfExtents: SIMD3<Float>(0.18, 0.03, 0.30), yaw: yaw, color: animatedColor(tint, intensity: 0.86)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.84, -0.22), halfExtents: SIMD3<Float>(0.20, 0.03, 0.03), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, 0.14), halfExtents: SIMD3<Float>(0.05, 0.05, 0.08), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, -0.56), halfExtents: SIMD3<Float>(0.22, 0.03, 0.03), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, 1.02), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.84, 1.0)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.66, -1.04), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: tailLightColor)
         case UInt32(MDTBVehicleKindCoupe):
             return
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.32, position.z), halfExtents: SIMD3<Float>(1.02, 0.32, 1.84), yaw: yaw, color: tint) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.62, position.z - 0.12), halfExtents: SIMD3<Float>(0.58, 0.20, 0.92), yaw: yaw, color: animatedColor(tint, intensity: 0.80)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.58, position.z + 0.78), halfExtents: SIMD3<Float>(0.52, 0.14, 0.08), yaw: yaw, color: glassColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.40, position.y + 0.24, position.z + 1.68), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.40, position.y + 0.24, position.z + 1.68), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.40, position.y + 0.24, position.z - 1.48), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.40, position.y + 0.24, position.z - 1.48), halfExtents: SIMD3<Float>(0.10, 0.10, 0.12), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.36, position.y + 0.42, position.z + 1.76), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.36, position.y + 0.42, position.z + 1.76), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.34, position.y + 0.40, position.z - 1.78), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: tailLightColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.34, position.y + 0.40, position.z - 1.78), halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), yaw: yaw, color: tailLightColor)
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.18, 0.04), halfExtents: SIMD3<Float>(0.98, 0.14, 1.66), yaw: yaw, color: animatedColor(tint, intensity: 0.74)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.38, 0.02), halfExtents: SIMD3<Float>(0.94, 0.18, 1.56), yaw: yaw, color: tint) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, 1.04), halfExtents: SIMD3<Float>(0.82, 0.14, 0.62), yaw: yaw, color: animatedColor(tint, intensity: 0.88)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.54, -1.12), halfExtents: SIMD3<Float>(0.80, 0.12, 0.56), yaw: yaw, color: animatedColor(tint, intensity: 0.76)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, -0.08), halfExtents: SIMD3<Float>(0.60, 0.18, 0.92), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.96, -0.18), halfExtents: SIMD3<Float>(0.42, 0.10, 0.42), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(-0.54, 0.78, -0.08), halfExtents: SIMD3<Float>(0.07, 0.12, 0.60), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.54, 0.78, -0.08), halfExtents: SIMD3<Float>(0.07, 0.12, 0.60), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.82, 0.64), halfExtents: SIMD3<Float>(0.42, 0.12, 0.18), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.82, -0.74), halfExtents: SIMD3<Float>(0.38, 0.10, 0.16), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, 1.72), halfExtents: SIMD3<Float>(0.74, 0.07, 0.09), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, -1.68), halfExtents: SIMD3<Float>(0.74, 0.07, 0.09), yaw: yaw, color: trimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.68, 0.34, 1.14), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.68, 0.34, 1.14), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.68, 0.34, -1.12), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.68, 0.34, -1.12), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.54, localY: 0.48, localZ: 1.80, halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.50, localY: 0.46, localZ: -1.78, halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), color: tailLightColor)
         case UInt32(MDTBVehicleKindMoped):
             return
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.26, position.z + 0.18), halfExtents: SIMD3<Float>(0.18, 0.20, 0.84), yaw: yaw, color: tint) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.60, position.z - 0.06), halfExtents: SIMD3<Float>(0.10, 0.10, 0.36), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.82, position.z - 0.48), halfExtents: SIMD3<Float>(0.42, 0.04, 0.04), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.76, position.z + 0.10), halfExtents: SIMD3<Float>(0.20, 0.04, 0.20), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z + 1.02), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.34, position.z - 1.00), halfExtents: SIMD3<Float>(0.14, 0.14, 0.14), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.54, position.z + 1.18), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.48, position.z - 1.12), halfExtents: SIMD3<Float>(0.06, 0.06, 0.03), yaw: yaw, color: tailLightColor)
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.38, 1.06), axleHalfWidth: 0.08, radius: 0.24, treadHalfDepth: 0.12, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.38, -1.00), axleHalfWidth: 0.08, radius: 0.24, treadHalfDepth: 0.12, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, 0.18), halfExtents: SIMD3<Float>(0.18, 0.20, 0.82), yaw: yaw, color: tint) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.58, -0.08), halfExtents: SIMD3<Float>(0.10, 0.10, 0.36), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.78, -0.52), halfExtents: SIMD3<Float>(0.42, 0.04, 0.04), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, 0.12), halfExtents: SIMD3<Float>(0.20, 0.04, 0.22), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.66, 0.22), halfExtents: SIMD3<Float>(0.08, 0.10, 0.18), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, 1.22), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.50, -1.14), halfExtents: SIMD3<Float>(0.06, 0.06, 0.03), yaw: yaw, color: tailLightColor)
         case UInt32(MDTBVehicleKindMotorcycle):
             return
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.30, position.z + 0.08), halfExtents: SIMD3<Float>(0.22, 0.22, 0.96), yaw: yaw, color: tint) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.68, position.z - 0.12), halfExtents: SIMD3<Float>(0.12, 0.12, 0.48), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.88, position.z - 0.56), halfExtents: SIMD3<Float>(0.46, 0.04, 0.04), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.82, position.z + 0.12), halfExtents: SIMD3<Float>(0.22, 0.05, 0.22), yaw: yaw, color: trimColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.42, position.z + 1.14), halfExtents: SIMD3<Float>(0.18, 0.18, 0.18), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.42, position.z - 1.08), halfExtents: SIMD3<Float>(0.18, 0.18, 0.18), yaw: yaw, color: wheelColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.62, position.z + 1.34), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.58, position.z - 1.20), halfExtents: SIMD3<Float>(0.07, 0.07, 0.03), yaw: yaw, color: tailLightColor)
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.42, 1.16), axleHalfWidth: 0.10, radius: 0.28, treadHalfDepth: 0.14, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.42, -1.08), axleHalfWidth: 0.10, radius: 0.28, treadHalfDepth: 0.14, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.34, 0.06), halfExtents: SIMD3<Float>(0.22, 0.22, 0.94), yaw: yaw, color: tint) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.70, -0.14), halfExtents: SIMD3<Float>(0.12, 0.12, 0.50), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.90, -0.56), halfExtents: SIMD3<Float>(0.46, 0.04, 0.04), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.84, 0.12), halfExtents: SIMD3<Float>(0.22, 0.05, 0.22), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.70, 0.20), halfExtents: SIMD3<Float>(0.10, 0.10, 0.26), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.64, 1.38), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.60, -1.22), halfExtents: SIMD3<Float>(0.07, 0.07, 0.03), yaw: yaw, color: tailLightColor)
         default:
             return
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.36, position.z), halfExtents: SIMD3<Float>(1.18, 0.36, 2.08), yaw: yaw, color: tint) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.74, position.z - 0.08), halfExtents: SIMD3<Float>(0.72, 0.26, 1.08), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x, position.y + 0.68, position.z + 0.88), halfExtents: SIMD3<Float>(0.62, 0.18, 0.08), yaw: yaw, color: glassColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.46, position.y + 0.44, position.z + 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.46, position.y + 0.44, position.z + 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x - 0.44, position.y + 0.42, position.z - 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: tailLightColor) +
-                makeWorldBoxVertices(center: SIMD3<Float>(position.x + 0.44, position.y + 0.42, position.z - 1.98), halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), yaw: yaw, color: tailLightColor)
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.20, 0.04), halfExtents: SIMD3<Float>(1.10, 0.15, 1.86), yaw: yaw, color: animatedColor(tint, intensity: 0.74)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.40, 0.02), halfExtents: SIMD3<Float>(1.06, 0.20, 1.78), yaw: yaw, color: tint) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.58, 1.10), halfExtents: SIMD3<Float>(0.92, 0.16, 0.72), yaw: yaw, color: animatedColor(tint, intensity: 0.88)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, -1.18), halfExtents: SIMD3<Float>(0.90, 0.14, 0.62), yaw: yaw, color: animatedColor(tint, intensity: 0.78)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.78, -0.04), halfExtents: SIMD3<Float>(0.68, 0.20, 1.08), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.02, -0.10), halfExtents: SIMD3<Float>(0.50, 0.11, 0.52), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(-0.62, 0.84, -0.04), halfExtents: SIMD3<Float>(0.08, 0.14, 0.76), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.62, 0.84, -0.04), halfExtents: SIMD3<Float>(0.08, 0.14, 0.76), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.88, 0.72), halfExtents: SIMD3<Float>(0.50, 0.12, 0.18), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.88, -0.86), halfExtents: SIMD3<Float>(0.44, 0.10, 0.18), yaw: yaw, color: glassColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.32, 1.92), halfExtents: SIMD3<Float>(0.82, 0.08, 0.10), yaw: yaw, color: trimColor) +
+                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.32, -1.88), halfExtents: SIMD3<Float>(0.82, 0.08, 0.10), yaw: yaw, color: trimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.76, 0.36, 1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.76, 0.36, 1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.76, 0.36, -1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.76, 0.36, -1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
+                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.62, localY: 0.48, localZ: 2.02, halfExtents: SIMD3<Float>(0.14, 0.08, 0.04), color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
+                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.60, localY: 0.46, localZ: -1.98, halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), color: tailLightColor)
         }
     }
 
