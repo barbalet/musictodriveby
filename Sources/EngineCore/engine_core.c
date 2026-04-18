@@ -158,6 +158,9 @@ static const MDTBCorridorDescriptor *corridor_descriptor_for_axis_coordinate(uin
 static MDTBIntersectionProfile intersection_profile_for_block(const MDTBBlockDescriptor *block);
 static const MDTBFrontageDescriptor *frontage_descriptor_for_template(uint32_t frontage_template);
 static MDTBFrontageProfile frontage_profile_for_block(const MDTBBlockDescriptor *block);
+static MDTBFloat4 road_surface_color_for_class(uint32_t road_class);
+static MDTBFloat4 curb_surface_color_for_class(uint32_t road_class);
+static MDTBFloat4 sidewalk_surface_color_for_class(uint32_t road_class);
 static MDTBFloat3 view_forward(float yaw, float pitch);
 static MDTBFloat3 normalize_flat(MDTBFloat3 value);
 static MDTBFloat3 vehicle_forward_flat(float heading);
@@ -6297,10 +6300,129 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
     }
 }
 
+static void push_prop(MDTBFloat3 center, MDTBFloat3 half_extents, MDTBFloat4 color, int is_solid);
+
+static MDTBFloat4 scaled_color(MDTBFloat4 color, float scale) {
+    return make_float4(
+        clampf(color.x * scale, 0.0f, 1.0f),
+        clampf(color.y * scale, 0.0f, 1.0f),
+        clampf(color.z * scale, 0.0f, 1.0f),
+        color.w
+    );
+}
+
+static MDTBFloat4 blended_color(MDTBFloat4 lhs, MDTBFloat4 rhs, float amount) {
+    const float t = clampf(amount, 0.0f, 1.0f);
+    return make_float4(
+        lhs.x + ((rhs.x - lhs.x) * t),
+        lhs.y + ((rhs.y - lhs.y) * t),
+        lhs.z + ((rhs.z - lhs.z) * t),
+        lhs.w + ((rhs.w - lhs.w) * t)
+    );
+}
+
 static void push_building(MDTBFloat3 center, MDTBFloat3 half_extents, MDTBFloat4 color) {
+    const MDTBFloat4 plinth_color = scaled_color(color, 0.72f);
+    const MDTBFloat4 parapet_color = scaled_color(color, 1.08f);
+    const MDTBFloat4 trim_color = blended_color(color, make_float4(0.74f, 0.76f, 0.78f, 1.0f), 0.24f);
+    const MDTBFloat4 glass_color = blended_color(color, make_float4(0.70f, 0.80f, 0.88f, 1.0f), 0.42f);
     const MDTBBox box = make_box(center, half_extents, color);
+    const float plinth_half_y = fminf(0.18f, half_extents.y * 0.12f);
+    const float parapet_half_y = fminf(0.12f, half_extents.y * 0.08f + 0.04f);
+    const float belt_half_y = fminf(0.18f, half_extents.y * 0.10f);
+    const float front_window_half_x = fmaxf(half_extents.x * 0.62f, 0.52f);
+    const float side_window_half_z = fmaxf(half_extents.z * 0.52f, 0.52f);
+    const float trim_half_x = fmaxf(half_extents.x - 0.20f, 0.18f);
+    const float trim_half_z = fmaxf(half_extents.z - 0.20f, 0.18f);
+    const float corner_x = fmaxf(half_extents.x - 0.16f, 0.0f);
+    const float corner_z = fmaxf(half_extents.z - 0.16f, 0.0f);
+    const float column_half_y = fmaxf(half_extents.y - 0.22f, 0.30f);
+
     push_scene_box(box);
     push_collision_box(box);
+
+    push_prop(
+        make_float3(center.x, center.y - half_extents.y + plinth_half_y, center.z),
+        make_float3(half_extents.x + 0.10f, plinth_half_y, half_extents.z + 0.10f),
+        plinth_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x, center.y + half_extents.y + parapet_half_y, center.z),
+        make_float3(half_extents.x + 0.16f, parapet_half_y, half_extents.z + 0.16f),
+        parapet_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x, center.y + (half_extents.y * 0.10f), center.z + half_extents.z - 0.10f),
+        make_float3(front_window_half_x, belt_half_y, 0.05f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x, center.y + (half_extents.y * 0.10f), center.z - half_extents.z + 0.10f),
+        make_float3(front_window_half_x, belt_half_y, 0.05f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x + half_extents.x - 0.10f, center.y + (half_extents.y * 0.10f), center.z),
+        make_float3(0.05f, belt_half_y, side_window_half_z),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x - half_extents.x + 0.10f, center.y + (half_extents.y * 0.10f), center.z),
+        make_float3(0.05f, belt_half_y, side_window_half_z),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x, center.y + (half_extents.y * 0.58f), center.z + half_extents.z - 0.08f),
+        make_float3(trim_half_x, 0.05f, 0.03f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x, center.y + (half_extents.y * 0.58f), center.z - half_extents.z + 0.08f),
+        make_float3(trim_half_x, 0.05f, 0.03f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x + half_extents.x - 0.08f, center.y + (half_extents.y * 0.58f), center.z),
+        make_float3(0.03f, 0.05f, trim_half_z),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(center.x - half_extents.x + 0.08f, center.y + (half_extents.y * 0.58f), center.z),
+        make_float3(0.03f, 0.05f, trim_half_z),
+        trim_color,
+        0
+    );
+
+    if (corner_x > 0.0f && corner_z > 0.0f) {
+        push_prop(make_float3(center.x - corner_x, center.y, center.z - corner_z), make_float3(0.06f, column_half_y, 0.06f), parapet_color, 0);
+        push_prop(make_float3(center.x - corner_x, center.y, center.z + corner_z), make_float3(0.06f, column_half_y, 0.06f), parapet_color, 0);
+        push_prop(make_float3(center.x + corner_x, center.y, center.z - corner_z), make_float3(0.06f, column_half_y, 0.06f), parapet_color, 0);
+        push_prop(make_float3(center.x + corner_x, center.y, center.z + corner_z), make_float3(0.06f, column_half_y, 0.06f), parapet_color, 0);
+    }
+
+    if (half_extents.x > 2.2f && half_extents.z > 2.4f && half_extents.y > 1.8f) {
+        push_prop(
+            make_float3(center.x, center.y + half_extents.y + 0.34f, center.z - (half_extents.z * 0.12f)),
+            make_float3(fmaxf(half_extents.x * 0.18f, 0.32f), 0.18f, fmaxf(half_extents.z * 0.14f, 0.28f)),
+            scaled_color(color, 0.56f),
+            0
+        );
+        push_prop(
+            make_float3(center.x, center.y + half_extents.y + 0.58f, center.z - (half_extents.z * 0.12f)),
+            make_float3(fmaxf(half_extents.x * 0.22f, 0.40f), 0.04f, fmaxf(half_extents.z * 0.18f, 0.34f)),
+            trim_color,
+            0
+        );
+    }
 }
 
 static void push_prop(MDTBFloat3 center, MDTBFloat3 half_extents, MDTBFloat4 color, int is_solid) {
@@ -6330,46 +6452,462 @@ static void push_tree(float x, float z, float canopy_scale) {
 static void push_bench(float x, float z) {
     const MDTBFloat4 wood_color = make_float4(0.43f, 0.28f, 0.18f, 1.0f);
     const MDTBFloat4 metal_color = make_float4(0.24f, 0.25f, 0.28f, 1.0f);
+    const MDTBFloat4 slat_color = scaled_color(wood_color, 1.10f);
 
-    push_prop(make_float3(x, 0.42f, z), make_float3(0.62f, 0.08f, 0.24f), wood_color, 1);
-    push_prop(make_float3(x, 0.74f, z - 0.20f), make_float3(0.62f, 0.24f, 0.07f), wood_color, 1);
+    push_prop(make_float3(x, 0.36f, z), make_float3(0.62f, 0.04f, 0.06f), slat_color, 1);
+    push_prop(make_float3(x, 0.44f, z), make_float3(0.62f, 0.04f, 0.06f), slat_color, 1);
+    push_prop(make_float3(x, 0.52f, z), make_float3(0.62f, 0.04f, 0.06f), slat_color, 1);
+    push_prop(make_float3(x, 0.72f, z - 0.20f), make_float3(0.62f, 0.04f, 0.05f), wood_color, 1);
+    push_prop(make_float3(x, 0.82f, z - 0.18f), make_float3(0.62f, 0.04f, 0.05f), wood_color, 1);
+    push_prop(make_float3(x, 0.92f, z - 0.16f), make_float3(0.62f, 0.04f, 0.05f), wood_color, 1);
 
-    push_prop(make_float3(x - 0.42f, 0.24f, z), make_float3(0.06f, 0.24f, 0.06f), metal_color, 1);
-    push_prop(make_float3(x + 0.42f, 0.24f, z), make_float3(0.06f, 0.24f, 0.06f), metal_color, 1);
-    push_prop(make_float3(x - 0.40f, 0.52f, z - 0.18f), make_float3(0.05f, 0.26f, 0.05f), metal_color, 1);
-    push_prop(make_float3(x + 0.40f, 0.52f, z - 0.18f), make_float3(0.05f, 0.26f, 0.05f), metal_color, 1);
+    push_prop(make_float3(x - 0.44f, 0.24f, z), make_float3(0.05f, 0.24f, 0.05f), metal_color, 1);
+    push_prop(make_float3(x + 0.44f, 0.24f, z), make_float3(0.05f, 0.24f, 0.05f), metal_color, 1);
+    push_prop(make_float3(x - 0.42f, 0.54f, z - 0.18f), make_float3(0.04f, 0.30f, 0.04f), metal_color, 1);
+    push_prop(make_float3(x + 0.42f, 0.54f, z - 0.18f), make_float3(0.04f, 0.30f, 0.04f), metal_color, 1);
+    push_prop(make_float3(x - 0.30f, 0.50f, z - 0.06f), make_float3(0.03f, 0.18f, 0.03f), metal_color, 1);
+    push_prop(make_float3(x + 0.30f, 0.50f, z - 0.06f), make_float3(0.03f, 0.18f, 0.03f), metal_color, 1);
+    push_prop(make_float3(x, 0.54f, z - 0.02f), make_float3(0.50f, 0.03f, 0.03f), metal_color, 1);
 }
 
 static void push_planter(float x, float z, float size) {
-    push_prop(
-        make_float3(x, 0.28f, z),
-        make_float3(size, 0.28f, size),
-        make_float4(0.49f, 0.44f, 0.39f, 1.0f),
-        1
-    );
+    const MDTBFloat4 shell_color = make_float4(0.49f, 0.44f, 0.39f, 1.0f);
+    const MDTBFloat4 rim_color = scaled_color(shell_color, 1.10f);
+    const MDTBFloat4 soil_color = make_float4(0.22f, 0.16f, 0.11f, 1.0f);
+    const MDTBFloat4 leaf_color = make_float4(0.31f, 0.49f, 0.28f, 1.0f);
+    const float wall_half = fmaxf(size * 0.22f, 0.12f);
+    const float inset_size = fmaxf(size - wall_half - 0.04f, size * 0.38f);
 
     push_prop(
-        make_float3(x, 0.72f, z),
-        make_float3(size * 0.7f, 0.30f, size * 0.7f),
-        make_float4(0.31f, 0.49f, 0.28f, 1.0f),
+        make_float3(x, 0.28f, z),
+        make_float3(size, 0.14f, size),
+        shell_color,
+        1
+    );
+    push_prop(
+        make_float3(x - size + wall_half, 0.42f, z),
+        make_float3(wall_half, 0.14f, size),
+        shell_color,
+        1
+    );
+    push_prop(
+        make_float3(x + size - wall_half, 0.42f, z),
+        make_float3(wall_half, 0.14f, size),
+        shell_color,
+        1
+    );
+    push_prop(
+        make_float3(x, 0.42f, z - size + wall_half),
+        make_float3(size, 0.14f, wall_half),
+        shell_color,
+        1
+    );
+    push_prop(
+        make_float3(x, 0.42f, z + size - wall_half),
+        make_float3(size, 0.14f, wall_half),
+        shell_color,
+        1
+    );
+    push_prop(
+        make_float3(x, 0.58f, z),
+        make_float3(size + 0.04f, 0.04f, size + 0.04f),
+        rim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.62f, z),
+        make_float3(inset_size, 0.04f, inset_size),
+        soil_color,
+        0
+    );
+    push_prop(
+        make_float3(x - (inset_size * 0.28f), 0.84f, z - (inset_size * 0.12f)),
+        make_float3(inset_size * 0.34f, 0.24f, inset_size * 0.28f),
+        leaf_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (inset_size * 0.22f), 0.92f, z + (inset_size * 0.18f)),
+        make_float3(inset_size * 0.28f, 0.30f, inset_size * 0.26f),
+        scaled_color(leaf_color, 1.06f),
+        0
+    );
+    push_prop(
+        make_float3(x, 0.76f, z + (inset_size * 0.04f)),
+        make_float3(inset_size * 0.26f, 0.18f, inset_size * 0.20f),
+        scaled_color(leaf_color, 0.92f),
+        0
+    );
+}
+
+static void push_signal_head(float x, float y, float z, float facing_sign) {
+    const MDTBFloat4 backplate_color = make_float4(0.18f, 0.19f, 0.21f, 1.0f);
+    const MDTBFloat4 body_color = make_float4(0.21f, 0.22f, 0.24f, 1.0f);
+
+    push_prop(
+        make_float3(x, y, z - (facing_sign * 0.02f)),
+        make_float3(0.16f, 0.36f, 0.08f),
+        backplate_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y, z),
+        make_float3(0.12f, 0.30f, 0.06f),
+        body_color,
+        0
+    );
+    push_prop(
+        make_float3(x, y + 0.22f, z + (facing_sign * 0.08f)),
+        make_float3(0.07f, 0.05f, 0.02f),
+        make_float4(0.76f, 0.18f, 0.14f, 1.0f),
+        0
+    );
+    push_prop(
+        make_float3(x, y, z + (facing_sign * 0.08f)),
+        make_float3(0.07f, 0.05f, 0.02f),
+        make_float4(0.82f, 0.58f, 0.16f, 1.0f),
+        0
+    );
+    push_prop(
+        make_float3(x, y - 0.22f, z + (facing_sign * 0.08f)),
+        make_float3(0.07f, 0.05f, 0.02f),
+        make_float4(0.22f, 0.60f, 0.22f, 1.0f),
         0
     );
 }
 
 static void push_signal_pole(float x, float z) {
+    const MDTBFloat4 pole_color = make_float4(0.27f, 0.29f, 0.34f, 1.0f);
+    const MDTBFloat4 arm_color = make_float4(0.34f, 0.35f, 0.39f, 1.0f);
+    const MDTBFloat4 base_color = make_float4(0.48f, 0.48f, 0.46f, 1.0f);
+    const float arm_sign = (z > 0.0f) ? -1.0f : 1.0f;
+
+    push_prop(
+        make_float3(x, 0.10f, z),
+        make_float3(0.20f, 0.10f, 0.20f),
+        base_color,
+        1
+    );
     push_prop(
         make_float3(x, 1.15f, z),
         make_float3(0.08f, 1.15f, 0.08f),
-        make_float4(0.27f, 0.29f, 0.34f, 1.0f),
+        pole_color,
         1
+    );
+    push_prop(
+        make_float3(x, 0.28f, z),
+        make_float3(0.12f, 0.06f, 0.12f),
+        scaled_color(base_color, 0.86f),
+        0
+    );
+    push_prop(
+        make_float3(x - 0.14f, 1.46f, z - (arm_sign * 0.18f)),
+        make_float3(0.05f, 0.24f, 0.12f),
+        scaled_color(pole_color, 0.88f),
+        0
     );
 
     push_prop(
-        make_float3(x, 2.55f, z + ((z > 0.0f) ? -0.5f : 0.5f)),
-        make_float3(0.10f, 0.10f, 0.65f),
-        make_float4(0.34f, 0.35f, 0.39f, 1.0f),
+        make_float3(x, 2.55f, z + (arm_sign * 0.58f)),
+        make_float3(0.10f, 0.10f, 0.72f),
+        arm_color,
         0
     );
+    push_prop(
+        make_float3(x, 2.71f, z + (arm_sign * 0.24f)),
+        make_float3(0.09f, 0.05f, 0.38f),
+        scaled_color(arm_color, 1.08f),
+        0
+    );
+    push_prop(
+        make_float3(x, 2.32f, z + (arm_sign * 0.94f)),
+        make_float3(0.03f, 0.25f, 0.03f),
+        scaled_color(arm_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x - 0.34f, 2.34f, z + (arm_sign * 1.02f)),
+        make_float3(0.03f, 0.26f, 0.03f),
+        scaled_color(arm_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x + 0.34f, 2.34f, z + (arm_sign * 1.02f)),
+        make_float3(0.03f, 0.26f, 0.03f),
+        scaled_color(arm_color, 0.92f),
+        0
+    );
+    push_prop(
+        make_float3(x + 0.18f, 1.12f, z - (arm_sign * 0.12f)),
+        make_float3(0.06f, 0.16f, 0.10f),
+        scaled_color(pole_color, 0.84f),
+        0
+    );
+
+    push_signal_head(x - 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
+    push_signal_head(x + 0.34f, 2.00f, z + (arm_sign * 1.02f), arm_sign);
+    push_signal_head(x, 1.94f, z + (arm_sign * 0.40f), arm_sign);
+}
+
+static void push_utility_pole(float x, float z, int line_on_x_axis, float transformer_side) {
+    const MDTBFloat4 wood_color = make_float4(0.46f, 0.36f, 0.24f, 1.0f);
+    const MDTBFloat4 brace_color = make_float4(0.31f, 0.30f, 0.28f, 1.0f);
+    const MDTBFloat4 hardware_color = make_float4(0.66f, 0.65f, 0.62f, 1.0f);
+    const float arm_offset = 0.84f;
+    const float transformer_x = line_on_x_axis ? x : x + transformer_side * 0.28f;
+    const float transformer_z = line_on_x_axis ? z + transformer_side * 0.28f : z;
+
+    push_prop(
+        make_float3(x, 0.12f, z),
+        make_float3(0.22f, 0.12f, 0.22f),
+        scaled_color(brace_color, 0.84f),
+        1
+    );
+    push_prop(
+        make_float3(x, 2.16f, z),
+        make_float3(0.11f, 2.16f, 0.11f),
+        wood_color,
+        1
+    );
+    push_prop(
+        make_float3(x, 0.42f, z),
+        make_float3(0.15f, 0.06f, 0.15f),
+        scaled_color(wood_color, 0.82f),
+        0
+    );
+    push_prop(
+        make_float3(x, 3.92f, z),
+        line_on_x_axis ? make_float3(0.08f, 0.08f, 1.02f) : make_float3(1.02f, 0.08f, 0.08f),
+        scaled_color(wood_color, 0.94f),
+        0
+    );
+    push_prop(
+        make_float3(x, 3.58f, z),
+        line_on_x_axis ? make_float3(0.05f, 0.05f, 0.72f) : make_float3(0.72f, 0.05f, 0.05f),
+        scaled_color(wood_color, 0.86f),
+        0
+    );
+    push_prop(
+        make_float3(x, 4.28f, z),
+        make_float3(0.10f, 0.06f, 0.10f),
+        scaled_color(wood_color, 1.08f),
+        0
+    );
+
+    if (line_on_x_axis) {
+        push_prop(make_float3(x, 3.78f, z - arm_offset), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x, 3.78f, z), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x, 3.78f, z + arm_offset), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x + (transformer_side * 0.22f), 3.16f, z), make_float3(0.16f, 0.34f, 0.22f), hardware_color, 0);
+        push_prop(make_float3(x, 2.38f, z + (transformer_side * 0.18f)), make_float3(0.04f, 0.46f, 0.04f), brace_color, 0);
+    } else {
+        push_prop(make_float3(x - arm_offset, 3.78f, z), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x, 3.78f, z), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x + arm_offset, 3.78f, z), make_float3(0.06f, 0.06f, 0.06f), hardware_color, 0);
+        push_prop(make_float3(x, 3.16f, z + (transformer_side * 0.22f)), make_float3(0.22f, 0.34f, 0.16f), hardware_color, 0);
+        push_prop(make_float3(x + (transformer_side * 0.18f), 2.38f, z), make_float3(0.04f, 0.46f, 0.04f), brace_color, 0);
+    }
+
+    push_prop(
+        make_float3(transformer_x, 2.60f, transformer_z),
+        make_float3(0.18f, 0.14f, 0.18f),
+        scaled_color(hardware_color, 1.04f),
+        0
+    );
+}
+
+static void push_utility_wire_span_z(float x, float z_start, float z_end, float y, float x_offset) {
+    const MDTBFloat4 wire_color = make_float4(0.14f, 0.14f, 0.16f, 1.0f);
+    const float center_z = (z_start + z_end) * 0.5f;
+    const float half_z = fabsf(z_end - z_start) * 0.5f;
+    const float span_sag = fminf(half_z * 0.014f, 0.18f);
+
+    push_prop(
+        make_float3(x + x_offset, y + span_sag, center_z - (half_z * 0.5f)),
+        make_float3(0.02f, 0.02f, half_z * 0.5f),
+        wire_color,
+        0
+    );
+    push_prop(
+        make_float3(x + x_offset, y - span_sag, center_z + (half_z * 0.5f)),
+        make_float3(0.02f, 0.02f, half_z * 0.5f),
+        wire_color,
+        0
+    );
+}
+
+static void push_utility_wire_span_x(float x_start, float x_end, float z, float y, float z_offset) {
+    const MDTBFloat4 wire_color = make_float4(0.14f, 0.14f, 0.16f, 1.0f);
+    const float center_x = (x_start + x_end) * 0.5f;
+    const float half_x = fabsf(x_end - x_start) * 0.5f;
+    const float span_sag = fminf(half_x * 0.014f, 0.18f);
+
+    push_prop(
+        make_float3(center_x - (half_x * 0.5f), y + span_sag, z + z_offset),
+        make_float3(half_x * 0.5f, 0.02f, 0.02f),
+        wire_color,
+        0
+    );
+    push_prop(
+        make_float3(center_x + (half_x * 0.5f), y - span_sag, z + z_offset),
+        make_float3(half_x * 0.5f, 0.02f, 0.02f),
+        wire_color,
+        0
+    );
+}
+
+static void push_utility_line_run_z(float x, float z_start, float z_end, float spacing, float transformer_side) {
+    float current = z_start;
+    float previous = z_start;
+    int pole_index = 0;
+
+    while (current <= z_end + 0.01f) {
+        const float clamped = fminf(current, z_end);
+        push_utility_pole(x, clamped, 0, (pole_index % 2 == 0) ? transformer_side : -transformer_side);
+
+        if (pole_index > 0) {
+            push_utility_wire_span_z(x, previous, clamped, 3.86f, -0.32f);
+            push_utility_wire_span_z(x, previous, clamped, 3.82f, 0.00f);
+            push_utility_wire_span_z(x, previous, clamped, 3.86f, 0.32f);
+        }
+
+        previous = clamped;
+        current += spacing;
+        pole_index += 1;
+    }
+}
+
+static void push_utility_line_run_x(float x_start, float x_end, float z, float spacing, float transformer_side) {
+    float current = x_start;
+    float previous = x_start;
+    int pole_index = 0;
+
+    while (current <= x_end + 0.01f) {
+        const float clamped = fminf(current, x_end);
+        push_utility_pole(clamped, z, 1, (pole_index % 2 == 0) ? transformer_side : -transformer_side);
+
+        if (pole_index > 0) {
+            push_utility_wire_span_x(previous, clamped, z, 3.86f, -0.32f);
+            push_utility_wire_span_x(previous, clamped, z, 3.82f, 0.00f);
+            push_utility_wire_span_x(previous, clamped, z, 3.86f, 0.32f);
+        }
+
+        previous = clamped;
+        current += spacing;
+        pole_index += 1;
+    }
+}
+
+static void push_wheel_stop(float x, float z, float half_x, float half_z, MDTBFloat4 color) {
+    push_prop(
+        make_float3(x, 0.07f, z),
+        make_float3(half_x, 0.07f, half_z),
+        color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.13f, z),
+        make_float3(half_x * 0.78f, 0.03f, half_z * 0.82f),
+        scaled_color(color, 1.08f),
+        0
+    );
+}
+
+static void push_lot_parking_pad(float center_x, float center_z, float half_x, float half_z, float stop_sign, float planter_size, MDTBFloat4 asphalt_color, MDTBFloat4 curb_color) {
+    const MDTBFloat4 stripe_color = make_float4(0.88f, 0.86f, 0.72f, 1.0f);
+    const MDTBFloat4 stop_color = make_float4(0.78f, 0.79f, 0.76f, 1.0f);
+    const MDTBFloat4 tire_track_color = scaled_color(asphalt_color, 0.84f);
+    const MDTBFloat4 patch_color = blended_color(asphalt_color, curb_color, 0.12f);
+    const MDTBFloat4 oil_color = make_float4(0.17f, 0.17f, 0.18f, 1.0f);
+    const float curb_half = 0.14f;
+    const float inner_x = center_x - stop_sign * (half_x - 0.18f);
+    const float outer_x = center_x + stop_sign * (half_x - 0.18f);
+    const float stripe_start = center_z - half_z + 4.4f;
+    const float stripe_step = 4.4f;
+    const float stop_x = center_x + stop_sign * (half_x - 0.92f);
+
+    push_scene_box(make_box(
+        make_float3(center_x, kSidewalkHeight + 0.01f, center_z),
+        make_float3(half_x, 0.01f, half_z),
+        asphalt_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x - (stop_sign * (half_x * 0.18f)), kSidewalkHeight + 0.011f, center_z),
+        make_float3(half_x * 0.34f, 0.005f, half_z * 0.84f),
+        tire_track_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x + (stop_sign * (half_x * 0.14f)), kSidewalkHeight + 0.011f, center_z - (half_z * 0.28f)),
+        make_float3(half_x * 0.18f, 0.005f, half_z * 0.14f),
+        patch_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x - (stop_sign * (half_x * 0.08f)), kSidewalkHeight + 0.011f, center_z + (half_z * 0.26f)),
+        make_float3(half_x * 0.22f, 0.005f, half_z * 0.12f),
+        patch_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x, kSidewalkHeight + 0.02f, center_z - half_z),
+        make_float3(half_x, 0.01f, curb_half),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x, kSidewalkHeight + 0.02f, center_z + half_z),
+        make_float3(half_x, 0.01f, curb_half),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(inner_x, kSidewalkHeight + 0.02f, center_z),
+        make_float3(curb_half, 0.01f, half_z),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(outer_x, kSidewalkHeight + 0.02f, center_z),
+        make_float3(curb_half, 0.01f, half_z),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x, kSidewalkHeight + 0.03f, center_z - half_z + 0.72f),
+        make_float3(half_x * 0.92f, 0.01f, 0.08f),
+        stripe_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x, kSidewalkHeight + 0.03f, center_z + half_z - 0.72f),
+        make_float3(half_x * 0.92f, 0.01f, 0.08f),
+        stripe_color
+    ));
+
+    for (int stripe = 0; stripe < 8; ++stripe) {
+        const float stripe_z = stripe_start + ((float)stripe * stripe_step);
+        const MDTBFloat4 slot_stripe_color =
+            (stripe % 3 == 1)
+            ? blended_color(stripe_color, asphalt_color, 0.34f)
+            : stripe_color;
+        if (stripe_z >= center_z + half_z - 1.1f) {
+            break;
+        }
+
+        push_scene_box(make_box(
+            make_float3(center_x, kSidewalkHeight + 0.03f, stripe_z),
+            make_float3(half_x * 0.88f, 0.01f, 0.05f),
+            slot_stripe_color
+        ));
+        push_wheel_stop(stop_x, stripe_z - (stripe_step * 0.5f), 0.54f, 0.14f, stop_color);
+    }
+
+    push_scene_box(make_box(
+        make_float3(center_x - (stop_sign * (half_x * 0.28f)), kSidewalkHeight + 0.012f, center_z - (half_z * 0.38f)),
+        make_float3(0.46f, 0.004f, 0.34f),
+        oil_color
+    ));
+    push_scene_box(make_box(
+        make_float3(center_x - (stop_sign * (half_x * 0.22f)), kSidewalkHeight + 0.012f, center_z + (half_z * 0.02f)),
+        make_float3(0.52f, 0.004f, 0.28f),
+        oil_color
+    ));
+
+    push_planter(center_x - (stop_sign * (half_x - 1.55f)), center_z - (half_z - 1.8f), planter_size);
+    push_planter(center_x - (stop_sign * (half_x - 1.55f)), center_z + (half_z - 1.8f), planter_size);
 }
 
 static void push_parked_car_wheel(float x, float y, float z, float half_x, float radius, float half_z, MDTBFloat4 tire_color, MDTBFloat4 rim_color) {
@@ -6511,17 +7049,37 @@ static void push_parked_car(float x, float z, float half_x, float half_z, MDTBFl
 }
 
 static void push_bollard(float x, float z, float height) {
+    const MDTBFloat4 shaft_color = make_float4(0.42f, 0.40f, 0.36f, 1.0f);
+    const MDTBFloat4 band_color = make_float4(0.85f, 0.68f, 0.19f, 1.0f);
+
+    push_prop(
+        make_float3(x, 0.06f, z),
+        make_float3(0.16f, 0.06f, 0.16f),
+        scaled_color(shaft_color, 0.84f),
+        1
+    );
     push_prop(
         make_float3(x, height * 0.5f, z),
         make_float3(0.11f, height * 0.5f, 0.11f),
-        make_float4(0.42f, 0.40f, 0.36f, 1.0f),
+        shaft_color,
         1
     );
-
     push_prop(
-        make_float3(x, height + 0.07f, z),
-        make_float3(0.15f, 0.07f, 0.15f),
-        make_float4(0.85f, 0.68f, 0.19f, 1.0f),
+        make_float3(x, height * 0.58f, z),
+        make_float3(0.13f, 0.06f, 0.13f),
+        band_color,
+        0
+    );
+    push_prop(
+        make_float3(x, height * 0.82f, z),
+        make_float3(0.12f, 0.05f, 0.12f),
+        scaled_color(band_color, 1.06f),
+        0
+    );
+    push_prop(
+        make_float3(x, height + 0.05f, z),
+        make_float3(0.13f, 0.05f, 0.13f),
+        scaled_color(shaft_color, 1.06f),
         0
     );
 }
@@ -6536,6 +7094,10 @@ static void push_corner_plaza_pad(MDTBFloat3 origin, float x_offset, float z_off
 }
 
 static void push_refuge_island(float x, float z, float half_x, float half_z, float planter_size, MDTBFloat4 curb_color) {
+    const MDTBFloat4 cap_color = scaled_color(curb_color, 1.08f);
+    const MDTBFloat4 seam_color = scaled_color(curb_color, 0.84f);
+    const MDTBFloat4 stripe_color = make_float4(0.90f, 0.88f, 0.74f, 1.0f);
+
     push_prop(
         make_float3(x, kSidewalkHeight * 0.5f, z),
         make_float3(half_x, kSidewalkHeight * 0.5f, half_z),
@@ -6543,75 +7105,991 @@ static void push_refuge_island(float x, float z, float half_x, float half_z, flo
         1
     );
 
+    if (half_x >= half_z) {
+        push_prop(
+            make_float3(x, kSidewalkHeight + 0.01f, z),
+            make_float3(fmaxf(half_x * 0.72f, 0.54f), 0.01f, 0.08f),
+            seam_color,
+            0
+        );
+        push_prop(
+            make_float3(x, kSidewalkHeight * 0.5f, z - (half_z + 0.22f)),
+            make_float3(fmaxf(half_x * 0.54f, 0.44f), kSidewalkHeight * 0.5f, 0.16f),
+            cap_color,
+            1
+        );
+        push_prop(
+            make_float3(x, kSidewalkHeight * 0.5f, z + (half_z + 0.22f)),
+            make_float3(fmaxf(half_x * 0.54f, 0.44f), kSidewalkHeight * 0.5f, 0.16f),
+            cap_color,
+            1
+        );
+
+        for (int side = -1; side <= 1; side += 2) {
+            push_scene_box(make_box(
+                make_float3(x, kRoadHeight + 0.01f, z + ((float)side * (half_z + 0.54f))),
+                make_float3(fmaxf(half_x * 0.46f, 0.36f), 0.01f, 0.08f),
+                stripe_color
+            ));
+            push_scene_box(make_box(
+                make_float3(x - (half_x * 0.34f), kRoadHeight + 0.01f, z + ((float)side * (half_z + 0.92f))),
+                make_float3(0.18f, 0.01f, 0.08f),
+                stripe_color
+            ));
+            push_scene_box(make_box(
+                make_float3(x + (half_x * 0.34f), kRoadHeight + 0.01f, z + ((float)side * (half_z + 0.92f))),
+                make_float3(0.18f, 0.01f, 0.08f),
+                stripe_color
+            ));
+        }
+    } else {
+        push_prop(
+            make_float3(x, kSidewalkHeight + 0.01f, z),
+            make_float3(0.08f, 0.01f, fmaxf(half_z * 0.72f, 0.54f)),
+            seam_color,
+            0
+        );
+        push_prop(
+            make_float3(x - (half_x + 0.22f), kSidewalkHeight * 0.5f, z),
+            make_float3(0.16f, kSidewalkHeight * 0.5f, fmaxf(half_z * 0.54f, 0.44f)),
+            cap_color,
+            1
+        );
+        push_prop(
+            make_float3(x + (half_x + 0.22f), kSidewalkHeight * 0.5f, z),
+            make_float3(0.16f, kSidewalkHeight * 0.5f, fmaxf(half_z * 0.54f, 0.44f)),
+            cap_color,
+            1
+        );
+
+        for (int side = -1; side <= 1; side += 2) {
+            push_scene_box(make_box(
+                make_float3(x + ((float)side * (half_x + 0.54f)), kRoadHeight + 0.01f, z),
+                make_float3(0.08f, 0.01f, fmaxf(half_z * 0.46f, 0.36f)),
+                stripe_color
+            ));
+            push_scene_box(make_box(
+                make_float3(x + ((float)side * (half_x + 0.92f)), kRoadHeight + 0.01f, z - (half_z * 0.34f)),
+                make_float3(0.08f, 0.01f, 0.18f),
+                stripe_color
+            ));
+            push_scene_box(make_box(
+                make_float3(x + ((float)side * (half_x + 0.92f)), kRoadHeight + 0.01f, z + (half_z * 0.34f)),
+                make_float3(0.08f, 0.01f, 0.18f),
+                stripe_color
+            ));
+        }
+    }
+
     push_planter(x, z, planter_size);
 }
 
+static void push_intersection_lane_transition_patch(
+    MDTBFloat3 origin,
+    uint32_t axis,
+    float along_sign,
+    float edge_sign,
+    float road_half_width,
+    float stop_bar_offset,
+    MDTBFloat4 road_color
+) {
+    const MDTBFloat4 patch_color = scaled_color(road_color, 0.84f);
+    const float far_along = stop_bar_offset + 2.35f;
+    const float mid_along = stop_bar_offset + 1.35f;
+    const float near_along = stop_bar_offset + 0.45f;
+
+    if (axis == MDTBRoadAxisNorthSouth) {
+        push_scene_box(make_box(
+            make_float3(origin.x + (edge_sign * (road_half_width - 0.44f)), kRoadHeight + 0.01f, origin.z + (along_sign * far_along)),
+            make_float3(0.24f, 0.01f, 0.95f),
+            patch_color
+        ));
+        push_scene_box(make_box(
+            make_float3(origin.x + (edge_sign * (road_half_width - 0.10f)), kRoadHeight + 0.01f, origin.z + (along_sign * mid_along)),
+            make_float3(0.27f, 0.01f, 0.72f),
+            patch_color
+        ));
+        push_scene_box(make_box(
+            make_float3(origin.x + (edge_sign * (road_half_width + 0.22f)), kRoadHeight + 0.01f, origin.z + (along_sign * near_along)),
+            make_float3(0.30f, 0.01f, 0.42f),
+            patch_color
+        ));
+    } else {
+        push_scene_box(make_box(
+            make_float3(origin.x + (along_sign * far_along), kRoadHeight + 0.01f, origin.z + (edge_sign * (road_half_width - 0.44f))),
+            make_float3(0.95f, 0.01f, 0.24f),
+            patch_color
+        ));
+        push_scene_box(make_box(
+            make_float3(origin.x + (along_sign * mid_along), kRoadHeight + 0.01f, origin.z + (edge_sign * (road_half_width - 0.10f))),
+            make_float3(0.72f, 0.01f, 0.27f),
+            patch_color
+        ));
+        push_scene_box(make_box(
+            make_float3(origin.x + (along_sign * near_along), kRoadHeight + 0.01f, origin.z + (edge_sign * (road_half_width + 0.22f))),
+            make_float3(0.42f, 0.01f, 0.30f),
+            patch_color
+        ));
+    }
+}
+
+static void push_corner_curb_return(
+    MDTBFloat3 origin,
+    float x_sign,
+    float z_sign,
+    float crosswalk_offset_x,
+    float crosswalk_offset_z,
+    MDTBFloat4 curb_color,
+    MDTBFloat4 sidewalk_color
+) {
+    const MDTBFloat4 lip_color = scaled_color(curb_color, 0.96f);
+    const MDTBFloat4 landing_color = scaled_color(sidewalk_color, 1.02f);
+
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 0.20f)), 0.09f, origin.z + (z_sign * (crosswalk_offset_z + 1.64f))),
+        make_float3(0.20f, 0.09f, 0.78f),
+        lip_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 0.90f)), 0.09f, origin.z + (z_sign * (crosswalk_offset_z + 0.90f))),
+        make_float3(0.22f, 0.09f, 0.22f),
+        lip_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.64f)), 0.09f, origin.z + (z_sign * (crosswalk_offset_z + 0.20f))),
+        make_float3(0.78f, 0.09f, 0.20f),
+        lip_color
+    ));
+
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.14f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 1.84f))),
+        make_float3(0.50f, kSidewalkHeight * 0.5f, 0.60f),
+        landing_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.84f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 1.14f))),
+        make_float3(0.60f, kSidewalkHeight * 0.5f, 0.50f),
+        landing_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 1.18f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 1.18f))),
+        make_float3(0.40f, kSidewalkHeight * 0.5f, 0.40f),
+        scaled_color(landing_color, 1.04f)
+    ));
+}
+
+static void build_intersection_mouth_transitions(
+    const MDTBBlockDescriptor *block,
+    const MDTBIntersectionProfile *profile
+) {
+    const MDTBRoadProfile *vertical_road =
+        profile->vertical != NULL
+        ? road_profile_for_class(profile->vertical->road_class)
+        : road_profile_for_class(MDTBRoadClassAvenue);
+    const MDTBRoadProfile *horizontal_road =
+        profile->horizontal != NULL
+        ? road_profile_for_class(profile->horizontal->road_class)
+        : road_profile_for_class(MDTBRoadClassAvenue);
+    const float vertical_crosswalk_offset = profile->vertical != NULL ? profile->vertical->crosswalk_offset : kCrosswalkOffset;
+    const float horizontal_crosswalk_offset = profile->horizontal != NULL ? profile->horizontal->crosswalk_offset : kCrosswalkOffset;
+    const float northsouth_stop_bar_offset = profile->horizontal != NULL ? profile->horizontal->stop_bar_offset : 6.65f;
+    const float eastwest_stop_bar_offset = profile->vertical != NULL ? profile->vertical->stop_bar_offset : 6.65f;
+    const MDTBFloat4 vertical_road_color = road_surface_color_for_class(profile->vertical != NULL ? profile->vertical->road_class : MDTBRoadClassAvenue);
+    const MDTBFloat4 horizontal_road_color = road_surface_color_for_class(profile->horizontal != NULL ? profile->horizontal->road_class : MDTBRoadClassAvenue);
+    const MDTBFloat4 curb_color =
+        curb_surface_color_for_class(
+            (profile->vertical != NULL && profile->vertical->road_class == MDTBRoadClassBoulevard) ||
+            (profile->horizontal != NULL && profile->horizontal->road_class == MDTBRoadClassBoulevard)
+            ? MDTBRoadClassBoulevard
+            : (profile->vertical != NULL
+                ? profile->vertical->road_class
+                : (profile->horizontal != NULL ? profile->horizontal->road_class : MDTBRoadClassAvenue))
+        );
+    const MDTBFloat4 sidewalk_color =
+        sidewalk_surface_color_for_class(
+            (profile->vertical != NULL && profile->vertical->road_class == MDTBRoadClassBoulevard) ||
+            (profile->horizontal != NULL && profile->horizontal->road_class == MDTBRoadClassBoulevard)
+            ? MDTBRoadClassBoulevard
+            : (profile->vertical != NULL
+                ? profile->vertical->road_class
+                : (profile->horizontal != NULL ? profile->horizontal->road_class : MDTBRoadClassAvenue))
+        );
+
+    for (int sign = -1; sign <= 1; sign += 2) {
+        for (int edge_sign = -1; edge_sign <= 1; edge_sign += 2) {
+            push_intersection_lane_transition_patch(
+                block->origin,
+                MDTBRoadAxisNorthSouth,
+                (float)sign,
+                (float)edge_sign,
+                vertical_road->road_half_width,
+                northsouth_stop_bar_offset,
+                vertical_road_color
+            );
+            push_intersection_lane_transition_patch(
+                block->origin,
+                MDTBRoadAxisEastWest,
+                (float)sign,
+                (float)edge_sign,
+                horizontal_road->road_half_width,
+                eastwest_stop_bar_offset,
+                horizontal_road_color
+            );
+        }
+    }
+
+    for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
+        for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
+            push_corner_curb_return(
+                block->origin,
+                (float)x_sign,
+                (float)z_sign,
+                vertical_crosswalk_offset,
+                horizontal_crosswalk_offset,
+                curb_color,
+                sidewalk_color
+            );
+        }
+    }
+}
+
+static void push_crosswalk_landing_corner(
+    MDTBFloat3 origin,
+    float x_sign,
+    float z_sign,
+    float crosswalk_offset_x,
+    float crosswalk_offset_z,
+    MDTBFloat4 sidewalk_color
+) {
+    const MDTBFloat4 landing_color = scaled_color(sidewalk_color, 1.07f);
+    const MDTBFloat4 strip_color = scaled_color(sidewalk_color, 0.92f);
+
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.30f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 2.86f))),
+        make_float3(0.64f, kSidewalkHeight * 0.5f, 0.56f),
+        landing_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.86f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 2.30f))),
+        make_float3(0.56f, kSidewalkHeight * 0.5f, 0.64f),
+        landing_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.36f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 2.98f))),
+        make_float3(0.30f, 0.01f, 0.09f),
+        strip_color
+    ));
+    push_scene_box(make_box(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.98f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 2.36f))),
+        make_float3(0.09f, 0.01f, 0.30f),
+        strip_color
+    ));
+}
+
+static void push_crosswalk_edge_treatment_x(float x_center, float z_origin, MDTBFloat4 edge_color, MDTBFloat4 cap_color) {
+    push_scene_box(make_box(
+        make_float3(x_center - 1.10f, kRoadHeight + 0.01f, z_origin),
+        make_float3(0.12f, 0.01f, 5.02f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center + 1.10f, kRoadHeight + 0.01f, z_origin),
+        make_float3(0.12f, 0.01f, 5.02f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.01f, z_origin - 5.04f),
+        make_float3(0.46f, 0.01f, 0.08f),
+        cap_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.01f, z_origin + 5.04f),
+        make_float3(0.46f, 0.01f, 0.08f),
+        cap_color
+    ));
+}
+
+static void push_crosswalk_edge_treatment_z(float x_origin, float z_center, MDTBFloat4 edge_color, MDTBFloat4 cap_color) {
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.01f, z_center - 1.10f),
+        make_float3(5.02f, 0.01f, 0.12f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.01f, z_center + 1.10f),
+        make_float3(5.02f, 0.01f, 0.12f),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - 5.04f, kRoadHeight + 0.01f, z_center),
+        make_float3(0.08f, 0.01f, 0.46f),
+        cap_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + 5.04f, kRoadHeight + 0.01f, z_center),
+        make_float3(0.08f, 0.01f, 0.46f),
+        cap_color
+    ));
+}
+
+static void push_signal_wait_corner(
+    MDTBFloat3 origin,
+    float x_sign,
+    float z_sign,
+    float signal_x,
+    float signal_z,
+    float crosswalk_offset_x,
+    float crosswalk_offset_z,
+    MDTBFloat4 sidewalk_color
+) {
+    const MDTBFloat4 pad_color = scaled_color(sidewalk_color, 1.05f);
+    const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.78f);
+
+    push_prop(
+        make_float3(origin.x + (x_sign * (signal_x - 1.34f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (crosswalk_offset_z + 2.04f))),
+        make_float3(0.74f, kSidewalkHeight * 0.5f, 0.34f),
+        pad_color,
+        1
+    );
+    push_prop(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.04f)), kSidewalkHeight * 0.5f, origin.z + (z_sign * (signal_z - 1.34f))),
+        make_float3(0.34f, kSidewalkHeight * 0.5f, 0.74f),
+        pad_color,
+        1
+    );
+    push_prop(
+        make_float3(origin.x + (x_sign * (signal_x - 1.34f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (crosswalk_offset_z + 2.04f))),
+        make_float3(0.64f, 0.01f, 0.05f),
+        seam_color,
+        0
+    );
+    push_prop(
+        make_float3(origin.x + (x_sign * (crosswalk_offset_x + 2.04f)), kSidewalkHeight + 0.01f, origin.z + (z_sign * (signal_z - 1.34f))),
+        make_float3(0.05f, 0.01f, 0.64f),
+        seam_color,
+        0
+    );
+}
+
+static void push_refuge_throat_surface(
+    float x,
+    float z,
+    int align_on_x_axis,
+    float half_x,
+    float half_z,
+    MDTBFloat4 throat_color,
+    MDTBFloat4 seam_color,
+    MDTBFloat4 guide_color
+) {
+    push_scene_box(make_box(
+        make_float3(x, kRoadHeight + 0.01f, z),
+        make_float3(half_x, 0.01f, half_z),
+        throat_color
+    ));
+
+    if (align_on_x_axis) {
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.02f, z),
+            make_float3(fmaxf(half_x * 0.78f, 0.54f), 0.01f, 0.07f),
+            seam_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x - fmaxf(half_x - 0.20f, 0.30f), kRoadHeight + 0.02f, z),
+            make_float3(0.08f, 0.01f, fmaxf(half_z * 0.56f, 0.22f)),
+            guide_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x + fmaxf(half_x - 0.20f, 0.30f), kRoadHeight + 0.02f, z),
+            make_float3(0.08f, 0.01f, fmaxf(half_z * 0.56f, 0.22f)),
+            guide_color
+        ));
+    } else {
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.02f, z),
+            make_float3(0.07f, 0.01f, fmaxf(half_z * 0.78f, 0.54f)),
+            seam_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.02f, z - fmaxf(half_z - 0.20f, 0.30f)),
+            make_float3(fmaxf(half_x * 0.56f, 0.22f), 0.01f, 0.08f),
+            guide_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.02f, z + fmaxf(half_z - 0.20f, 0.30f)),
+            make_float3(fmaxf(half_x * 0.56f, 0.22f), 0.01f, 0.08f),
+            guide_color
+        ));
+    }
+}
+
+static void build_intersection_surface_details(
+    const MDTBBlockDescriptor *block,
+    const MDTBIntersectionProfile *profile
+) {
+    const uint32_t dominant_road_class =
+        (profile->vertical != NULL && profile->vertical->road_class == MDTBRoadClassBoulevard) ||
+        (profile->horizontal != NULL && profile->horizontal->road_class == MDTBRoadClassBoulevard)
+        ? MDTBRoadClassBoulevard
+        : (profile->vertical != NULL
+            ? profile->vertical->road_class
+            : (profile->horizontal != NULL ? profile->horizontal->road_class : MDTBRoadClassAvenue));
+    const MDTBRoadProfile *vertical_road =
+        profile->vertical != NULL
+        ? road_profile_for_class(profile->vertical->road_class)
+        : road_profile_for_class(MDTBRoadClassAvenue);
+    const MDTBRoadProfile *horizontal_road =
+        profile->horizontal != NULL
+        ? road_profile_for_class(profile->horizontal->road_class)
+        : road_profile_for_class(MDTBRoadClassAvenue);
+    const float vertical_crosswalk_offset = profile->vertical != NULL ? profile->vertical->crosswalk_offset : kCrosswalkOffset;
+    const float horizontal_crosswalk_offset = profile->horizontal != NULL ? profile->horizontal->crosswalk_offset : kCrosswalkOffset;
+    const float northsouth_stop_bar_offset = profile->horizontal != NULL ? profile->horizontal->stop_bar_offset : 6.65f;
+    const float eastwest_stop_bar_offset = profile->vertical != NULL ? profile->vertical->stop_bar_offset : 6.65f;
+    const float signal_x = profile->vertical != NULL ? profile->vertical->signal_offset : 8.9f;
+    const float signal_z = profile->horizontal != NULL ? profile->horizontal->signal_offset : 8.9f;
+    const float chunk_refuge_scale = profile->chunk != NULL ? profile->chunk->refuge_scale : 1.0f;
+    const float center_half_x = fmaxf(fminf(vertical_road->road_half_width - 1.10f, eastwest_stop_bar_offset - 1.25f), 2.10f);
+    const float center_half_z = fmaxf(fminf(horizontal_road->road_half_width - 1.10f, northsouth_stop_bar_offset - 1.25f), 2.10f);
+    const float wear_center_x = fmaxf(fminf(vertical_crosswalk_offset - 2.10f, vertical_road->road_half_width - 1.55f), 2.15f);
+    const float wear_center_z = fmaxf(fminf(horizontal_crosswalk_offset - 2.10f, horizontal_road->road_half_width - 1.55f), 2.15f);
+    const MDTBFloat4 road_color = road_surface_color_for_class(dominant_road_class);
+    const MDTBFloat4 sidewalk_color = sidewalk_surface_color_for_class(dominant_road_class);
+    const MDTBFloat4 center_color = scaled_color(road_color, 0.80f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.58f);
+    const MDTBFloat4 wear_color = scaled_color(road_color, 0.68f);
+    const MDTBFloat4 crosswalk_edge_color = scaled_color(road_color, 0.62f);
+    const MDTBFloat4 crosswalk_cap_color = scaled_color(road_color, 0.76f);
+    const MDTBFloat4 throat_guide_color = make_float4(0.88f, 0.86f, 0.72f, 1.0f);
+
+    push_scene_box(make_box(
+        make_float3(block->origin.x, kRoadHeight + 0.01f, block->origin.z),
+        make_float3(center_half_x, 0.01f, center_half_z),
+        center_color
+    ));
+    push_scene_box(make_box(
+        make_float3(block->origin.x, kRoadHeight + 0.02f, block->origin.z),
+        make_float3(center_half_x * 0.84f, 0.01f, 0.09f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(block->origin.x, kRoadHeight + 0.02f, block->origin.z),
+        make_float3(0.09f, 0.01f, center_half_z * 0.84f),
+        seam_color
+    ));
+
+    push_crosswalk_edge_treatment_x(block->origin.x - vertical_crosswalk_offset, block->origin.z, crosswalk_edge_color, crosswalk_cap_color);
+    push_crosswalk_edge_treatment_x(block->origin.x + vertical_crosswalk_offset, block->origin.z, crosswalk_edge_color, crosswalk_cap_color);
+    push_crosswalk_edge_treatment_z(block->origin.x, block->origin.z - horizontal_crosswalk_offset, crosswalk_edge_color, crosswalk_cap_color);
+    push_crosswalk_edge_treatment_z(block->origin.x, block->origin.z + horizontal_crosswalk_offset, crosswalk_edge_color, crosswalk_cap_color);
+
+    for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
+        for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
+            push_scene_box(make_box(
+                make_float3(block->origin.x + ((float)x_sign * wear_center_x), kRoadHeight + 0.01f, block->origin.z + ((float)z_sign * (wear_center_z - 0.38f))),
+                make_float3(0.54f, 0.01f, 0.96f),
+                wear_color
+            ));
+            push_scene_box(make_box(
+                make_float3(block->origin.x + ((float)x_sign * (wear_center_x - 0.38f)), kRoadHeight + 0.01f, block->origin.z + ((float)z_sign * wear_center_z)),
+                make_float3(0.96f, 0.01f, 0.54f),
+                scaled_color(wear_color, 1.04f)
+            ));
+            push_crosswalk_landing_corner(
+                block->origin,
+                (float)x_sign,
+                (float)z_sign,
+                vertical_crosswalk_offset,
+                horizontal_crosswalk_offset,
+                sidewalk_color
+            );
+            push_signal_wait_corner(
+                block->origin,
+                (float)x_sign,
+                (float)z_sign,
+                signal_x,
+                signal_z,
+                vertical_crosswalk_offset,
+                horizontal_crosswalk_offset,
+                sidewalk_color
+            );
+        }
+    }
+
+    if (profile->vertical != NULL && profile->vertical->road_class == MDTBRoadClassBoulevard) {
+        const float throat_half_x = fmaxf(vertical_road->median_half_width + 0.38f, 0.92f);
+        const float throat_half_z = 0.58f + ((chunk_refuge_scale - 1.0f) * 0.10f);
+        const float throat_z = horizontal_crosswalk_offset + 2.08f;
+
+        push_refuge_throat_surface(
+            block->origin.x,
+            block->origin.z - throat_z,
+            1,
+            throat_half_x,
+            throat_half_z,
+            wear_color,
+            seam_color,
+            throat_guide_color
+        );
+        push_refuge_throat_surface(
+            block->origin.x,
+            block->origin.z + throat_z,
+            1,
+            throat_half_x,
+            throat_half_z,
+            wear_color,
+            seam_color,
+            throat_guide_color
+        );
+    }
+
+    if (profile->horizontal != NULL && profile->horizontal->road_class == MDTBRoadClassBoulevard) {
+        const float throat_half_x = 0.58f + ((chunk_refuge_scale - 1.0f) * 0.10f);
+        const float throat_half_z = fmaxf(horizontal_road->median_half_width + 0.38f, 0.92f);
+        const float throat_x = vertical_crosswalk_offset + 2.08f;
+
+        push_refuge_throat_surface(
+            block->origin.x - throat_x,
+            block->origin.z,
+            0,
+            throat_half_x,
+            throat_half_z,
+            wear_color,
+            seam_color,
+            throat_guide_color
+        );
+        push_refuge_throat_surface(
+            block->origin.x + throat_x,
+            block->origin.z,
+            0,
+            throat_half_x,
+            throat_half_z,
+            wear_color,
+            seam_color,
+            throat_guide_color
+        );
+    }
+}
+
 static void push_trash_bin(float x, float z) {
+    const MDTBFloat4 body_color = make_float4(0.24f, 0.30f, 0.33f, 1.0f);
+    const MDTBFloat4 lid_color = make_float4(0.30f, 0.37f, 0.40f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.17f, 0.19f, 0.20f, 1.0f);
+
+    push_prop(
+        make_float3(x, 0.10f, z),
+        make_float3(0.30f, 0.10f, 0.30f),
+        scaled_color(body_color, 0.78f),
+        1
+    );
     push_prop(
         make_float3(x, 0.46f, z),
         make_float3(0.28f, 0.46f, 0.28f),
-        make_float4(0.24f, 0.30f, 0.33f, 1.0f),
+        body_color,
         1
     );
-
     push_prop(
-        make_float3(x, 0.98f, z),
-        make_float3(0.33f, 0.06f, 0.33f),
-        make_float4(0.30f, 0.37f, 0.40f, 1.0f),
+        make_float3(x - 0.21f, 0.46f, z),
+        make_float3(0.03f, 0.36f, 0.22f),
+        scaled_color(body_color, 0.84f),
         0
     );
-
     push_prop(
-        make_float3(x, 0.56f, z + 0.18f),
-        make_float3(0.16f, 0.18f, 0.02f),
-        make_float4(0.17f, 0.19f, 0.20f, 1.0f),
+        make_float3(x + 0.21f, 0.46f, z),
+        make_float3(0.03f, 0.36f, 0.22f),
+        scaled_color(body_color, 0.84f),
         0
     );
+    push_prop(
+        make_float3(x, 0.92f, z),
+        make_float3(0.31f, 0.05f, 0.31f),
+        lid_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 1.00f, z - 0.02f),
+        make_float3(0.25f, 0.03f, 0.27f),
+        scaled_color(lid_color, 1.08f),
+        0
+    );
+    push_prop(
+        make_float3(x, 0.56f, z + 0.24f),
+        make_float3(0.15f, 0.18f, 0.03f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x - 0.16f, 0.18f, z - 0.20f),
+        make_float3(0.06f, 0.12f, 0.05f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x + 0.16f, 0.18f, z - 0.20f),
+        make_float3(0.06f, 0.12f, 0.05f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.74f, z - 0.25f),
+        make_float3(0.14f, 0.03f, 0.03f),
+        scaled_color(trim_color, 1.08f),
+        0
+    );
+    push_prop(
+        make_float3(x, 0.34f, z + 0.25f),
+        make_float3(0.18f, 0.10f, 0.02f),
+        scaled_color(trim_color, 0.94f),
+        0
+    );
+}
+
+static void push_fire_hydrant(float x, float z) {
+    const MDTBFloat4 body_color = make_float4(0.78f, 0.12f, 0.10f, 1.0f);
+    const MDTBFloat4 cap_color = make_float4(0.90f, 0.76f, 0.24f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.28f, 0.06f, 0.06f, 1.0f);
+
+    push_prop(make_float3(x, 0.07f, z), make_float3(0.18f, 0.07f, 0.18f), scaled_color(body_color, 0.74f), 0);
+    push_prop(make_float3(x, 0.36f, z), make_float3(0.11f, 0.24f, 0.11f), body_color, 0);
+    push_prop(make_float3(x, 0.66f, z), make_float3(0.09f, 0.10f, 0.09f), body_color, 0);
+    push_prop(make_float3(x, 0.80f, z), make_float3(0.13f, 0.06f, 0.13f), cap_color, 0);
+    push_prop(make_float3(x - 0.16f, 0.44f, z), make_float3(0.06f, 0.06f, 0.06f), cap_color, 0);
+    push_prop(make_float3(x + 0.16f, 0.44f, z), make_float3(0.06f, 0.06f, 0.06f), cap_color, 0);
+    push_prop(make_float3(x, 0.55f, z - 0.14f), make_float3(0.05f, 0.05f, 0.04f), trim_color, 0);
+}
+
+static void push_parking_meter(float x, float z, float facing_sign) {
+    const MDTBFloat4 pole_color = make_float4(0.34f, 0.36f, 0.39f, 1.0f);
+    const MDTBFloat4 head_color = make_float4(0.28f, 0.32f, 0.36f, 1.0f);
+    const MDTBFloat4 screen_color = make_float4(0.67f, 0.78f, 0.82f, 1.0f);
+
+    push_prop(make_float3(x, 0.06f, z), make_float3(0.10f, 0.06f, 0.10f), scaled_color(pole_color, 0.84f), 0);
+    push_prop(make_float3(x, 0.62f, z), make_float3(0.03f, 0.62f, 0.03f), pole_color, 0);
+    push_prop(make_float3(x, 1.12f, z + (facing_sign * 0.03f)), make_float3(0.08f, 0.18f, 0.06f), head_color, 0);
+    push_prop(make_float3(x, 1.18f, z + (facing_sign * 0.08f)), make_float3(0.04f, 0.07f, 0.02f), screen_color, 0);
+    push_prop(make_float3(x, 0.88f, z), make_float3(0.05f, 0.03f, 0.05f), scaled_color(head_color, 1.10f), 0);
+}
+
+static void push_signal_control_box(float x, float z, int align_on_x_axis) {
+    const MDTBFloat4 cabinet_color = make_float4(0.56f, 0.58f, 0.56f, 1.0f);
+    const MDTBFloat4 base_color = make_float4(0.46f, 0.46f, 0.44f, 1.0f);
+    const MDTBFloat4 seam_color = make_float4(0.34f, 0.35f, 0.35f, 1.0f);
+    const float half_x = align_on_x_axis ? 0.32f : 0.22f;
+    const float half_z = align_on_x_axis ? 0.22f : 0.32f;
+
+    push_prop(make_float3(x, 0.08f, z), make_float3(half_x + 0.06f, 0.08f, half_z + 0.06f), base_color, 0);
+    push_prop(make_float3(x, 0.66f, z), make_float3(half_x, 0.58f, half_z), cabinet_color, 0);
+    push_prop(make_float3(x, 1.28f, z), make_float3(half_x * 0.94f, 0.04f, half_z * 0.94f), scaled_color(cabinet_color, 1.06f), 0);
+
+    if (align_on_x_axis) {
+        push_prop(make_float3(x, 0.66f, z + 0.19f), make_float3(half_x * 0.82f, 0.48f, 0.02f), seam_color, 0);
+    } else {
+        push_prop(make_float3(x + 0.19f, 0.66f, z), make_float3(0.02f, 0.48f, half_z * 0.82f), seam_color, 0);
+    }
+}
+
+static void push_signal_service_corner(
+    MDTBFloat3 origin,
+    float x_sign,
+    float z_sign,
+    float signal_x,
+    float signal_z,
+    int align_on_x_axis,
+    MDTBFloat4 sidewalk_color
+) {
+    const MDTBFloat4 pad_color = scaled_color(sidewalk_color, 0.86f);
+    const MDTBFloat4 seam_color = scaled_color(sidewalk_color, 0.68f);
+    const MDTBFloat4 cover_color = make_float4(0.42f, 0.44f, 0.46f, 1.0f);
+    const float cabinet_x = origin.x + (x_sign * (signal_x + 1.95f));
+    const float cabinet_z = origin.z + (z_sign * (signal_z - 1.75f));
+    const float pole_x = origin.x + (x_sign * signal_x);
+    const float pole_z = origin.z + (z_sign * signal_z);
+    const float hydrant_x = origin.x + (x_sign * (signal_x - 0.75f));
+    const float hydrant_z = origin.z + (z_sign * (signal_z + 2.35f));
+    const float cabinet_half_x = align_on_x_axis ? 0.62f : 0.44f;
+    const float cabinet_half_z = align_on_x_axis ? 0.44f : 0.62f;
+    const float conduit_half_z = fmaxf(fabsf(cabinet_z - pole_z) * 0.5f, 0.22f);
+    const float conduit_half_x = fmaxf(fabsf(cabinet_x - pole_x) * 0.5f, 0.22f);
+
+    push_scene_box(make_box(
+        make_float3(cabinet_x, kSidewalkHeight + 0.01f, cabinet_z),
+        make_float3(cabinet_half_x, 0.01f, cabinet_half_z),
+        pad_color
+    ));
+    push_scene_box(make_box(
+        make_float3(cabinet_x, kSidewalkHeight + 0.02f, cabinet_z),
+        align_on_x_axis ? make_float3(cabinet_half_x * 0.76f, 0.01f, 0.05f) : make_float3(0.05f, 0.01f, cabinet_half_z * 0.76f),
+        seam_color
+    ));
+
+    push_scene_box(make_box(
+        make_float3(pole_x, kSidewalkHeight + 0.01f, (pole_z + cabinet_z) * 0.5f),
+        make_float3(0.05f, 0.01f, conduit_half_z),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3((pole_x + cabinet_x) * 0.5f, kSidewalkHeight + 0.01f, cabinet_z),
+        make_float3(conduit_half_x, 0.01f, 0.05f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(pole_x + (x_sign * 0.72f), kSidewalkHeight + 0.02f, cabinet_z),
+        make_float3(0.18f, 0.01f, 0.14f),
+        cover_color
+    ));
+
+    push_scene_box(make_box(
+        make_float3(hydrant_x, kSidewalkHeight + 0.01f, hydrant_z),
+        make_float3(0.30f, 0.01f, 0.30f),
+        scaled_color(pad_color, 1.04f)
+    ));
+}
+
+static void push_utility_cabinet(float x, float z, int align_on_x_axis) {
+    const MDTBFloat4 cabinet_color = make_float4(0.44f, 0.50f, 0.46f, 1.0f);
+    const MDTBFloat4 base_color = make_float4(0.38f, 0.40f, 0.39f, 1.0f);
+    const MDTBFloat4 vent_color = make_float4(0.28f, 0.31f, 0.30f, 1.0f);
+    const float half_x = align_on_x_axis ? 0.42f : 0.28f;
+    const float half_z = align_on_x_axis ? 0.28f : 0.42f;
+
+    push_prop(make_float3(x, 0.08f, z), make_float3(half_x + 0.06f, 0.08f, half_z + 0.06f), base_color, 0);
+    push_prop(make_float3(x, 0.82f, z), make_float3(half_x, 0.74f, half_z), cabinet_color, 0);
+    push_prop(make_float3(x, 1.60f, z), make_float3(half_x * 0.94f, 0.04f, half_z * 0.94f), scaled_color(cabinet_color, 1.05f), 0);
+    push_prop(make_float3(x, 0.86f, z), align_on_x_axis ? make_float3(half_x * 0.72f, 0.42f, 0.02f) : make_float3(0.02f, 0.42f, half_z * 0.72f), vent_color, 0);
+    push_prop(make_float3(x, 0.46f, z), align_on_x_axis ? make_float3(half_x * 0.68f, 0.03f, 0.03f) : make_float3(0.03f, 0.03f, half_z * 0.68f), vent_color, 0);
+}
+
+static void push_bus_stop_sign(float x, float z, float facing_sign) {
+    const MDTBFloat4 pole_color = make_float4(0.38f, 0.40f, 0.44f, 1.0f);
+    const MDTBFloat4 sign_color = make_float4(0.88f, 0.92f, 0.96f, 1.0f);
+    const MDTBFloat4 accent_color = make_float4(0.26f, 0.58f, 0.82f, 1.0f);
+
+    push_prop(make_float3(x, 0.08f, z), make_float3(0.10f, 0.08f, 0.10f), scaled_color(pole_color, 0.82f), 0);
+    push_prop(make_float3(x, 1.48f, z), make_float3(0.03f, 1.48f, 0.03f), pole_color, 0);
+    push_prop(make_float3(x, 2.26f, z + (facing_sign * 0.02f)), make_float3(0.18f, 0.24f, 0.03f), sign_color, 0);
+    push_prop(make_float3(x, 2.36f, z + (facing_sign * 0.06f)), make_float3(0.12f, 0.05f, 0.02f), accent_color, 0);
+    push_prop(make_float3(x, 1.80f, z + (facing_sign * 0.02f)), make_float3(0.13f, 0.14f, 0.02f), scaled_color(sign_color, 0.96f), 0);
 }
 
 static void push_newsstand(float x, float z, int spans_on_x_axis) {
     const MDTBFloat4 body_color = make_float4(0.56f, 0.22f, 0.18f, 1.0f);
     const MDTBFloat4 canopy_color = make_float4(0.90f, 0.78f, 0.26f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.26f, 0.22f, 0.19f, 1.0f);
+    const MDTBFloat4 glass_color = make_float4(0.68f, 0.78f, 0.82f, 1.0f);
     const MDTBFloat4 paper_color = make_float4(0.88f, 0.88f, 0.82f, 1.0f);
 
     if (spans_on_x_axis) {
-        push_prop(make_float3(x, 0.76f, z), make_float3(0.70f, 0.76f, 0.36f), body_color, 1);
-        push_prop(make_float3(x, 1.56f, z + 0.08f), make_float3(0.84f, 0.08f, 0.48f), canopy_color, 0);
-        push_prop(make_float3(x, 0.82f, z + 0.32f), make_float3(0.54f, 0.42f, 0.04f), paper_color, 0);
+        push_prop(make_float3(x, 0.12f, z), make_float3(0.78f, 0.12f, 0.42f), scaled_color(trim_color, 0.82f), 1);
+        push_prop(make_float3(x, 0.78f, z), make_float3(0.70f, 0.68f, 0.34f), body_color, 1);
+        push_prop(make_float3(x, 0.24f, z - 0.36f), make_float3(0.62f, 0.18f, 0.05f), scaled_color(body_color, 0.74f), 0);
+        push_prop(make_float3(x, 1.44f, z + 0.05f), make_float3(0.82f, 0.07f, 0.46f), trim_color, 0);
+        push_prop(make_float3(x, 1.60f, z + 0.08f), make_float3(0.92f, 0.09f, 0.52f), canopy_color, 0);
+        push_prop(make_float3(x, 1.22f, z + 0.34f), make_float3(0.58f, 0.48f, 0.04f), glass_color, 0);
+        push_prop(make_float3(x - 0.74f, 0.80f, z), make_float3(0.04f, 0.64f, 0.34f), trim_color, 0);
+        push_prop(make_float3(x + 0.74f, 0.80f, z), make_float3(0.04f, 0.64f, 0.34f), trim_color, 0);
+        push_prop(make_float3(x, 1.24f, z + 0.52f), make_float3(0.62f, 0.10f, 0.03f), scaled_color(canopy_color, 0.90f), 0);
+        push_prop(make_float3(x - 0.34f, 0.58f, z + 0.28f), make_float3(0.14f, 0.10f, 0.06f), paper_color, 0);
+        push_prop(make_float3(x + 0.02f, 0.68f, z + 0.28f), make_float3(0.16f, 0.16f, 0.06f), paper_color, 0);
+        push_prop(make_float3(x + 0.36f, 0.54f, z + 0.28f), make_float3(0.12f, 0.08f, 0.06f), paper_color, 0);
     } else {
-        push_prop(make_float3(x, 0.76f, z), make_float3(0.36f, 0.76f, 0.70f), body_color, 1);
-        push_prop(make_float3(x + 0.08f, 1.56f, z), make_float3(0.48f, 0.08f, 0.84f), canopy_color, 0);
-        push_prop(make_float3(x + 0.32f, 0.82f, z), make_float3(0.04f, 0.42f, 0.54f), paper_color, 0);
+        push_prop(make_float3(x, 0.12f, z), make_float3(0.42f, 0.12f, 0.78f), scaled_color(trim_color, 0.82f), 1);
+        push_prop(make_float3(x, 0.78f, z), make_float3(0.34f, 0.68f, 0.70f), body_color, 1);
+        push_prop(make_float3(x - 0.36f, 0.24f, z), make_float3(0.05f, 0.18f, 0.62f), scaled_color(body_color, 0.74f), 0);
+        push_prop(make_float3(x + 0.05f, 1.44f, z), make_float3(0.46f, 0.07f, 0.82f), trim_color, 0);
+        push_prop(make_float3(x + 0.08f, 1.60f, z), make_float3(0.52f, 0.09f, 0.92f), canopy_color, 0);
+        push_prop(make_float3(x + 0.34f, 1.22f, z), make_float3(0.04f, 0.48f, 0.58f), glass_color, 0);
+        push_prop(make_float3(x, 0.80f, z - 0.74f), make_float3(0.34f, 0.64f, 0.04f), trim_color, 0);
+        push_prop(make_float3(x, 0.80f, z + 0.74f), make_float3(0.34f, 0.64f, 0.04f), trim_color, 0);
+        push_prop(make_float3(x + 0.52f, 1.24f, z), make_float3(0.03f, 0.10f, 0.62f), scaled_color(canopy_color, 0.90f), 0);
+        push_prop(make_float3(x + 0.28f, 0.58f, z - 0.34f), make_float3(0.06f, 0.10f, 0.14f), paper_color, 0);
+        push_prop(make_float3(x + 0.28f, 0.68f, z + 0.02f), make_float3(0.06f, 0.16f, 0.16f), paper_color, 0);
+        push_prop(make_float3(x + 0.28f, 0.54f, z + 0.36f), make_float3(0.06f, 0.08f, 0.12f), paper_color, 0);
     }
 }
 
 static void push_store_awning_x(float x, float z, float half_x, float facing_sign) {
+    const MDTBFloat4 post_color = make_float4(0.49f, 0.45f, 0.37f, 1.0f);
+    const MDTBFloat4 canopy_color = make_float4(0.90f, 0.55f, 0.21f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.67f, 0.31f, 0.18f, 1.0f);
+    const MDTBFloat4 glass_color = make_float4(0.66f, 0.78f, 0.84f, 1.0f);
+    const MDTBFloat4 tile_color = make_float4(0.45f, 0.35f, 0.27f, 1.0f);
+    const MDTBFloat4 mullion_color = make_float4(0.34f, 0.32f, 0.30f, 1.0f);
+    const MDTBFloat4 recess_color = make_float4(0.24f, 0.21f, 0.19f, 1.0f);
+    const MDTBFloat4 kickplate_color = scaled_color(trim_color, 0.72f);
     const float canopy_z = z + (facing_sign * 0.88f);
+    const float front_z = z + (facing_sign * 1.74f);
+    const float brace_z = z + (facing_sign * 1.18f);
+    const float storefront_z = z + (facing_sign * 0.14f);
+    const float entry_z = z - (facing_sign * 0.06f);
+    const float display_half_x = fmaxf(half_x * 0.24f, 0.34f);
+    const float display_offset_x = fmaxf(half_x * 0.44f, 0.54f);
+    const float entry_half_x = fmaxf(half_x * 0.17f, 0.28f);
 
     push_prop(
+        make_float3(x - (half_x * 0.82f), 0.08f, z + (facing_sign * 0.76f)),
+        make_float3(0.12f, 0.08f, 0.12f),
+        scaled_color(post_color, 0.82f),
+        1
+    );
+    push_prop(
+        make_float3(x + (half_x * 0.82f), 0.08f, z + (facing_sign * 0.76f)),
+        make_float3(0.12f, 0.08f, 0.12f),
+        scaled_color(post_color, 0.82f),
+        1
+    );
+    push_prop(
         make_float3(x - (half_x * 0.82f), 1.18f, z + (facing_sign * 0.76f)),
-        make_float3(0.07f, 1.18f, 0.07f),
-        make_float4(0.49f, 0.45f, 0.37f, 1.0f),
+        make_float3(0.06f, 1.18f, 0.06f),
+        post_color,
         1
     );
     push_prop(
         make_float3(x + (half_x * 0.82f), 1.18f, z + (facing_sign * 0.76f)),
-        make_float3(0.07f, 1.18f, 0.07f),
-        make_float4(0.49f, 0.45f, 0.37f, 1.0f),
+        make_float3(0.06f, 1.18f, 0.06f),
+        post_color,
         1
     );
-
+    push_prop(
+        make_float3(x, 0.10f, z + (facing_sign * 0.08f)),
+        make_float3(half_x * 0.96f, 0.08f, 0.24f),
+        scaled_color(tile_color, 0.86f),
+        0
+    );
+    push_prop(
+        make_float3(x, 0.32f, storefront_z),
+        make_float3(half_x * 0.90f, 0.18f, 0.07f),
+        tile_color,
+        0
+    );
+    push_prop(
+        make_float3(x - display_offset_x, 0.98f, storefront_z),
+        make_float3(display_half_x, 0.44f, 0.04f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x + display_offset_x, 0.98f, storefront_z),
+        make_float3(display_half_x, 0.44f, 0.04f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.92f, entry_z),
+        make_float3(entry_half_x, 0.70f, 0.12f),
+        recess_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 1.02f, storefront_z),
+        make_float3(entry_half_x * 0.64f, 0.58f, 0.04f),
+        glass_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 1.86f, z + (facing_sign * 0.08f)),
+        make_float3(half_x * 0.82f, 0.12f, 0.05f),
+        scaled_color(canopy_color, 0.82f),
+        0
+    );
+    push_prop(
+        make_float3(x - display_offset_x, 0.98f, storefront_z),
+        make_float3(0.04f, 0.64f, 0.06f),
+        mullion_color,
+        0
+    );
+    push_prop(
+        make_float3(x + display_offset_x, 0.98f, storefront_z),
+        make_float3(0.04f, 0.64f, 0.06f),
+        mullion_color,
+        0
+    );
+    push_prop(
+        make_float3(x - (entry_half_x + 0.08f), 0.98f, storefront_z),
+        make_float3(0.03f, 0.64f, 0.06f),
+        mullion_color,
+        0
+    );
+    push_prop(
+        make_float3(x + (entry_half_x + 0.08f), 0.98f, storefront_z),
+        make_float3(0.03f, 0.64f, 0.06f),
+        mullion_color,
+        0
+    );
     push_prop(
         make_float3(x, 2.38f, canopy_z),
         make_float3(half_x, 0.12f, 0.96f),
-        make_float4(0.90f, 0.55f, 0.21f, 1.0f),
+        canopy_color,
         0
     );
-
+    push_prop(
+        make_float3(x, 2.22f, z + (facing_sign * 0.52f)),
+        make_float3(half_x * 0.92f, 0.05f, 0.76f),
+        scaled_color(canopy_color, 0.76f),
+        0
+    );
+    push_prop(
+        make_float3(x, 2.14f, front_z),
+        make_float3(half_x * 0.92f, 0.18f, 0.08f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 2.52f, z + (facing_sign * 0.04f)),
+        make_float3(half_x * 1.04f, 0.08f, 0.10f),
+        scaled_color(trim_color, 0.82f),
+        0
+    );
+    push_prop(
+        make_float3(x - (half_x * 0.90f), 2.22f, canopy_z),
+        make_float3(0.04f, 0.18f, 0.76f),
+        scaled_color(canopy_color, 0.90f),
+        0
+    );
+    push_prop(
+        make_float3(x + (half_x * 0.90f), 2.22f, canopy_z),
+        make_float3(0.04f, 0.18f, 0.76f),
+        scaled_color(canopy_color, 0.90f),
+        0
+    );
+    push_prop(
+        make_float3(x, 1.42f, z + (facing_sign * 0.06f)),
+        make_float3(half_x * 0.86f, 0.44f, 0.06f),
+        glass_color,
+        0
+    );
     push_prop(
         make_float3(x, 2.05f, z + (facing_sign * 0.10f)),
         make_float3(half_x, 0.08f, 0.18f),
-        make_float4(0.67f, 0.31f, 0.18f, 1.0f),
+        trim_color,
+        0
+    );
+    push_prop(
+        make_float3(x, 0.20f, storefront_z),
+        make_float3(half_x * 0.82f, 0.04f, 0.02f),
+        kickplate_color,
+        0
+    );
+    push_prop(
+        make_float3(x - (half_x * 0.32f), 1.42f, z + (facing_sign * 0.08f)),
+        make_float3(0.04f, 0.38f, 0.08f),
+        scaled_color(post_color, 0.90f),
+        0
+    );
+    push_prop(
+        make_float3(x + (half_x * 0.32f), 1.42f, z + (facing_sign * 0.08f)),
+        make_float3(0.04f, 0.38f, 0.08f),
+        scaled_color(post_color, 0.90f),
+        0
+    );
+    push_prop(
+        make_float3(x - (half_x * 0.58f), 2.18f, brace_z),
+        make_float3(0.03f, 0.42f, 0.03f),
+        scaled_color(post_color, 0.94f),
+        0
+    );
+    push_prop(
+        make_float3(x + (half_x * 0.58f), 2.18f, brace_z),
+        make_float3(0.03f, 0.42f, 0.03f),
+        scaled_color(post_color, 0.94f),
         0
     );
 }
@@ -6700,6 +8178,206 @@ static void push_lane_arrow_x(float x_center, float z_origin, float direction_si
     ));
 }
 
+static void push_stop_bar_shoulder_z(float x_origin, float z_center, float half_width, MDTBFloat4 road_color) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.74f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.58f);
+
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.005f, z_center),
+        make_float3(half_width + 0.18f, 0.01f, 0.34f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.015f, z_center),
+        make_float3(fmaxf((half_width * 0.82f), 3.85f), 0.01f, 0.05f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - fmaxf(half_width - 0.48f, 0.62f), kRoadHeight + 0.015f, z_center),
+        make_float3(0.24f, 0.01f, 0.24f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + fmaxf(half_width - 0.48f, 0.62f), kRoadHeight + 0.015f, z_center),
+        make_float3(0.24f, 0.01f, 0.24f),
+        seam_color
+    ));
+}
+
+static void push_stop_bar_shoulder_x(float x_center, float z_origin, float half_width, MDTBFloat4 road_color) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.74f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.58f);
+
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.005f, z_origin),
+        make_float3(0.34f, 0.01f, half_width + 0.18f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin),
+        make_float3(0.05f, 0.01f, fmaxf((half_width * 0.82f), 3.85f)),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin - fmaxf(half_width - 0.48f, 0.62f)),
+        make_float3(0.24f, 0.01f, 0.24f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin + fmaxf(half_width - 0.48f, 0.62f)),
+        make_float3(0.24f, 0.01f, 0.24f),
+        seam_color
+    ));
+}
+
+static void push_lane_arrow_stand_off_z(float x_origin, float z_center, MDTBFloat4 road_color) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.76f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.005f, z_center),
+        make_float3(1.02f, 0.01f, 1.94f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin, kRoadHeight + 0.015f, z_center),
+        make_float3(0.07f, 0.01f, 1.40f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin - 0.78f, kRoadHeight + 0.015f, z_center),
+        make_float3(0.06f, 0.01f, 0.42f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_origin + 0.78f, kRoadHeight + 0.015f, z_center),
+        make_float3(0.06f, 0.01f, 0.42f),
+        seam_color
+    ));
+}
+
+static void push_lane_arrow_stand_off_x(float x_center, float z_origin, MDTBFloat4 road_color) {
+    const MDTBFloat4 apron_color = scaled_color(road_color, 0.76f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.005f, z_origin),
+        make_float3(1.94f, 0.01f, 1.02f),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin),
+        make_float3(1.40f, 0.01f, 0.07f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin - 0.78f),
+        make_float3(0.42f, 0.01f, 0.06f),
+        seam_color
+    ));
+    push_scene_box(make_box(
+        make_float3(x_center, kRoadHeight + 0.015f, z_origin + 0.78f),
+        make_float3(0.42f, 0.01f, 0.06f),
+        seam_color
+    ));
+}
+
+static void push_lane_divider_throat_z(
+    float x_origin,
+    float z_origin,
+    float direction_sign,
+    float divider_offset,
+    float stop_bar_offset,
+    float arrow_offset,
+    MDTBFloat4 road_color,
+    MDTBFloat4 divider_color
+) {
+    const MDTBFloat4 throat_color = scaled_color(road_color, 0.78f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+    const float near_along = stop_bar_offset + 0.92f;
+    const float far_along = arrow_offset - 1.46f;
+    if (far_along <= near_along) {
+        return;
+    }
+
+    const float center_along = (near_along + far_along) * 0.5f;
+    const float half_along = fmaxf((far_along - near_along) * 0.5f, 1.10f);
+
+    for (int side = -1; side <= 1; side += 2) {
+        const float x = x_origin + ((float)side * divider_offset);
+        const float z = z_origin + (direction_sign * center_along);
+
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.005f, z),
+            make_float3(0.18f, 0.01f, half_along),
+            throat_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.015f, z),
+            make_float3(0.05f, 0.01f, fmaxf(half_along * 0.82f, 0.74f)),
+            seam_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.015f, z_origin + (direction_sign * near_along)),
+            make_float3(0.31f, 0.01f, 0.08f),
+            divider_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.015f, z_origin + (direction_sign * far_along)),
+            make_float3(0.31f, 0.01f, 0.08f),
+            divider_color
+        ));
+    }
+}
+
+static void push_lane_divider_throat_x(
+    float x_origin,
+    float z_origin,
+    float direction_sign,
+    float divider_offset,
+    float stop_bar_offset,
+    float arrow_offset,
+    MDTBFloat4 road_color,
+    MDTBFloat4 divider_color
+) {
+    const MDTBFloat4 throat_color = scaled_color(road_color, 0.78f);
+    const MDTBFloat4 seam_color = scaled_color(road_color, 0.60f);
+    const float near_along = stop_bar_offset + 0.92f;
+    const float far_along = arrow_offset - 1.46f;
+    if (far_along <= near_along) {
+        return;
+    }
+
+    const float center_along = (near_along + far_along) * 0.5f;
+    const float half_along = fmaxf((far_along - near_along) * 0.5f, 1.10f);
+
+    for (int side = -1; side <= 1; side += 2) {
+        const float x = x_origin + (direction_sign * center_along);
+        const float z = z_origin + ((float)side * divider_offset);
+
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.005f, z),
+            make_float3(half_along, 0.01f, 0.18f),
+            throat_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x, kRoadHeight + 0.015f, z),
+            make_float3(fmaxf(half_along * 0.82f, 0.74f), 0.01f, 0.05f),
+            seam_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x_origin + (direction_sign * near_along), kRoadHeight + 0.015f, z),
+            make_float3(0.08f, 0.01f, 0.31f),
+            divider_color
+        ));
+        push_scene_box(make_box(
+            make_float3(x_origin + (direction_sign * far_along), kRoadHeight + 0.015f, z),
+            make_float3(0.08f, 0.01f, 0.31f),
+            divider_color
+        ));
+    }
+}
+
 static void push_billboard(float x, float z, float width, float height, int align_on_x_axis, MDTBFloat4 face_color) {
     const float pole_offset = width * 0.32f;
 
@@ -6766,19 +8444,52 @@ static void push_carport_landmark(float x, float z) {
 static void push_bus_shelter(float x, float z) {
     const MDTBFloat4 frame_color = make_float4(0.31f, 0.33f, 0.36f, 1.0f);
     const MDTBFloat4 roof_color = make_float4(0.67f, 0.76f, 0.80f, 1.0f);
+    const MDTBFloat4 glass_color = make_float4(0.69f, 0.79f, 0.84f, 1.0f);
+    const MDTBFloat4 panel_color = make_float4(0.22f, 0.28f, 0.34f, 1.0f);
+    const MDTBFloat4 ad_color = make_float4(0.88f, 0.74f, 0.26f, 1.0f);
 
-    push_prop(make_float3(x - 0.92f, 1.22f, z), make_float3(0.08f, 1.22f, 0.08f), frame_color, 1);
-    push_prop(make_float3(x + 0.92f, 1.22f, z), make_float3(0.08f, 1.22f, 0.08f), frame_color, 1);
-    push_prop(make_float3(x, 2.46f, z), make_float3(1.14f, 0.10f, 1.34f), roof_color, 0);
-    push_prop(make_float3(x - 0.78f, 1.18f, z), make_float3(0.05f, 1.02f, 1.08f), make_float4(0.69f, 0.79f, 0.84f, 1.0f), 0);
+    push_prop(make_float3(x - 0.92f, 1.22f, z - 0.98f), make_float3(0.06f, 1.22f, 0.06f), frame_color, 1);
+    push_prop(make_float3(x + 0.92f, 1.22f, z - 0.98f), make_float3(0.06f, 1.22f, 0.06f), frame_color, 1);
+    push_prop(make_float3(x - 0.92f, 1.22f, z + 0.98f), make_float3(0.06f, 1.22f, 0.06f), frame_color, 1);
+    push_prop(make_float3(x + 0.92f, 1.22f, z + 0.98f), make_float3(0.06f, 1.22f, 0.06f), frame_color, 1);
+    push_prop(make_float3(x, 2.46f, z), make_float3(1.18f, 0.10f, 1.36f), roof_color, 0);
+    push_prop(make_float3(x, 2.58f, z - 0.12f), make_float3(1.00f, 0.04f, 1.12f), scaled_color(roof_color, 0.86f), 0);
+    push_prop(make_float3(x, 2.30f, z + 1.16f), make_float3(1.06f, 0.08f, 0.12f), scaled_color(roof_color, 1.08f), 0);
+    push_prop(make_float3(x - 0.78f, 1.18f, z), make_float3(0.05f, 1.02f, 1.08f), glass_color, 0);
+    push_prop(make_float3(x + 0.78f, 1.18f, z - 0.42f), make_float3(0.05f, 0.94f, 0.58f), glass_color, 0);
+    push_prop(make_float3(x, 1.26f, z - 1.08f), make_float3(0.78f, 0.84f, 0.05f), glass_color, 0);
+    push_prop(make_float3(x + 0.74f, 1.18f, z + 0.52f), make_float3(0.09f, 0.92f, 0.38f), panel_color, 0);
+    push_prop(make_float3(x + 0.74f, 1.18f, z + 0.52f), make_float3(0.05f, 0.78f, 0.28f), ad_color, 0);
+    push_prop(make_float3(x, 0.22f, z + 1.10f), make_float3(0.98f, 0.06f, 0.10f), frame_color, 1);
     push_bench(x, z - 0.52f);
+    push_trash_bin(x - 1.38f, z + 1.02f);
+    push_bus_stop_sign(x - 1.52f, z + 0.94f, 1.0f);
+    push_utility_cabinet(x + 1.34f, z - 1.08f, 0);
 }
 
 static void push_apartment_entry(float x, float z) {
-    push_prop(make_float3(x, kSidewalkHeight + 1.55f, z), make_float3(0.28f, 1.55f, 2.85f), make_float4(0.62f, 0.58f, 0.46f, 1.0f), 1);
-    push_prop(make_float3(x - 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.10f, 1.24f, 2.42f), make_float4(0.43f, 0.46f, 0.48f, 1.0f), 1);
-    push_prop(make_float3(x + 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.10f, 1.24f, 2.42f), make_float4(0.43f, 0.46f, 0.48f, 1.0f), 1);
-    push_prop(make_float3(x, kSidewalkHeight + 3.05f, z), make_float3(1.48f, 0.14f, 2.85f), make_float4(0.86f, 0.76f, 0.34f, 1.0f), 0);
+    const MDTBFloat4 stucco_color = make_float4(0.62f, 0.58f, 0.46f, 1.0f);
+    const MDTBFloat4 trim_color = make_float4(0.43f, 0.46f, 0.48f, 1.0f);
+    const MDTBFloat4 canopy_color = make_float4(0.86f, 0.76f, 0.34f, 1.0f);
+    const MDTBFloat4 glass_color = make_float4(0.66f, 0.78f, 0.84f, 1.0f);
+    const MDTBFloat4 door_color = make_float4(0.25f, 0.20f, 0.16f, 1.0f);
+
+    push_prop(make_float3(x, kSidewalkHeight + 0.08f, z), make_float3(1.56f, 0.08f, 2.92f), scaled_color(trim_color, 0.78f), 1);
+    push_prop(make_float3(x, kSidewalkHeight + 0.18f, z), make_float3(1.32f, 0.06f, 1.34f), scaled_color(stucco_color, 0.88f), 1);
+    push_prop(make_float3(x, kSidewalkHeight + 1.55f, z), make_float3(0.32f, 1.55f, 2.85f), stucco_color, 1);
+    push_prop(make_float3(x - 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.16f, 1.24f, 2.42f), trim_color, 1);
+    push_prop(make_float3(x + 1.05f, kSidewalkHeight + 1.24f, z), make_float3(0.16f, 1.24f, 2.42f), trim_color, 1);
+    push_prop(make_float3(x - 0.60f, kSidewalkHeight + 0.96f, z), make_float3(0.26f, 0.96f, 0.16f), door_color, 0);
+    push_prop(make_float3(x + 0.60f, kSidewalkHeight + 0.96f, z), make_float3(0.26f, 0.96f, 0.16f), door_color, 0);
+    push_prop(make_float3(x - 0.60f, kSidewalkHeight + 1.82f, z), make_float3(0.22f, 0.16f, 0.08f), glass_color, 0);
+    push_prop(make_float3(x + 0.60f, kSidewalkHeight + 1.82f, z), make_float3(0.22f, 0.16f, 0.08f), glass_color, 0);
+    push_prop(make_float3(x - 1.05f, kSidewalkHeight + 0.38f, z), make_float3(0.20f, 0.18f, 2.18f), scaled_color(trim_color, 0.84f), 0);
+    push_prop(make_float3(x + 1.05f, kSidewalkHeight + 0.38f, z), make_float3(0.20f, 0.18f, 2.18f), scaled_color(trim_color, 0.84f), 0);
+    push_prop(make_float3(x, kSidewalkHeight + 3.05f, z), make_float3(1.54f, 0.14f, 2.85f), canopy_color, 0);
+    push_prop(make_float3(x, kSidewalkHeight + 2.88f, z), make_float3(1.24f, 0.05f, 2.46f), scaled_color(canopy_color, 0.78f), 0);
+    push_prop(make_float3(x, kSidewalkHeight + 3.22f, z), make_float3(1.34f, 0.05f, 0.12f), scaled_color(canopy_color, 1.08f), 0);
+    push_prop(make_float3(x - 0.82f, kSidewalkHeight + 2.44f, z), make_float3(0.07f, 0.07f, 0.07f), scaled_color(canopy_color, 1.12f), 0);
+    push_prop(make_float3(x + 0.82f, kSidewalkHeight + 2.44f, z), make_float3(0.07f, 0.07f, 0.07f), scaled_color(canopy_color, 1.12f), 0);
 }
 
 static void push_corner_store_landmark(float x, float z) {
@@ -6788,6 +8499,24 @@ static void push_corner_store_landmark(float x, float z) {
         make_float4(0.59f, 0.47f, 0.34f, 1.0f)
     );
 
+    push_prop(
+        make_float3(x, kSidewalkHeight + 0.80f, z + 3.18f),
+        make_float3(3.48f, 0.70f, 0.12f),
+        make_float4(0.66f, 0.78f, 0.84f, 1.0f),
+        0
+    );
+    push_prop(
+        make_float3(x - 3.34f, kSidewalkHeight + 0.80f, z + 0.62f),
+        make_float3(0.12f, 0.70f, 2.22f),
+        make_float4(0.66f, 0.78f, 0.84f, 1.0f),
+        0
+    );
+    push_prop(
+        make_float3(x + 1.10f, kSidewalkHeight + 1.46f, z + 3.62f),
+        make_float3(2.24f, 0.12f, 0.42f),
+        make_float4(0.90f, 0.48f, 0.19f, 1.0f),
+        0
+    );
     push_prop(
         make_float3(x, kSidewalkHeight + 1.55f, z + 3.72f),
         make_float3(4.7f, 0.18f, 0.46f),
@@ -6801,6 +8530,14 @@ static void push_corner_store_landmark(float x, float z) {
         make_float4(0.92f, 0.85f, 0.54f, 1.0f),
         0
     );
+    push_prop(
+        make_float3(x + 3.82f, kSidewalkHeight + 2.54f, z + 1.24f),
+        make_float3(0.12f, 0.88f, 0.52f),
+        make_float4(0.92f, 0.82f, 0.34f, 1.0f),
+        0
+    );
+    push_planter(x - 3.15f, z + 4.92f, 0.46f);
+    push_planter(x + 2.84f, z + 4.86f, 0.42f);
 
     push_prop(
         make_float3(x - 2.9f, kSidewalkHeight + 1.0f, z + 3.15f),
@@ -6906,6 +8643,166 @@ static void push_road_feature_run(const MDTBRoadSpine *spine, float lateral_offs
     }
 }
 
+static void push_road_oriented_prop(
+    const MDTBRoadSpine *spine,
+    float lateral_offset,
+    float segment_center,
+    float y_center,
+    float half_lateral,
+    float half_height,
+    float half_longitudinal,
+    MDTBFloat4 color,
+    int grounded
+) {
+    if (spine == NULL) {
+        return;
+    }
+
+    if (spine->axis == MDTBRoadAxisNorthSouth) {
+        push_prop(
+            make_float3(spine->coordinate + lateral_offset, y_center, segment_center),
+            make_float3(half_lateral, half_height, half_longitudinal),
+            color,
+            grounded
+        );
+    } else {
+        push_prop(
+            make_float3(segment_center, y_center, spine->coordinate + lateral_offset),
+            make_float3(half_longitudinal, half_height, half_lateral),
+            color,
+            grounded
+        );
+    }
+}
+
+static void push_storm_drain_on_spine(const MDTBRoadSpine *spine, float lateral_offset, float segment_center, float curb_sign) {
+    const MDTBFloat4 frame_color = make_float4(0.23f, 0.24f, 0.26f, 1.0f);
+    const MDTBFloat4 grate_color = make_float4(0.36f, 0.38f, 0.40f, 1.0f);
+    const MDTBFloat4 slot_color = make_float4(0.14f, 0.15f, 0.16f, 1.0f);
+
+    push_road_oriented_prop(spine, lateral_offset, segment_center, 0.10f, 0.18f, 0.02f, 0.54f, frame_color, 0);
+    push_road_oriented_prop(spine, lateral_offset + (curb_sign * 0.15f), segment_center, 0.13f, 0.05f, 0.05f, 0.50f, slot_color, 0);
+
+    for (int slat = -1; slat <= 1; ++slat) {
+        push_road_oriented_prop(
+            spine,
+            lateral_offset - (curb_sign * 0.03f),
+            segment_center + ((float)slat * 0.22f),
+            0.14f,
+            0.10f,
+            0.02f,
+            0.03f,
+            grate_color,
+            0
+        );
+    }
+}
+
+static void push_access_cover_on_spine(const MDTBRoadSpine *spine, float lateral_offset, float segment_center, float half_lateral, float half_longitudinal) {
+    const MDTBFloat4 patch_color = make_float4(0.27f, 0.28f, 0.30f, 1.0f);
+    const MDTBFloat4 lid_color = make_float4(0.40f, 0.42f, 0.44f, 1.0f);
+    const MDTBFloat4 seam_color = make_float4(0.18f, 0.19f, 0.20f, 1.0f);
+
+    push_road_oriented_prop(
+        spine,
+        lateral_offset,
+        segment_center,
+        kRoadHeight + 0.015f,
+        half_lateral + 0.10f,
+        0.01f,
+        half_longitudinal + 0.10f,
+        patch_color,
+        0
+    );
+    push_road_oriented_prop(
+        spine,
+        lateral_offset,
+        segment_center,
+        kRoadHeight + 0.02f,
+        half_lateral,
+        0.01f,
+        half_longitudinal,
+        lid_color,
+        0
+    );
+
+    if (half_lateral >= half_longitudinal) {
+        push_road_oriented_prop(
+            spine,
+            lateral_offset,
+            segment_center,
+            kRoadHeight + 0.03f,
+            half_lateral * 0.72f,
+            0.01f,
+            0.02f,
+            seam_color,
+            0
+        );
+    } else {
+        push_road_oriented_prop(
+            spine,
+            lateral_offset,
+            segment_center,
+            kRoadHeight + 0.03f,
+            0.02f,
+            0.01f,
+            half_longitudinal * 0.72f,
+            seam_color,
+            0
+        );
+    }
+}
+
+static void build_road_corridor_details(void) {
+    const MDTBFloat4 gutter_color = make_float4(0.21f, 0.22f, 0.24f, 1.0f);
+
+    for (size_t index = 0u; index < g_road_spine_count; ++index) {
+        const MDTBRoadSpine *spine = &g_road_spines[index];
+        const MDTBRoadProfile *profile = road_profile_for_spine(spine);
+        const int segment_count =
+            spine->axis == MDTBRoadAxisNorthSouth
+            ? (int)ceilf((kPlayableHalfLength + 8.0f) / 20.0f)
+            : (int)ceilf((kPlayableHalfWidth + 8.0f) / 24.0f);
+        const float segment_spacing = spine->axis == MDTBRoadAxisNorthSouth ? 20.0f : 24.0f;
+        const float gutter_offset = fmaxf(profile->road_half_width - 0.26f, 4.8f);
+        const float storm_drain_offset = profile->road_half_width + 0.12f;
+
+        push_road_feature_run(spine, -gutter_offset, 0.18f, 0.01f, gutter_color);
+        push_road_feature_run(spine, gutter_offset, 0.18f, 0.01f, gutter_color);
+
+        for (int segment = -segment_count; segment <= segment_count; ++segment) {
+            const float center = (float)segment * segment_spacing;
+
+            if (road_spine_segment_hits_intersection(spine, center)) {
+                continue;
+            }
+
+            if (((segment + (int)index) % 3) == 0) {
+                const float offset_center = center + (((segment & 1) == 0) ? 4.6f : -4.6f);
+
+                push_storm_drain_on_spine(spine, -storm_drain_offset, offset_center, -1.0f);
+                push_storm_drain_on_spine(spine, storm_drain_offset, offset_center - 2.1f, 1.0f);
+            }
+
+            if (((segment + (int)index) % 4) == 0) {
+                switch (spine->road_class) {
+                    case MDTBRoadClassBoulevard:
+                        push_access_cover_on_spine(spine, -profile->lane_offset, center - 3.0f, 0.34f, 0.26f);
+                        push_access_cover_on_spine(spine, profile->lane_offset, center + 2.8f, 0.34f, 0.26f);
+                        break;
+                    case MDTBRoadClassAvenue:
+                        push_access_cover_on_spine(spine, 0.0f, center + 1.8f, 0.30f, 0.24f);
+                        break;
+                    case MDTBRoadClassConnector:
+                    case MDTBRoadClassResidentialStreet:
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+}
+
 static void build_road_class_features(void) {
     const MDTBFloat4 boulevard_median_color = make_float4(0.63f, 0.58f, 0.24f, 1.0f);
     const MDTBFloat4 boulevard_divider_color = make_float4(0.90f, 0.88f, 0.74f, 1.0f);
@@ -6959,19 +8856,84 @@ static void build_road_class_features(void) {
 }
 
 static void build_block_lot_surfaces(const MDTBBlockDescriptor *block) {
-    const MDTBFloat4 lot_color = make_float4(0.54f, 0.49f, 0.42f, 1.0f);
+    const int has_retail = (block->tag_mask & MDTBBlockTagRetail) != 0u;
+    const int has_residential = (block->tag_mask & MDTBBlockTagResidential) != 0u;
+    const int has_spur = (block->tag_mask & MDTBBlockTagSpur) != 0u;
+    const MDTBFloat4 lot_color = has_residential
+        ? make_float4(0.50f, 0.48f, 0.41f, 1.0f)
+        : make_float4(0.54f, 0.49f, 0.42f, 1.0f);
+    const MDTBFloat4 asphalt_color = has_spur
+        ? make_float4(0.28f, 0.28f, 0.29f, 1.0f)
+        : (has_retail ? make_float4(0.31f, 0.31f, 0.33f, 1.0f) : make_float4(0.34f, 0.34f, 0.35f, 1.0f));
+    const MDTBFloat4 curb_color = has_residential
+        ? make_float4(0.68f, 0.66f, 0.60f, 1.0f)
+        : make_float4(0.64f, 0.62f, 0.58f, 1.0f);
+    const float planter_size = has_residential ? 0.56f : (has_spur ? 0.42f : 0.48f);
+    const float parking_half_x = has_spur ? 9.8f : (has_retail ? 8.6f : 7.4f);
+    const float parking_half_z = has_residential ? 12.8f : (has_spur ? 19.8f : 17.2f);
+    const float parking_center_z = has_residential ? 0.0f : (has_spur ? -1.0f : 0.8f);
 
     push_scene_box(make_box(
         make_float3(block->origin.x - 35.0f, kSidewalkHeight * 0.5f, block->origin.z),
         make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
-        lot_color
+        scaled_color(lot_color, 0.98f)
     ));
 
     push_scene_box(make_box(
         make_float3(block->origin.x + 35.0f, kSidewalkHeight * 0.5f, block->origin.z),
         make_float3(23.0f, kSidewalkHeight * 0.5f, 29.0f),
-        lot_color
+        scaled_color(lot_color, 1.02f)
     ));
+
+    push_lot_parking_pad(
+        block->origin.x - 35.8f,
+        block->origin.z + parking_center_z,
+        parking_half_x,
+        parking_half_z,
+        -1.0f,
+        planter_size,
+        asphalt_color,
+        curb_color
+    );
+    push_lot_parking_pad(
+        block->origin.x + 35.8f,
+        block->origin.z - parking_center_z,
+        parking_half_x,
+        parking_half_z,
+        1.0f,
+        planter_size,
+        asphalt_color,
+        curb_color
+    );
+
+    push_scene_box(make_box(
+        make_float3(block->origin.x - 52.2f, kSidewalkHeight + 0.02f, block->origin.z),
+        make_float3(0.14f, 0.01f, 26.4f),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(block->origin.x + 52.2f, kSidewalkHeight + 0.02f, block->origin.z),
+        make_float3(0.14f, 0.01f, 26.4f),
+        curb_color
+    ));
+
+    if (has_spur) {
+        push_scene_box(make_box(
+            make_float3(block->origin.x - 42.2f, kSidewalkHeight + 0.01f, block->origin.z - 23.6f),
+            make_float3(7.2f, 0.01f, 3.6f),
+            scaled_color(asphalt_color, 0.94f)
+        ));
+        push_scene_box(make_box(
+            make_float3(block->origin.x + 42.2f, kSidewalkHeight + 0.01f, block->origin.z + 23.6f),
+            make_float3(7.2f, 0.01f, 3.6f),
+            scaled_color(asphalt_color, 0.94f)
+        ));
+    }
+
+    push_utility_line_run_z(block->origin.x - 53.4f, block->origin.z - 24.0f, block->origin.z + 24.0f, 24.0f, 1.0f);
+    push_utility_line_run_z(block->origin.x + 53.4f, block->origin.z - 24.0f, block->origin.z + 24.0f, 24.0f, -1.0f);
+    push_utility_line_run_x(block->origin.x - 53.0f, block->origin.x - 18.0f, block->origin.z - 25.8f, 17.5f, 1.0f);
+    push_utility_line_run_x(block->origin.x + 18.0f, block->origin.x + 53.0f, block->origin.z + 25.8f, 17.5f, -1.0f);
 }
 
 static void build_world_surfaces(void) {
@@ -7056,6 +9018,7 @@ static void build_world_surfaces(void) {
     }
 
     build_road_class_features();
+    build_road_corridor_details();
 }
 
 static void build_road_markings(void) {
@@ -7189,11 +9152,69 @@ static void build_road_markings(void) {
         const float eastwest_stop_bar_half_width = fmaxf(horizontal_road->road_half_width - 0.9f, 4.35f);
         const float northsouth_arrow_offset = profile.vertical != NULL ? profile.vertical->arrow_offset : 18.5f;
         const float eastwest_arrow_offset = profile.horizontal != NULL ? profile.horizontal->arrow_offset : 18.5f;
+        const MDTBFloat4 northsouth_road_color =
+            road_surface_color_for_class(profile.vertical != NULL ? profile.vertical->road_class : MDTBRoadClassAvenue);
+        const MDTBFloat4 eastwest_road_color =
+            road_surface_color_for_class(profile.horizontal != NULL ? profile.horizontal->road_class : MDTBRoadClassAvenue);
+        const MDTBFloat4 boulevard_divider_color = make_float4(0.90f, 0.88f, 0.74f, 1.0f);
 
         push_crosswalk_x(x_origin - vertical_crosswalk_offset, z_origin);
         push_crosswalk_x(x_origin + vertical_crosswalk_offset, z_origin);
         push_crosswalk_z(x_origin, z_origin - horizontal_crosswalk_offset);
         push_crosswalk_z(x_origin, z_origin + horizontal_crosswalk_offset);
+
+        push_stop_bar_shoulder_z(x_origin, z_origin - northsouth_stop_bar_offset, northsouth_stop_bar_half_width, northsouth_road_color);
+        push_stop_bar_shoulder_z(x_origin, z_origin + northsouth_stop_bar_offset, northsouth_stop_bar_half_width, northsouth_road_color);
+        push_stop_bar_shoulder_x(x_origin - eastwest_stop_bar_offset, z_origin, eastwest_stop_bar_half_width, eastwest_road_color);
+        push_stop_bar_shoulder_x(x_origin + eastwest_stop_bar_offset, z_origin, eastwest_stop_bar_half_width, eastwest_road_color);
+
+        if (profile.vertical != NULL && profile.vertical->road_class == MDTBRoadClassBoulevard) {
+            const float divider_offset = vertical_road->lane_offset + 0.10f;
+            push_lane_divider_throat_z(
+                x_origin,
+                z_origin,
+                -1.0f,
+                divider_offset,
+                northsouth_stop_bar_offset,
+                northsouth_arrow_offset,
+                northsouth_road_color,
+                boulevard_divider_color
+            );
+            push_lane_divider_throat_z(
+                x_origin,
+                z_origin,
+                1.0f,
+                divider_offset,
+                northsouth_stop_bar_offset,
+                northsouth_arrow_offset,
+                northsouth_road_color,
+                boulevard_divider_color
+            );
+        }
+
+        if (profile.horizontal != NULL && profile.horizontal->road_class == MDTBRoadClassBoulevard) {
+            const float divider_offset = horizontal_road->lane_offset + 0.10f;
+            push_lane_divider_throat_x(
+                x_origin,
+                z_origin,
+                -1.0f,
+                divider_offset,
+                eastwest_stop_bar_offset,
+                eastwest_arrow_offset,
+                eastwest_road_color,
+                boulevard_divider_color
+            );
+            push_lane_divider_throat_x(
+                x_origin,
+                z_origin,
+                1.0f,
+                divider_offset,
+                eastwest_stop_bar_offset,
+                eastwest_arrow_offset,
+                eastwest_road_color,
+                boulevard_divider_color
+            );
+        }
 
         push_scene_box(make_box(
             make_float3(x_origin, kRoadHeight + 0.01f, z_origin - northsouth_stop_bar_offset),
@@ -7215,6 +9236,11 @@ static void build_road_markings(void) {
             make_float3(0.12f, 0.01f, eastwest_stop_bar_half_width),
             make_float4(0.92f, 0.91f, 0.87f, 1.0f)
         ));
+
+        push_lane_arrow_stand_off_z(x_origin, z_origin - northsouth_arrow_offset, northsouth_road_color);
+        push_lane_arrow_stand_off_z(x_origin, z_origin + northsouth_arrow_offset, northsouth_road_color);
+        push_lane_arrow_stand_off_x(x_origin - eastwest_arrow_offset, z_origin, eastwest_road_color);
+        push_lane_arrow_stand_off_x(x_origin + eastwest_arrow_offset, z_origin, eastwest_road_color);
 
         push_lane_arrow_z(x_origin, z_origin - northsouth_arrow_offset, -1.0f);
         push_lane_arrow_z(x_origin, z_origin + northsouth_arrow_offset, 1.0f);
@@ -7311,6 +9337,9 @@ static void build_intersection_props(const MDTBBlockDescriptor *block) {
     const MDTBFloat4 plaza_color = sidewalk_surface_color_for_class(dominant_road_class);
     const MDTBFloat4 refuge_color = curb_surface_color_for_class(dominant_road_class);
 
+    build_intersection_surface_details(block, &profile);
+    build_intersection_mouth_transitions(block, &profile);
+
     for (int x_sign = -1; x_sign <= 1; x_sign += 2) {
         for (int z_sign = -1; z_sign <= 1; z_sign += 2) {
             push_corner_plaza_pad(
@@ -7325,10 +9354,28 @@ static void build_intersection_props(const MDTBBlockDescriptor *block) {
                 block->origin.x + ((float)x_sign * signal_x),
                 block->origin.z + ((float)z_sign * signal_z)
             );
+            push_signal_control_box(
+                block->origin.x + ((float)x_sign * (signal_x + 1.95f)),
+                block->origin.z + ((float)z_sign * (signal_z - 1.75f)),
+                x_sign != z_sign
+            );
+            push_signal_service_corner(
+                block->origin,
+                (float)x_sign,
+                (float)z_sign,
+                signal_x,
+                signal_z,
+                x_sign != z_sign,
+                plaza_color
+            );
             push_planter(
                 block->origin.x + ((float)x_sign * planter_x),
                 block->origin.z + ((float)z_sign * planter_z),
                 planter_size
+            );
+            push_fire_hydrant(
+                block->origin.x + ((float)x_sign * (signal_x - 0.75f)),
+                block->origin.z + ((float)z_sign * (signal_z + 2.35f))
             );
         }
     }
@@ -7509,6 +9556,8 @@ static void build_hub_frontage(const MDTBBlockDescriptor *block) {
     push_trash_bin(x_origin - 22.1f, z_origin - profile.furniture_z);
     push_trash_bin(x_origin + 36.5f, z_origin - (profile.furniture_z + 0.10f));
     push_bench(x_origin + 23.9f, z_origin - (profile.furniture_z - 0.40f));
+    push_parking_meter(x_origin - 26.8f, z_origin - (profile.furniture_z - 0.44f), 1.0f);
+    push_parking_meter(x_origin + 19.2f, z_origin - (profile.furniture_z - 0.46f), 1.0f);
 
     push_store_awning_x(x_origin - 18.0f, z_origin + (profile.shopfront_z + 0.20f), 3.35f * profile.secondary_awning_scale, -1.0f);
     push_store_awning_x(x_origin + 18.0f, z_origin + (profile.shopfront_z - 0.20f), 3.75f * profile.secondary_awning_scale, -1.0f);
@@ -7518,14 +9567,18 @@ static void build_hub_frontage(const MDTBBlockDescriptor *block) {
     push_trash_bin(x_origin - 22.3f, z_origin + (profile.furniture_z + 0.15f));
     push_trash_bin(x_origin + 36.4f, z_origin + (profile.furniture_z + 0.20f));
     push_bench(x_origin + 27.4f, z_origin + (profile.furniture_z - 0.30f));
+    push_parking_meter(x_origin - 16.4f, z_origin + (profile.furniture_z - 0.46f), -1.0f);
+    push_parking_meter(x_origin + 31.0f, z_origin + (profile.furniture_z - 0.44f), -1.0f);
 
     push_bench(x_origin - 10.7f, z_origin - (profile.rear_anchor_z - 2.30f));
     push_trash_bin(x_origin - 13.0f, z_origin - (profile.rear_anchor_z - 1.40f));
+    push_utility_cabinet(x_origin - 15.4f, z_origin - (profile.rear_anchor_z - 1.15f), 0);
     push_prop(make_float3(x_origin - 11.2f, 2.05f, z_origin - profile.rear_anchor_z), make_float3(0.12f, 2.05f, 0.12f), make_float4(0.36f, 0.37f, 0.39f, 1.0f), 1);
     push_prop(make_float3(x_origin - 11.2f, 3.42f, z_origin - profile.rear_anchor_z), make_float3(1.08f, 0.12f, 0.12f), make_float4(0.83f, 0.75f, 0.49f, 1.0f), 0);
 
     push_bench(x_origin + 9.8f, z_origin + (profile.rear_anchor_z - 2.10f));
     push_trash_bin(x_origin + 12.2f, z_origin + (profile.rear_anchor_z - 1.40f));
+    push_utility_cabinet(x_origin + 14.6f, z_origin + (profile.rear_anchor_z - 1.05f), 0);
     push_prop(make_float3(x_origin + 10.8f, 1.28f, z_origin + profile.rear_anchor_z), make_float3(0.12f, 1.28f, 1.05f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
     push_prop(make_float3(x_origin + 10.1f, 2.34f, z_origin + profile.rear_anchor_z), make_float3(0.96f, 0.10f, 1.28f), make_float4(0.67f, 0.78f, 0.82f, 1.0f), 0);
 }
@@ -7545,8 +9598,12 @@ static void build_mixed_use_frontage(const MDTBBlockDescriptor *block) {
     push_trash_bin(x_origin + 8.6f, z_origin - (profile.furniture_z + 0.10f));
     push_bench(x_origin + 19.6f, z_origin - (profile.furniture_z - 0.40f));
     push_bench(x_origin - 11.8f, z_origin + (profile.furniture_z - 0.40f));
+    push_parking_meter(x_origin - 9.4f, z_origin - (profile.furniture_z - 0.44f), 1.0f);
+    push_parking_meter(x_origin + 22.2f, z_origin + (profile.furniture_z - 0.44f), -1.0f);
     push_planter(x_origin - 32.0f, z_origin - (profile.shopfront_z - 1.10f), profile.planter_size + 0.02f);
     push_planter(x_origin + 36.2f, z_origin + (profile.shopfront_z - 1.30f), profile.planter_size);
+    push_utility_cabinet(x_origin - 24.8f, z_origin - (profile.transit_stop_z - 1.12f), 0);
+    push_fire_hydrant(x_origin - 18.6f, z_origin - (profile.transit_stop_z - 1.34f));
     push_prop(make_float3(x_origin + 6.2f, kSidewalkHeight + 2.15f, z_origin - (profile.shopfront_z - 0.30f)), make_float3(2.2f, 0.16f, 0.20f), make_float4(0.92f, 0.63f, 0.22f, 1.0f), 0);
     push_prop(make_float3(x_origin + 33.8f, kSidewalkHeight + 2.2f, z_origin + (profile.shopfront_z - 0.10f)), make_float3(1.9f, 0.16f, 0.20f), make_float4(0.28f, 0.66f, 0.84f, 1.0f), 0);
     push_prop(make_float3(x_origin - 33.6f, 1.28f, z_origin + (profile.shopfront_z - 0.30f)), make_float3(0.12f, 1.28f, 1.08f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
@@ -7609,6 +9666,8 @@ static void build_service_court_annex(const MDTBBlockDescriptor *block, uint32_t
     );
     push_trash_bin(x_origin - 28.8f, z_origin - 24.7f);
     push_bench(x_origin - 22.4f, z_origin - 24.1f);
+    push_utility_cabinet(x_origin - 31.6f, z_origin - 23.8f, 1);
+    push_fire_hydrant(x_origin - 20.8f, z_origin - 23.0f);
 
     for (int bollard = 0; bollard < 4; ++bollard) {
         push_bollard(x_origin - 35.8f + ((float)bollard * 2.6f), z_origin - 22.8f, 0.92f);
@@ -7774,9 +9833,13 @@ static void build_residential_frontage(const MDTBBlockDescriptor *block) {
     push_trash_bin(x_origin + 34.8f, z_origin + (profile.furniture_z + 0.10f));
     push_bench(x_origin + 24.0f, z_origin - (profile.furniture_z - 0.30f));
     push_bench(x_origin - 22.8f, z_origin + (profile.furniture_z - 0.40f));
+    push_parking_meter(x_origin + 24.6f, z_origin - (profile.furniture_z - 0.44f), 1.0f);
+    push_parking_meter(x_origin - 14.4f, z_origin + (profile.furniture_z - 0.42f), -1.0f);
 
     push_bus_shelter(x_origin + 11.2f, z_origin - profile.transit_stop_z);
     push_apartment_entry(x_origin - 41.6f, z_origin + (profile.transit_stop_z - 1.25f));
+    push_fire_hydrant(x_origin + 14.0f, z_origin - (profile.transit_stop_z - 1.28f));
+    push_utility_cabinet(x_origin - 46.2f, z_origin + (profile.transit_stop_z - 1.18f), 0);
     push_prop(make_float3(x_origin - 43.0f, kSidewalkHeight + 3.45f, z_origin + (profile.transit_stop_z - 1.25f)), make_float3(1.85f, 0.14f, 3.0f), make_float4(0.86f, 0.78f, 0.42f, 1.0f), 0);
     push_prop(make_float3(x_origin + 39.0f, kSidewalkHeight + 1.2f, z_origin + profile.rear_anchor_z), make_float3(0.14f, 1.2f, 1.3f), make_float4(0.29f, 0.31f, 0.33f, 1.0f), 1);
     push_prop(make_float3(x_origin + 38.4f, kSidewalkHeight + 2.1f, z_origin + profile.rear_anchor_z), make_float3(0.92f, 0.10f, 1.48f), make_float4(0.72f, 0.80f, 0.84f, 1.0f), 0);
@@ -7804,8 +9867,12 @@ static void build_service_spur_frontage(const MDTBBlockDescriptor *block) {
     push_trash_bin(x_origin + 10.8f, z_origin - (profile.furniture_z + 0.20f));
     push_bench(x_origin - 14.6f, z_origin + (profile.furniture_z - 0.40f));
     push_bench(x_origin + 16.6f, z_origin - (profile.furniture_z - 0.30f));
+    push_parking_meter(x_origin - 10.6f, z_origin - (profile.furniture_z - 0.46f), 1.0f);
+    push_parking_meter(x_origin + 21.0f, z_origin + (profile.furniture_z - 0.44f), -1.0f);
     push_planter(x_origin - 31.4f, z_origin - (profile.shopfront_z - 1.15f), profile.planter_size + 0.08f);
     push_planter(x_origin + 35.0f, z_origin + (profile.shopfront_z - 1.25f), profile.planter_size - 0.02f);
+    push_utility_cabinet(x_origin + 21.6f, z_origin + (profile.transit_stop_z - 1.12f), 0);
+    push_fire_hydrant(x_origin + 16.2f, z_origin + (profile.transit_stop_z - 1.34f));
     push_prop(make_float3(x_origin + 2.8f, kSidewalkHeight + 2.18f, z_origin - (profile.shopfront_z - 0.25f)), make_float3(2.5f, 0.18f, 0.20f), make_float4(0.92f, 0.71f, 0.24f, 1.0f), 0);
     push_prop(make_float3(x_origin + 29.8f, kSidewalkHeight + 2.18f, z_origin + (profile.shopfront_z - 0.15f)), make_float3(1.68f, 0.18f, 0.20f), make_float4(0.33f, 0.68f, 0.82f, 1.0f), 0);
     push_prop(make_float3(x_origin - 28.2f, 1.18f, z_origin + (profile.shopfront_z - 0.45f)), make_float3(0.14f, 1.18f, 1.18f), make_float4(0.30f, 0.32f, 0.35f, 1.0f), 1);
