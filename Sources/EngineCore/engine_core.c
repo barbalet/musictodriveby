@@ -12298,6 +12298,389 @@ static void push_outer_route_marker(
     }
 }
 
+static MDTBFloat3 oriented_half_extents_for_axis(uint32_t axis, float longitudinal_half, float height_half, float lateral_half) {
+    return axis == MDTBRoadAxisEastWest
+        ? make_float3(longitudinal_half, height_half, lateral_half)
+        : make_float3(lateral_half, height_half, longitudinal_half);
+}
+
+static MDTBFloat3 offset_outer_route_position(
+    const MDTBOuterRouteNodeContext *route_context,
+    MDTBFloat3 origin,
+    float longitudinal_offset,
+    float lateral_offset
+) {
+    if (route_context == NULL) {
+        return origin;
+    }
+
+    if (route_context->branch_axis == MDTBRoadAxisEastWest) {
+        origin.x += longitudinal_offset;
+        origin.z += lateral_offset * route_context->route_sign;
+    } else {
+        origin.x += lateral_offset * route_context->route_sign;
+        origin.z += longitudinal_offset;
+    }
+    return origin;
+}
+
+static void build_outer_route_frontage_massing(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
+    if (block == NULL || route_context == NULL) {
+        return;
+    }
+
+    const float axis_x = route_context->branch_axis == MDTBRoadAxisEastWest ? 1.0f : 0.0f;
+    const float axis_z = route_context->branch_axis == MDTBRoadAxisEastWest ? 0.0f : 1.0f;
+    const float cross_x = route_context->branch_axis == MDTBRoadAxisEastWest ? 0.0f : route_context->route_sign;
+    const float cross_z = route_context->branch_axis == MDTBRoadAxisEastWest ? route_context->route_sign : 0.0f;
+    MDTBFloat3 apron_center = make_float3(
+        ((route_context->pad_position.x + route_context->support_position.x) * 0.5f) + (cross_x * 0.24f),
+        kSidewalkHeight + 0.015f,
+        ((route_context->pad_position.z + route_context->support_position.z) * 0.5f) + (cross_z * 0.24f)
+    );
+    MDTBFloat3 mass_center = make_float3(
+        ((route_context->support_position.x + route_context->marker_position.x) * 0.5f),
+        kSidewalkHeight,
+        ((route_context->support_position.z + route_context->marker_position.z) * 0.5f)
+    );
+    MDTBFloat4 apron_color = make_float4(0.44f, 0.42f, 0.38f, 1.0f);
+    MDTBFloat4 curb_color = make_float4(0.66f, 0.63f, 0.58f, 1.0f);
+    MDTBFloat4 mass_color = make_float4(0.54f, 0.50f, 0.44f, 1.0f);
+    MDTBFloat4 roof_color = make_float4(0.30f, 0.32f, 0.35f, 1.0f);
+    MDTBFloat4 post_color = make_float4(0.34f, 0.33f, 0.31f, 1.0f);
+    float apron_axis_half = 2.6f;
+    float apron_cross_half = 1.4f;
+    float curb_shift = 0.0f;
+    float mass_axis_half = 2.0f;
+    float mass_cross_half = 0.18f;
+    float mass_half_height = 0.88f;
+    float mass_shift = 1.38f;
+    float roof_axis_half = 2.2f;
+    float roof_cross_half = 0.86f;
+    float roof_height = 2.10f;
+    float roof_shift = 0.72f;
+    float post_axis_offset = 1.66f;
+    float post_cross_shift = 0.26f;
+    int add_posts = 1;
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            apron_color = make_float4(0.36f, 0.36f, 0.37f, 1.0f);
+            curb_color = make_float4(0.70f, 0.68f, 0.62f, 1.0f);
+            mass_color = make_float4(0.58f, 0.55f, 0.49f, 1.0f);
+            roof_color = make_float4(0.41f, 0.39f, 0.34f, 1.0f);
+            post_color = make_float4(0.48f, 0.42f, 0.35f, 1.0f);
+            apron_axis_half = 2.7f;
+            apron_cross_half = 1.55f;
+            mass_axis_half = 2.2f;
+            mass_cross_half = 0.10f;
+            mass_half_height = 0.54f;
+            mass_shift = 1.72f;
+            roof_axis_half = 2.0f;
+            roof_cross_half = 1.04f;
+            roof_height = 2.06f;
+            roof_shift = 0.96f;
+            post_axis_offset = 1.44f;
+            post_cross_shift = 0.10f;
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            apron_color = make_float4(0.52f, 0.50f, 0.46f, 1.0f);
+            curb_color = make_float4(0.72f, 0.70f, 0.66f, 1.0f);
+            mass_color = make_float4(0.58f, 0.61f, 0.66f, 1.0f);
+            roof_color = make_float4(0.25f, 0.42f, 0.58f, 1.0f);
+            post_color = make_float4(0.28f, 0.31f, 0.35f, 1.0f);
+            apron_axis_half = 3.0f;
+            apron_cross_half = 1.72f;
+            curb_shift = 0.08f;
+            mass_axis_half = 2.6f;
+            mass_cross_half = 0.18f;
+            mass_half_height = 1.02f;
+            mass_shift = 1.52f;
+            roof_axis_half = 2.7f;
+            roof_cross_half = 1.10f;
+            roof_height = 2.30f;
+            roof_shift = 0.70f;
+            post_axis_offset = 2.02f;
+            post_cross_shift = 0.18f;
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            apron_color = make_float4(0.29f, 0.29f, 0.30f, 1.0f);
+            curb_color = make_float4(0.63f, 0.60f, 0.56f, 1.0f);
+            mass_color = make_float4(0.46f, 0.42f, 0.38f, 1.0f);
+            roof_color = make_float4(0.34f, 0.32f, 0.28f, 1.0f);
+            post_color = make_float4(0.30f, 0.29f, 0.27f, 1.0f);
+            apron_axis_half = 3.4f;
+            apron_cross_half = 1.84f;
+            curb_shift = -0.04f;
+            mass_axis_half = 2.9f;
+            mass_cross_half = 0.14f;
+            mass_half_height = 1.16f;
+            mass_shift = 1.82f;
+            roof_axis_half = 2.8f;
+            roof_cross_half = 1.00f;
+            roof_height = 2.34f;
+            roof_shift = 0.94f;
+            post_axis_offset = 2.12f;
+            post_cross_shift = 0.26f;
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            apron_color = make_float4(0.48f, 0.44f, 0.40f, 1.0f);
+            curb_color = make_float4(0.70f, 0.66f, 0.60f, 1.0f);
+            mass_color = make_float4(0.61f, 0.53f, 0.46f, 1.0f);
+            roof_color = make_float4(0.48f, 0.28f, 0.22f, 1.0f);
+            post_color = make_float4(0.35f, 0.29f, 0.26f, 1.0f);
+            apron_axis_half = 2.9f;
+            apron_cross_half = 1.62f;
+            curb_shift = 0.04f;
+            mass_axis_half = 1.28f;
+            mass_cross_half = 0.34f;
+            mass_half_height = 1.06f;
+            mass_shift = 1.30f;
+            roof_axis_half = 2.3f;
+            roof_cross_half = 0.92f;
+            roof_height = 2.18f;
+            roof_shift = 0.66f;
+            post_axis_offset = 1.52f;
+            post_cross_shift = 0.14f;
+            break;
+    }
+
+    mass_center.x += cross_x * mass_shift;
+    mass_center.y = kSidewalkHeight + mass_half_height;
+    mass_center.z += cross_z * mass_shift;
+
+    push_scene_box(make_box(
+        apron_center,
+        oriented_half_extents_for_axis(route_context->branch_axis, apron_axis_half, 0.015f, apron_cross_half),
+        apron_color
+    ));
+    push_scene_box(make_box(
+        make_float3(
+            apron_center.x - (cross_x * (apron_cross_half - 0.14f + curb_shift)),
+            kSidewalkHeight + 0.04f,
+            apron_center.z - (cross_z * (apron_cross_half - 0.14f + curb_shift))
+        ),
+        oriented_half_extents_for_axis(route_context->branch_axis, fmaxf(apron_axis_half - 0.32f, 1.2f), 0.015f, 0.08f),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(apron_center.x + (cross_x * 0.16f), kSidewalkHeight + 0.02f, apron_center.z + (cross_z * 0.16f)),
+        oriented_half_extents_for_axis(route_context->branch_axis, fmaxf(apron_axis_half - 0.56f, 1.0f), 0.01f, 0.06f),
+        scaled_color(apron_color, 0.84f)
+    ));
+    push_prop(
+        mass_center,
+        oriented_half_extents_for_axis(route_context->branch_axis, mass_axis_half, mass_half_height, mass_cross_half),
+        mass_color,
+        1
+    );
+    push_prop(
+        make_float3(
+            mass_center.x - (cross_x * (mass_shift - roof_shift)),
+            kSidewalkHeight + roof_height,
+            mass_center.z - (cross_z * (mass_shift - roof_shift))
+        ),
+        oriented_half_extents_for_axis(route_context->branch_axis, roof_axis_half, 0.08f, roof_cross_half),
+        roof_color,
+        0
+    );
+
+    if (add_posts) {
+        for (int post_sign = -1; post_sign <= 1; post_sign += 2) {
+            push_prop(
+                make_float3(
+                    mass_center.x + (((float)post_sign) * axis_x * post_axis_offset) - (cross_x * post_cross_shift),
+                    kSidewalkHeight + (roof_height * 0.5f),
+                    mass_center.z + (((float)post_sign) * axis_z * post_axis_offset) - (cross_z * post_cross_shift)
+                ),
+                oriented_half_extents_for_axis(route_context->branch_axis, 0.05f, roof_height * 0.5f, 0.05f),
+                post_color,
+                1
+            );
+        }
+    }
+}
+
+static void build_outer_route_lot_composition(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
+    MDTBFloat3 lot_center;
+    MDTBFloat3 edge_center;
+    MDTBFloat3 inner_seam_center;
+    MDTBFloat4 lot_color = make_float4(0.42f, 0.40f, 0.36f, 1.0f);
+    MDTBFloat4 edge_color = make_float4(0.62f, 0.59f, 0.54f, 1.0f);
+    MDTBFloat4 seam_color = make_float4(0.30f, 0.29f, 0.27f, 1.0f);
+    MDTBFloat4 wall_color = make_float4(0.52f, 0.47f, 0.42f, 1.0f);
+    float lot_axis_half = 2.9f;
+    float lot_cross_half = 1.72f;
+    float edge_height = 0.34f;
+    float edge_axis_half = 2.5f;
+    float edge_thickness = 0.08f;
+    float along_sign = 1.0f;
+
+    if (block == NULL || route_context == NULL) {
+        return;
+    }
+
+    along_sign = ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
+    lot_center = offset_outer_route_position(route_context, route_context->support_position, along_sign * 0.36f, 2.10f);
+    edge_center = offset_outer_route_position(route_context, lot_center, 0.0f, 1.10f);
+    inner_seam_center = offset_outer_route_position(route_context, lot_center, along_sign * 0.22f, -0.26f);
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            lot_color = make_float4(0.48f, 0.46f, 0.42f, 1.0f);
+            edge_color = make_float4(0.74f, 0.71f, 0.66f, 1.0f);
+            seam_color = make_float4(0.36f, 0.35f, 0.33f, 1.0f);
+            wall_color = make_float4(0.58f, 0.53f, 0.48f, 1.0f);
+            lot_axis_half = 2.8f;
+            lot_cross_half = 1.84f;
+            edge_height = 0.30f;
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            lot_color = make_float4(0.53f, 0.51f, 0.47f, 1.0f);
+            edge_color = make_float4(0.72f, 0.70f, 0.67f, 1.0f);
+            seam_color = make_float4(0.33f, 0.34f, 0.36f, 1.0f);
+            wall_color = make_float4(0.34f, 0.47f, 0.58f, 1.0f);
+            lot_axis_half = 3.2f;
+            lot_cross_half = 1.92f;
+            edge_height = 0.38f;
+            edge_axis_half = 2.8f;
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            lot_color = make_float4(0.30f, 0.30f, 0.31f, 1.0f);
+            edge_color = make_float4(0.58f, 0.56f, 0.52f, 1.0f);
+            seam_color = make_float4(0.22f, 0.22f, 0.23f, 1.0f);
+            wall_color = make_float4(0.42f, 0.40f, 0.36f, 1.0f);
+            lot_axis_half = 3.4f;
+            lot_cross_half = 2.06f;
+            edge_height = 0.56f;
+            edge_axis_half = 3.0f;
+            edge_thickness = 0.10f;
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            lot_color = make_float4(0.46f, 0.43f, 0.39f, 1.0f);
+            edge_color = make_float4(0.69f, 0.65f, 0.60f, 1.0f);
+            seam_color = make_float4(0.31f, 0.28f, 0.25f, 1.0f);
+            wall_color = make_float4(0.60f, 0.49f, 0.42f, 1.0f);
+            lot_axis_half = 3.0f;
+            lot_cross_half = 1.82f;
+            edge_height = 0.34f;
+            break;
+    }
+
+    push_scene_box(make_box(
+        make_float3(lot_center.x, kRoadHeight + 0.015f, lot_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, lot_axis_half, 0.015f, lot_cross_half),
+        lot_color
+    ));
+    push_scene_box(make_box(
+        make_float3(edge_center.x, kRoadHeight + edge_height, edge_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, edge_axis_half, edge_height, edge_thickness),
+        edge_color
+    ));
+    push_scene_box(make_box(
+        make_float3(inner_seam_center.x, kRoadHeight + 0.02f, inner_seam_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, fmaxf(lot_axis_half - 0.46f, 1.2f), 0.01f, 0.06f),
+        seam_color
+    ));
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            {
+                MDTBFloat3 fence_left = offset_outer_route_position(route_context, lot_center, -along_sign * 1.42f, 0.44f);
+                MDTBFloat3 fence_right = offset_outer_route_position(route_context, lot_center, along_sign * 1.42f, 0.44f);
+                fence_left.y = kRoadHeight + 0.26f;
+                fence_right.y = kRoadHeight + 0.26f;
+                push_prop(
+                    fence_left,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.54f, 0.26f, 0.06f),
+                    wall_color,
+                    1
+                );
+                push_prop(
+                    fence_right,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.54f, 0.26f, 0.06f),
+                    wall_color,
+                    1
+                );
+            }
+            push_tree(
+                offset_outer_route_position(route_context, route_context->marker_position, along_sign * 1.30f, 2.78f).x,
+                offset_outer_route_position(route_context, route_context->marker_position, along_sign * 1.30f, 2.78f).z,
+                0.82f
+            );
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            push_scene_box(make_box(
+                offset_outer_route_position(route_context, lot_center, -along_sign * 0.88f, -0.18f),
+                oriented_half_extents_for_axis(route_context->branch_axis, 0.56f, 0.01f, 0.06f),
+                make_float4(0.88f, 0.84f, 0.74f, 1.0f)
+            ));
+            push_scene_box(make_box(
+                offset_outer_route_position(route_context, lot_center, along_sign * 0.88f, -0.18f),
+                oriented_half_extents_for_axis(route_context->branch_axis, 0.56f, 0.01f, 0.06f),
+                make_float4(0.88f, 0.84f, 0.74f, 1.0f)
+            ));
+            {
+                MDTBFloat3 kiosk_post = offset_outer_route_position(route_context, lot_center, along_sign * 1.62f, 0.46f);
+                kiosk_post.y = kRoadHeight + 0.62f;
+                push_prop(
+                    kiosk_post,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.18f, 0.62f, 0.18f),
+                    wall_color,
+                    1
+                );
+            }
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            {
+                MDTBFloat3 screen_wall = offset_outer_route_position(route_context, lot_center, 0.0f, 0.46f);
+                screen_wall.y = kRoadHeight + 0.58f;
+                push_prop(
+                    screen_wall,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 2.14f, 0.58f, 0.08f),
+                    wall_color,
+                    1
+                );
+            }
+            push_bollard(
+                offset_outer_route_position(route_context, lot_center, -along_sign * 1.18f, -0.42f).x,
+                offset_outer_route_position(route_context, lot_center, -along_sign * 1.18f, -0.42f).z,
+                0.92f
+            );
+            push_bollard(
+                offset_outer_route_position(route_context, lot_center, along_sign * 1.18f, -0.42f).x,
+                offset_outer_route_position(route_context, lot_center, along_sign * 1.18f, -0.42f).z,
+                0.92f
+            );
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            {
+                MDTBFloat3 plinth_wall = offset_outer_route_position(route_context, lot_center, 0.0f, 0.34f);
+                plinth_wall.y = kRoadHeight + 0.30f;
+                push_prop(
+                    plinth_wall,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 1.18f, 0.30f, 0.08f),
+                    wall_color,
+                    1
+                );
+            }
+            push_planter(
+                offset_outer_route_position(route_context, lot_center, -along_sign * 1.18f, -0.20f).x,
+                offset_outer_route_position(route_context, lot_center, -along_sign * 1.18f, -0.20f).z,
+                0.34f
+            );
+            push_planter(
+                offset_outer_route_position(route_context, lot_center, along_sign * 1.18f, -0.20f).x,
+                offset_outer_route_position(route_context, lot_center, along_sign * 1.18f, -0.20f).z,
+                0.32f
+            );
+            break;
+    }
+}
+
 static void build_outer_route_support_props(const MDTBBlockDescriptor *block, uint32_t block_index) {
     MDTBSecondaryConnectorProfile connector_profile;
     MDTBOuterRouteNodeContext route_context;
@@ -12348,6 +12731,8 @@ static void build_outer_route_support_props(const MDTBBlockDescriptor *block, ui
             scaled_color(pad_color, 0.82f)
         ));
         push_outer_route_marker(route_context.marker_position, route_context.branch_axis, route_context.route_sign, marker_color, accent_color);
+        build_outer_route_frontage_massing(block, &route_context);
+        build_outer_route_lot_composition(block, &route_context);
 
         switch (block->frontage_template) {
             case MDTBFrontageTemplateResidentialCourt:
@@ -12533,39 +12918,53 @@ static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block
             push_interest_point(branch_pedestrian, 4.8f, MDTBInterestPointPedestrianSpawn, block_index);
 
             if (outer_route_node_context_for_block(block, &connector_profile, &route_context)) {
+                const float along_sign = ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
                 MDTBFloat3 support_hotspot = route_context.support_position;
                 MDTBFloat3 marker_hotspot = route_context.marker_position;
                 MDTBFloat3 support_pedestrian = route_context.pad_position;
+                MDTBFloat3 parcel_hotspot =
+                    offset_outer_route_position(&route_context, route_context.support_position, along_sign * 0.34f, 2.12f);
+                MDTBFloat3 parcel_pedestrian =
+                    offset_outer_route_position(&route_context, route_context.pad_position, along_sign * 1.08f, 1.34f);
                 float support_hotspot_radius = 6.6f;
                 float marker_hotspot_radius = 6.0f;
+                float parcel_hotspot_radius = 5.8f;
 
                 support_hotspot.y = kSidewalkHeight;
                 marker_hotspot.y = kSidewalkHeight;
                 support_pedestrian.y = kSidewalkHeight;
+                parcel_hotspot.y = kSidewalkHeight;
+                parcel_pedestrian.y = kSidewalkHeight;
 
                 switch (block->frontage_template) {
                     case MDTBFrontageTemplateResidentialCourt:
                         support_hotspot_radius = 5.8f;
                         marker_hotspot_radius = 5.4f;
+                        parcel_hotspot_radius = 5.2f;
                         break;
                     case MDTBFrontageTemplateTransitMarket:
                         support_hotspot_radius = 6.8f;
                         marker_hotspot_radius = 6.4f;
+                        parcel_hotspot_radius = 6.2f;
                         break;
                     case MDTBFrontageTemplateServiceSpur:
                         support_hotspot_radius = 6.4f;
                         marker_hotspot_radius = 6.0f;
+                        parcel_hotspot_radius = 6.0f;
                         break;
                     case MDTBFrontageTemplateCivicRetail:
                     default:
                         support_hotspot_radius = 6.6f;
                         marker_hotspot_radius = 6.2f;
+                        parcel_hotspot_radius = 5.8f;
                         break;
                 }
 
                 push_interest_point(support_hotspot, support_hotspot_radius, MDTBInterestPointHotspot, block_index);
                 push_interest_point(marker_hotspot, marker_hotspot_radius, MDTBInterestPointHotspot, block_index);
                 push_interest_point(support_pedestrian, 4.4f, MDTBInterestPointPedestrianSpawn, block_index);
+                push_interest_point(parcel_hotspot, parcel_hotspot_radius, MDTBInterestPointHotspot, block_index);
+                push_interest_point(parcel_pedestrian, 4.6f, MDTBInterestPointPedestrianSpawn, block_index);
             }
         }
     }
@@ -12573,6 +12972,7 @@ static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block
 
 static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32_t block_index) {
     MDTBSecondaryConnectorProfile connector_profile;
+    MDTBOuterRouteNodeContext route_context;
 
     switch (block->frontage_template) {
         case MDTBFrontageTemplateResidentialCourt:
@@ -12593,6 +12993,8 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
     }
 
     if (block_is_outer_expansion_tile(block) && secondary_connector_profile_for_block(block, &connector_profile)) {
+        const int has_route_context =
+            outer_route_node_context_for_block(block, &connector_profile, &route_context);
         uint32_t connector_kind = MDTBVehicleKindSedan;
         uint32_t parking_state = MDTBVehicleParkingStateService;
 
@@ -12653,9 +13055,18 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
         if (connector_profile.branch_half_longitudinal > 0.0f && connector_profile.branch_half_lateral > 0.0f) {
             const uint32_t branch_axis = secondary_connector_branch_axis(&connector_profile);
             const float branch_center_distance = secondary_connector_branch_center_distance(&connector_profile);
-            float branch_anchor_distance = branch_center_distance + connector_profile.branch_half_longitudinal * 0.58f;
-            float branch_pedestrian_distance = branch_center_distance + connector_profile.branch_half_longitudinal + 1.0f;
-            float branch_side_shift = secondary_connector_branch_support_shift(block) * 0.54f;
+            float branch_anchor_distance =
+                has_route_context
+                ? route_context.support_distance - 0.78f
+                : branch_center_distance + connector_profile.branch_half_longitudinal * 0.58f;
+            float branch_pedestrian_distance =
+                has_route_context
+                ? route_context.marker_distance + 0.40f
+                : branch_center_distance + connector_profile.branch_half_longitudinal + 1.0f;
+            float branch_side_shift =
+                has_route_context
+                ? route_context.support_shift * 0.48f
+                : secondary_connector_branch_support_shift(block) * 0.54f;
             uint32_t branch_kind = connector_kind;
             uint32_t branch_parking_state = parking_state;
 
@@ -12663,35 +13074,49 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
                 case MDTBFrontageTemplateResidentialCourt:
                     branch_kind = MDTBVehicleKindBicycle;
                     branch_parking_state = MDTBVehicleParkingStateCurbside;
-                    branch_anchor_distance += 0.6f;
+                    branch_anchor_distance += has_route_context ? -0.10f : 0.6f;
+                    branch_side_shift = has_route_context ? route_context.support_shift * 0.28f : branch_side_shift;
                     break;
                 case MDTBFrontageTemplateTransitMarket:
                     branch_kind = MDTBVehicleKindMoped;
                     branch_parking_state = MDTBVehicleParkingStateCurbside;
-                    branch_pedestrian_distance += 0.6f;
+                    branch_anchor_distance += has_route_context ? 0.18f : 0.0f;
+                    branch_pedestrian_distance += has_route_context ? 0.18f : 0.6f;
+                    branch_side_shift = has_route_context ? route_context.support_shift * 0.62f : branch_side_shift;
                     break;
                 case MDTBFrontageTemplateServiceSpur:
                     branch_kind = MDTBVehicleKindSedan;
                     branch_parking_state = MDTBVehicleParkingStateService;
-                    branch_anchor_distance += 1.0f;
-                    branch_side_shift = secondary_connector_branch_support_shift(block) * 0.38f;
+                    branch_anchor_distance += has_route_context ? 0.48f : 1.0f;
+                    branch_pedestrian_distance += has_route_context ? 0.22f : 0.0f;
+                    branch_side_shift = has_route_context ? route_context.support_shift * 0.72f : secondary_connector_branch_support_shift(block) * 0.38f;
                     break;
                 case MDTBFrontageTemplateCivicRetail:
                 default:
                     branch_kind = MDTBVehicleKindCoupe;
                     branch_parking_state = MDTBVehicleParkingStateCurbside;
+                    branch_anchor_distance += has_route_context ? 0.12f : 0.0f;
+                    branch_side_shift = has_route_context ? route_context.support_shift * 0.52f : branch_side_shift;
                     break;
             }
 
             {
+                const float along_sign = ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
                 MDTBFloat3 branch_anchor =
                     secondary_connector_branch_position_for_block(block, &connector_profile, branch_anchor_distance, 0.0f);
                 MDTBFloat3 branch_pedestrian =
-                    secondary_connector_branch_position_for_block(block, &connector_profile, branch_pedestrian_distance, branch_side_shift);
+                    has_route_context
+                    ? route_context.pad_position
+                    : secondary_connector_branch_position_for_block(block, &connector_profile, branch_pedestrian_distance, branch_side_shift);
                 const float yaw =
                     branch_axis == MDTBRoadAxisEastWest
                     ? (branch_anchor.x >= block->origin.x ? kPi * 0.5f : -(kPi * 0.5f))
                     : (branch_anchor.z >= block->origin.z ? kPi : 0.0f);
+
+                if (has_route_context) {
+                    branch_pedestrian.x += (branch_axis == MDTBRoadAxisEastWest ? 0.0f : branch_side_shift);
+                    branch_pedestrian.z += (branch_axis == MDTBRoadAxisEastWest ? branch_side_shift : 0.0f);
+                }
 
                 branch_pedestrian.y = kSidewalkHeight;
                 push_interest_point(branch_anchor, 5.6f, MDTBInterestPointVehicleSpawn, block_index);
@@ -12705,6 +13130,52 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
                     branch_axis,
                     connector_profile.branch_center_offset
                 );
+
+                if (has_route_context) {
+                    MDTBFloat3 pocket_anchor =
+                        offset_outer_route_position(&route_context, route_context.support_position, along_sign * 0.28f, 1.82f);
+                    MDTBFloat3 pocket_pedestrian =
+                        offset_outer_route_position(&route_context, route_context.pad_position, along_sign * 0.96f, 1.20f);
+                    uint32_t pocket_kind = branch_kind;
+                    uint32_t pocket_parking_state = branch_parking_state;
+                    const float pocket_yaw =
+                        branch_axis == MDTBRoadAxisEastWest
+                        ? (along_sign >= 0.0f ? kPi * 0.5f : -(kPi * 0.5f))
+                        : (along_sign >= 0.0f ? kPi : 0.0f);
+
+                    switch (block->frontage_template) {
+                        case MDTBFrontageTemplateResidentialCourt:
+                            pocket_kind = MDTBVehicleKindCoupe;
+                            pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            break;
+                        case MDTBFrontageTemplateTransitMarket:
+                            pocket_kind = MDTBVehicleKindMoped;
+                            pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            break;
+                        case MDTBFrontageTemplateServiceSpur:
+                            pocket_kind = MDTBVehicleKindSedan;
+                            pocket_parking_state = MDTBVehicleParkingStateService;
+                            break;
+                        case MDTBFrontageTemplateCivicRetail:
+                        default:
+                            pocket_kind = MDTBVehicleKindMotorcycle;
+                            pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            break;
+                    }
+
+                    pocket_pedestrian.y = kSidewalkHeight;
+                    push_interest_point(pocket_anchor, 4.8f, MDTBInterestPointVehicleSpawn, block_index);
+                    push_interest_point(pocket_pedestrian, 4.6f, MDTBInterestPointPedestrianSpawn, block_index);
+                    push_vehicle_anchor(
+                        pocket_anchor,
+                        pocket_yaw,
+                        block_index,
+                        pocket_kind,
+                        pocket_parking_state,
+                        branch_axis,
+                        connector_profile.branch_center_offset
+                    );
+                }
             }
         }
     }
