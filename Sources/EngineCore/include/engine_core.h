@@ -290,6 +290,14 @@ enum {
     MDTBDistrictHistoricSouthCentral = 5,
     MDTBDistrictVermontSquare = 6,
     MDTBDistrictFlorenceFirestone = 7,
+    MDTBDistrictKoreatown = 8,
+    MDTBDistrictPicoUnion = 9,
+    MDTBDistrictUniversityPark = 10,
+    MDTBDistrictSouthPark = 11,
+    MDTBDistrictInglewood = 12,
+    MDTBDistrictHuntingtonPark = 13,
+    MDTBDistrictWatts = 14,
+    MDTBDistrictWillowbrook = 15,
 };
 
 enum {
@@ -324,10 +332,15 @@ enum {
 };
 
 enum {
-    MDTBWorldChunkMidCityWest = 0,
-    MDTBWorldChunkCentralSouth = 1,
-    MDTBWorldChunkExpoCrenshaw = 2,
-    MDTBWorldChunkFlorenceVermont = 3,
+    MDTBWorldChunkKoreatownUniversity = 0,
+    MDTBWorldChunkUniversityParkDowntown = 1,
+    MDTBWorldChunkSouthParkIndustrial = 2,
+    MDTBWorldChunkMidCityWest = 3,
+    MDTBWorldChunkExpoCrenshaw = 4,
+    MDTBWorldChunkCentralSouth = 5,
+    MDTBWorldChunkLeimertBaldwin = 6,
+    MDTBWorldChunkFlorenceVermont = 7,
+    MDTBWorldChunkWattsWillowbrook = 8,
 };
 
 enum {
@@ -343,14 +356,22 @@ enum {
 };
 
 enum {
-    MDTBCorridorCrenshawBlvd = 0,
-    MDTBCorridorArlingtonAve = 1,
-    MDTBCorridorWesternAve = 2,
-    MDTBCorridorVermontAve = 3,
-    MDTBCorridorAdamsBlvd = 4,
-    MDTBCorridorJeffersonBlvd = 5,
-    MDTBCorridorExpositionBlvd = 6,
-    MDTBCorridorMartinLutherKingBlvd = 7,
+    MDTBCorridorFairfaxAve = 0,
+    MDTBCorridorLaBreaAve = 1,
+    MDTBCorridorCrenshawBlvd = 2,
+    MDTBCorridorArlingtonAve = 3,
+    MDTBCorridorWesternAve = 4,
+    MDTBCorridorVermontAve = 5,
+    MDTBCorridorFigueroaSt = 6,
+    MDTBCorridorCentralAve = 7,
+    MDTBCorridorPicoBlvd = 8,
+    MDTBCorridorWashingtonBlvd = 9,
+    MDTBCorridorAdamsBlvd = 10,
+    MDTBCorridorJeffersonBlvd = 11,
+    MDTBCorridorExpositionBlvd = 12,
+    MDTBCorridorMartinLutherKingBlvd = 13,
+    MDTBCorridorSlausonAve = 14,
+    MDTBCorridorFlorenceAve = 15,
 };
 
 enum {

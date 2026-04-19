@@ -1427,15 +1427,17 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func pedestrianTint(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark), UInt32(MDTBDistrictPicoUnion):
             return SIMD4<Float>(0.84, 0.61, 0.28, 1.0)
-        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark), UInt32(MDTBDistrictInglewood):
             return SIMD4<Float>(0.50, 0.67, 0.38, 1.0)
-        case UInt32(MDTBDistrictCrenshawCorridor):
+        case UInt32(MDTBDistrictCrenshawCorridor), UInt32(MDTBDistrictUniversityPark):
             return SIMD4<Float>(0.28, 0.66, 0.74, 1.0)
-        case UInt32(MDTBDistrictVermontSquare):
+        case UInt32(MDTBDistrictVermontSquare), UInt32(MDTBDistrictKoreatown):
             return SIMD4<Float>(0.43, 0.57, 0.78, 1.0)
-        case UInt32(MDTBDistrictFlorenceFirestone):
+        case UInt32(MDTBDistrictHistoricSouthCentral), UInt32(MDTBDistrictSouthPark):
+            return SIMD4<Float>(0.78, 0.48, 0.30, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone), UInt32(MDTBDistrictHuntingtonPark), UInt32(MDTBDistrictWatts), UInt32(MDTBDistrictWillowbrook):
             return SIMD4<Float>(0.70, 0.46, 0.36, 1.0)
         default:
             return SIMD4<Float>(0.79, 0.40, 0.28, 1.0)
@@ -1444,15 +1446,17 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func vehicleTint(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark), UInt32(MDTBDistrictPicoUnion):
             return SIMD4<Float>(0.76, 0.48, 0.22, 1.0)
-        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark), UInt32(MDTBDistrictInglewood):
             return SIMD4<Float>(0.32, 0.53, 0.30, 1.0)
-        case UInt32(MDTBDistrictCrenshawCorridor):
+        case UInt32(MDTBDistrictCrenshawCorridor), UInt32(MDTBDistrictUniversityPark):
             return SIMD4<Float>(0.26, 0.60, 0.70, 1.0)
-        case UInt32(MDTBDistrictVermontSquare):
+        case UInt32(MDTBDistrictVermontSquare), UInt32(MDTBDistrictKoreatown):
             return SIMD4<Float>(0.34, 0.50, 0.76, 1.0)
-        case UInt32(MDTBDistrictFlorenceFirestone):
+        case UInt32(MDTBDistrictHistoricSouthCentral), UInt32(MDTBDistrictSouthPark):
+            return SIMD4<Float>(0.64, 0.40, 0.24, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone), UInt32(MDTBDistrictHuntingtonPark), UInt32(MDTBDistrictWatts), UInt32(MDTBDistrictWillowbrook):
             return SIMD4<Float>(0.56, 0.42, 0.38, 1.0)
         default:
             return SIMD4<Float>(0.68, 0.40, 0.24, 1.0)
@@ -3172,25 +3176,37 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         return ScenePopulationProfile(
             blockIndex: UInt32(blockIndex),
-            pedestrianDensity: (block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark)) ? 0.56 : 0.72,
-            vehicleDensity: (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 0.82 : (block.kind == UInt32(MDTBBlockKindResidential) ? 0.42 : 0.64),
-            ambientEnergy: block.district == UInt32(MDTBDistrictFlorenceFirestone) ? 0.72 : ((block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark)) ? 0.50 : 0.78),
-            travelBias: (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 0.82 : 0.56,
+            pedestrianDensity: (block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark) || block.district == UInt32(MDTBDistrictInglewood) || block.district == UInt32(MDTBDistrictWillowbrook))
+                ? 0.56
+                : ((block.district == UInt32(MDTBDistrictKoreatown) || block.district == UInt32(MDTBDistrictPicoUnion) || block.district == UInt32(MDTBDistrictUniversityPark) || block.district == UInt32(MDTBDistrictSouthPark))
+                    ? 0.78
+                    : 0.72),
+            vehicleDensity: ((block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 || block.district == UInt32(MDTBDistrictHistoricSouthCentral) || block.district == UInt32(MDTBDistrictHuntingtonPark) || block.district == UInt32(MDTBDistrictWatts))
+                ? 0.82
+                : (block.kind == UInt32(MDTBBlockKindResidential) ? 0.42 : 0.64),
+            ambientEnergy: (block.district == UInt32(MDTBDistrictFlorenceFirestone) || block.district == UInt32(MDTBDistrictHuntingtonPark) || block.district == UInt32(MDTBDistrictWatts))
+                ? 0.72
+                : ((block.kind == UInt32(MDTBBlockKindResidential) || block.district == UInt32(MDTBDistrictLeimertPark) || block.district == UInt32(MDTBDistrictInglewood) || block.district == UInt32(MDTBDistrictWillowbrook))
+                    ? 0.50
+                    : 0.78),
+            travelBias: (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 ? 0.82 : (block.district == UInt32(MDTBDistrictSouthPark) ? 0.64 : 0.56),
             styleFlags: styleFlags
         )
     }
 
     private static func districtAmbientColor(for block: SceneBlock) -> SIMD4<Float> {
         switch block.district {
-        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark):
+        case UInt32(MDTBDistrictWestAdams), UInt32(MDTBDistrictJeffersonPark), UInt32(MDTBDistrictPicoUnion):
             return SIMD4<Float>(0.86, 0.58, 0.24, 1.0)
-        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark):
+        case UInt32(MDTBDistrictExpositionPark), UInt32(MDTBDistrictLeimertPark), UInt32(MDTBDistrictInglewood):
             return SIMD4<Float>(0.46, 0.68, 0.38, 1.0)
-        case UInt32(MDTBDistrictCrenshawCorridor):
+        case UInt32(MDTBDistrictCrenshawCorridor), UInt32(MDTBDistrictUniversityPark):
             return SIMD4<Float>(0.30, 0.66, 0.78, 1.0)
-        case UInt32(MDTBDistrictVermontSquare):
+        case UInt32(MDTBDistrictVermontSquare), UInt32(MDTBDistrictKoreatown):
             return SIMD4<Float>(0.40, 0.56, 0.82, 1.0)
-        case UInt32(MDTBDistrictFlorenceFirestone):
+        case UInt32(MDTBDistrictHistoricSouthCentral), UInt32(MDTBDistrictSouthPark):
+            return SIMD4<Float>(0.80, 0.50, 0.28, 1.0)
+        case UInt32(MDTBDistrictFlorenceFirestone), UInt32(MDTBDistrictHuntingtonPark), UInt32(MDTBDistrictWatts), UInt32(MDTBDistrictWillowbrook):
             return SIMD4<Float>(0.68, 0.46, 0.34, 1.0)
         default:
             return SIMD4<Float>(0.78, 0.42, 0.26, 1.0)
@@ -6057,6 +6073,22 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "Vermont Square"
         case UInt32(MDTBDistrictFlorenceFirestone):
             return "Florence-Firestone"
+        case UInt32(MDTBDistrictKoreatown):
+            return "Koreatown"
+        case UInt32(MDTBDistrictPicoUnion):
+            return "Pico-Union"
+        case UInt32(MDTBDistrictUniversityPark):
+            return "University Park"
+        case UInt32(MDTBDistrictSouthPark):
+            return "South Park"
+        case UInt32(MDTBDistrictInglewood):
+            return "Inglewood"
+        case UInt32(MDTBDistrictHuntingtonPark):
+            return "Huntington Park"
+        case UInt32(MDTBDistrictWatts):
+            return "Watts"
+        case UInt32(MDTBDistrictWillowbrook):
+            return "Willowbrook"
         default:
             return "West Adams"
         }
@@ -6102,12 +6134,22 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func chunkLabel(_ value: UInt32) -> String {
         switch value {
+        case UInt32(MDTBWorldChunkKoreatownUniversity):
+            return "Koreatown-University tile"
+        case UInt32(MDTBWorldChunkUniversityParkDowntown):
+            return "University Park-Downtown tile"
+        case UInt32(MDTBWorldChunkSouthParkIndustrial):
+            return "South Park-Industrial tile"
         case UInt32(MDTBWorldChunkCentralSouth):
             return "Central South tile"
         case UInt32(MDTBWorldChunkExpoCrenshaw):
             return "Expo-Crenshaw tile"
+        case UInt32(MDTBWorldChunkLeimertBaldwin):
+            return "Leimert-Baldwin tile"
         case UInt32(MDTBWorldChunkFlorenceVermont):
             return "Florence-Vermont tile"
+        case UInt32(MDTBWorldChunkWattsWillowbrook):
+            return "Watts-Willowbrook tile"
         default:
             return "Mid-city West tile"
         }
@@ -6139,12 +6181,24 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func corridorLabel(_ value: UInt32) -> String {
         switch value {
+        case UInt32(MDTBCorridorFairfaxAve):
+            return "Fairfax Ave"
+        case UInt32(MDTBCorridorLaBreaAve):
+            return "La Brea Ave"
         case UInt32(MDTBCorridorArlingtonAve):
             return "Arlington Ave"
         case UInt32(MDTBCorridorWesternAve):
             return "Western Ave"
         case UInt32(MDTBCorridorVermontAve):
             return "Vermont Ave"
+        case UInt32(MDTBCorridorFigueroaSt):
+            return "Figueroa St"
+        case UInt32(MDTBCorridorCentralAve):
+            return "Central Ave"
+        case UInt32(MDTBCorridorPicoBlvd):
+            return "Pico Blvd"
+        case UInt32(MDTBCorridorWashingtonBlvd):
+            return "Washington Blvd"
         case UInt32(MDTBCorridorAdamsBlvd):
             return "Adams Blvd"
         case UInt32(MDTBCorridorJeffersonBlvd):
@@ -6153,6 +6207,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             return "Exposition Blvd"
         case UInt32(MDTBCorridorMartinLutherKingBlvd):
             return "Martin Luther King Jr Blvd"
+        case UInt32(MDTBCorridorSlausonAve):
+            return "Slauson Ave"
+        case UInt32(MDTBCorridorFlorenceAve):
+            return "Florence Ave"
         default:
             return "Crenshaw Blvd"
         }
