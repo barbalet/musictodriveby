@@ -199,6 +199,25 @@ static int outer_route_node_context_for_block(
     const MDTBSecondaryConnectorProfile *profile,
     MDTBOuterRouteNodeContext *context
 );
+static MDTBFloat3 offset_outer_route_position(
+    const MDTBOuterRouteNodeContext *route_context,
+    MDTBFloat3 origin,
+    float longitudinal_offset,
+    float lateral_offset
+);
+static float outer_route_longitudinal_sign_for_block(const MDTBBlockDescriptor *block);
+static MDTBFloat3 outer_route_continuity_pad_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
+static MDTBFloat3 outer_route_continuity_pull_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
+static MDTBFloat3 outer_route_continuity_landmark_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
 static const MDTBRoadSpine *road_spine_for_axis_coordinate(uint32_t axis, float coordinate);
 static int road_spine_segment_hits_intersection(const MDTBRoadSpine *spine, float segment_center);
 static const MDTBRoadProfile *road_profile_for_class(uint32_t road_class);
@@ -6723,6 +6742,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
             float route_radius = 2.2f;
             float node_strength_scale = 0.76f;
             float support_strength_scale = 0.72f;
+            float continuity_strength_scale = 0.60f;
+            float continuity_pull_strength_scale = 0.54f;
 
             if (!block_is_outer_expansion_tile(block) ||
                 !secondary_connector_profile_for_block(block, &connector_profile) ||
@@ -6747,18 +6768,24 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     route_radius = 2.0f;
                     node_strength_scale = 0.68f;
                     support_strength_scale = 0.64f;
+                    continuity_strength_scale = 0.50f;
+                    continuity_pull_strength_scale = 0.44f;
                     break;
                 case MDTBFrontageTemplateTransitMarket:
                     route_strength = 0.34f;
                     route_radius = 2.5f;
                     node_strength_scale = 0.82f;
                     support_strength_scale = 0.86f;
+                    continuity_strength_scale = 0.74f;
+                    continuity_pull_strength_scale = 0.68f;
                     break;
                 case MDTBFrontageTemplateServiceSpur:
                     route_strength = 0.40f;
                     route_radius = 2.9f;
                     node_strength_scale = 0.88f;
                     support_strength_scale = 0.80f;
+                    continuity_strength_scale = 0.72f;
+                    continuity_pull_strength_scale = 0.62f;
                     break;
                 case MDTBFrontageTemplateCivicRetail:
                 default:
@@ -6766,6 +6793,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     route_radius = 2.3f;
                     node_strength_scale = 0.78f;
                     support_strength_scale = 0.82f;
+                    continuity_strength_scale = 0.64f;
+                    continuity_pull_strength_scale = 0.58f;
                     break;
             }
 
@@ -6784,6 +6813,10 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     connector_profile.branch_half_longitudinal * 0.34f;
                 const MDTBFloat3 branch_position =
                     secondary_connector_branch_position_for_block(block, &connector_profile, branch_depth, 0.0f);
+                const MDTBFloat3 continuity_position =
+                    outer_route_continuity_pad_position(block, &route_context);
+                const MDTBFloat3 continuity_pull =
+                    outer_route_continuity_pull_position(block, &route_context);
 
                 push_traffic_occupancy(
                     branch_position,
@@ -6808,6 +6841,22 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     route_context.branch_axis,
                     MDTBTrafficOccupancyReasonStopZone,
                     route_strength * support_strength_scale
+                );
+                push_traffic_occupancy(
+                    continuity_position,
+                    fmaxf(route_radius - 0.10f, 1.8f),
+                    (uint32_t)index,
+                    route_context.branch_axis,
+                    MDTBTrafficOccupancyReasonStopZone,
+                    route_strength * continuity_strength_scale
+                );
+                push_traffic_occupancy(
+                    continuity_pull,
+                    fmaxf(route_radius - 0.28f, 1.6f),
+                    (uint32_t)index,
+                    route_context.branch_axis,
+                    MDTBTrafficOccupancyReasonStopZone,
+                    route_strength * continuity_pull_strength_scale
                 );
             }
 
@@ -12324,6 +12373,47 @@ static MDTBFloat3 offset_outer_route_position(
     return origin;
 }
 
+static float outer_route_longitudinal_sign_for_block(const MDTBBlockDescriptor *block) {
+    return block != NULL && ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
+}
+
+static MDTBFloat3 outer_route_continuity_pad_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    return offset_outer_route_position(
+        route_context,
+        route_context->marker_position,
+        outer_route_longitudinal_sign_for_block(block) * 0.44f,
+        3.34f
+    );
+}
+
+static MDTBFloat3 outer_route_continuity_pull_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    return offset_outer_route_position(
+        route_context,
+        route_context->support_position,
+        outer_route_longitudinal_sign_for_block(block) * 1.24f,
+        2.18f
+    );
+}
+
+static MDTBFloat3 outer_route_continuity_landmark_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    const MDTBFloat3 continuity_pad = outer_route_continuity_pad_position(block, route_context);
+    return offset_outer_route_position(
+        route_context,
+        continuity_pad,
+        outer_route_longitudinal_sign_for_block(block) * 1.18f,
+        0.98f
+    );
+}
+
 static void build_outer_route_frontage_massing(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
     if (block == NULL || route_context == NULL) {
         return;
@@ -12499,6 +12589,195 @@ static void build_outer_route_frontage_massing(const MDTBBlockDescriptor *block,
                 1
             );
         }
+    }
+}
+
+static void build_outer_route_edge_continuity(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
+    MDTBFloat3 continuity_center;
+    MDTBFloat3 curb_center;
+    MDTBFloat3 seam_center;
+    MDTBFloat3 landmark_center;
+    MDTBFloat4 continuity_color = make_float4(0.43f, 0.41f, 0.37f, 1.0f);
+    MDTBFloat4 curb_color = make_float4(0.69f, 0.66f, 0.60f, 1.0f);
+    MDTBFloat4 seam_color = make_float4(0.31f, 0.29f, 0.27f, 1.0f);
+    MDTBFloat4 landmark_color = make_float4(0.55f, 0.49f, 0.43f, 1.0f);
+    MDTBFloat4 cap_color = make_float4(0.34f, 0.35f, 0.38f, 1.0f);
+    const float along_sign = outer_route_longitudinal_sign_for_block(block);
+    float continuity_axis_half = 2.3f;
+    float continuity_cross_half = 1.14f;
+    float curb_axis_half = 1.86f;
+    float curb_height = 0.20f;
+    float landmark_axis_half = 0.54f;
+    float landmark_half_height = 1.04f;
+    float landmark_cross_half = 0.32f;
+    float cap_axis_half = 0.86f;
+    float cap_height = 2.24f;
+    float cap_cross_half = 0.42f;
+    float post_axis_offset = 0.74f;
+    float post_cross_shift = 0.20f;
+    int add_posts = 1;
+    int add_planters = 0;
+    int add_bollards = 0;
+
+    if (block == NULL || route_context == NULL) {
+        return;
+    }
+
+    continuity_center = outer_route_continuity_pad_position(block, route_context);
+    curb_center = offset_outer_route_position(route_context, continuity_center, -along_sign * 0.16f, 0.94f);
+    seam_center = offset_outer_route_position(route_context, continuity_center, 0.0f, -0.24f);
+    landmark_center = outer_route_continuity_landmark_position(block, route_context);
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            continuity_color = make_float4(0.49f, 0.47f, 0.43f, 1.0f);
+            curb_color = make_float4(0.75f, 0.72f, 0.67f, 1.0f);
+            seam_color = make_float4(0.37f, 0.35f, 0.33f, 1.0f);
+            landmark_color = make_float4(0.58f, 0.54f, 0.49f, 1.0f);
+            cap_color = make_float4(0.43f, 0.40f, 0.35f, 1.0f);
+            continuity_axis_half = 2.1f;
+            continuity_cross_half = 1.18f;
+            curb_axis_half = 1.70f;
+            curb_height = 0.18f;
+            landmark_axis_half = 0.68f;
+            landmark_half_height = 0.84f;
+            landmark_cross_half = 0.12f;
+            cap_axis_half = 1.20f;
+            cap_height = 2.06f;
+            cap_cross_half = 0.58f;
+            post_axis_offset = 0.96f;
+            post_cross_shift = 0.28f;
+            add_planters = 1;
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            continuity_color = make_float4(0.54f, 0.52f, 0.48f, 1.0f);
+            curb_color = make_float4(0.73f, 0.71f, 0.68f, 1.0f);
+            seam_color = make_float4(0.34f, 0.35f, 0.37f, 1.0f);
+            landmark_color = make_float4(0.30f, 0.50f, 0.63f, 1.0f);
+            cap_color = make_float4(0.24f, 0.42f, 0.58f, 1.0f);
+            continuity_axis_half = 2.6f;
+            continuity_cross_half = 1.26f;
+            curb_axis_half = 2.10f;
+            curb_height = 0.22f;
+            landmark_axis_half = 0.32f;
+            landmark_half_height = 1.20f;
+            landmark_cross_half = 0.54f;
+            cap_axis_half = 1.08f;
+            cap_height = 2.32f;
+            cap_cross_half = 0.62f;
+            post_axis_offset = 0.88f;
+            post_cross_shift = 0.22f;
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            continuity_color = make_float4(0.31f, 0.31f, 0.32f, 1.0f);
+            curb_color = make_float4(0.59f, 0.57f, 0.53f, 1.0f);
+            seam_color = make_float4(0.23f, 0.23f, 0.24f, 1.0f);
+            landmark_color = make_float4(0.44f, 0.41f, 0.37f, 1.0f);
+            cap_color = make_float4(0.34f, 0.32f, 0.28f, 1.0f);
+            continuity_axis_half = 2.9f;
+            continuity_cross_half = 1.34f;
+            curb_axis_half = 2.40f;
+            curb_height = 0.26f;
+            landmark_axis_half = 1.26f;
+            landmark_half_height = 1.18f;
+            landmark_cross_half = 0.18f;
+            cap_axis_half = 1.34f;
+            cap_height = 2.30f;
+            cap_cross_half = 0.36f;
+            post_axis_offset = 1.02f;
+            post_cross_shift = 0.12f;
+            add_posts = 0;
+            add_bollards = 1;
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            continuity_color = make_float4(0.47f, 0.44f, 0.40f, 1.0f);
+            curb_color = make_float4(0.70f, 0.66f, 0.61f, 1.0f);
+            seam_color = make_float4(0.32f, 0.29f, 0.26f, 1.0f);
+            landmark_color = make_float4(0.60f, 0.49f, 0.42f, 1.0f);
+            cap_color = make_float4(0.48f, 0.30f, 0.23f, 1.0f);
+            continuity_axis_half = 2.4f;
+            continuity_cross_half = 1.18f;
+            curb_axis_half = 1.96f;
+            curb_height = 0.20f;
+            landmark_axis_half = 0.54f;
+            landmark_half_height = 1.16f;
+            landmark_cross_half = 0.42f;
+            cap_axis_half = 0.92f;
+            cap_height = 2.24f;
+            cap_cross_half = 0.48f;
+            post_axis_offset = 0.72f;
+            post_cross_shift = 0.18f;
+            add_planters = 1;
+            break;
+    }
+
+    push_scene_box(make_box(
+        make_float3(continuity_center.x, kRoadHeight + 0.015f, continuity_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, continuity_axis_half, 0.015f, continuity_cross_half),
+        continuity_color
+    ));
+    push_scene_box(make_box(
+        make_float3(curb_center.x, kRoadHeight + curb_height, curb_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, curb_axis_half, curb_height, 0.08f),
+        curb_color
+    ));
+    push_scene_box(make_box(
+        make_float3(seam_center.x, kRoadHeight + 0.02f, seam_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, fmaxf(continuity_axis_half - 0.34f, 1.2f), 0.01f, 0.06f),
+        seam_color
+    ));
+
+    landmark_center.y = kRoadHeight + landmark_half_height;
+    push_prop(
+        landmark_center,
+        oriented_half_extents_for_axis(route_context->branch_axis, landmark_axis_half, landmark_half_height, landmark_cross_half),
+        landmark_color,
+        1
+    );
+
+    {
+        MDTBFloat3 cap_center = offset_outer_route_position(route_context, landmark_center, -along_sign * 0.08f, -0.18f);
+        cap_center.y = kRoadHeight + cap_height;
+        push_prop(
+            cap_center,
+            oriented_half_extents_for_axis(route_context->branch_axis, cap_axis_half, 0.08f, cap_cross_half),
+            cap_color,
+            0
+        );
+    }
+
+    if (add_posts) {
+        MDTBFloat3 left_post = offset_outer_route_position(route_context, landmark_center, -along_sign * post_axis_offset, post_cross_shift);
+        MDTBFloat3 right_post = offset_outer_route_position(route_context, landmark_center, along_sign * post_axis_offset, post_cross_shift);
+        left_post.y = kRoadHeight + 0.92f;
+        right_post.y = kRoadHeight + 0.92f;
+        push_prop(
+            left_post,
+            oriented_half_extents_for_axis(route_context->branch_axis, 0.08f, 0.92f, 0.08f),
+            scaled_color(landmark_color, 0.88f),
+            1
+        );
+        push_prop(
+            right_post,
+            oriented_half_extents_for_axis(route_context->branch_axis, 0.08f, 0.92f, 0.08f),
+            scaled_color(landmark_color, 0.88f),
+            1
+        );
+    }
+
+    if (add_planters) {
+        MDTBFloat3 left_planter = offset_outer_route_position(route_context, continuity_center, -along_sign * 1.04f, -0.12f);
+        MDTBFloat3 right_planter = offset_outer_route_position(route_context, continuity_center, along_sign * 1.04f, -0.12f);
+        push_planter(left_planter.x, left_planter.z, 0.32f);
+        push_planter(right_planter.x, right_planter.z, 0.30f);
+    }
+
+    if (add_bollards) {
+        MDTBFloat3 left_bollard = offset_outer_route_position(route_context, continuity_center, -along_sign * 1.18f, -0.18f);
+        MDTBFloat3 right_bollard = offset_outer_route_position(route_context, continuity_center, along_sign * 1.18f, -0.18f);
+        push_bollard(left_bollard.x, left_bollard.z, 0.92f);
+        push_bollard(right_bollard.x, right_bollard.z, 0.92f);
     }
 }
 
@@ -12733,6 +13012,7 @@ static void build_outer_route_support_props(const MDTBBlockDescriptor *block, ui
         push_outer_route_marker(route_context.marker_position, route_context.branch_axis, route_context.route_sign, marker_color, accent_color);
         build_outer_route_frontage_massing(block, &route_context);
         build_outer_route_lot_composition(block, &route_context);
+        build_outer_route_edge_continuity(block, &route_context);
 
         switch (block->frontage_template) {
             case MDTBFrontageTemplateResidentialCourt:
@@ -12918,7 +13198,7 @@ static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block
             push_interest_point(branch_pedestrian, 4.8f, MDTBInterestPointPedestrianSpawn, block_index);
 
             if (outer_route_node_context_for_block(block, &connector_profile, &route_context)) {
-                const float along_sign = ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
+                const float along_sign = outer_route_longitudinal_sign_for_block(block);
                 MDTBFloat3 support_hotspot = route_context.support_position;
                 MDTBFloat3 marker_hotspot = route_context.marker_position;
                 MDTBFloat3 support_pedestrian = route_context.pad_position;
@@ -12926,37 +13206,53 @@ static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block
                     offset_outer_route_position(&route_context, route_context.support_position, along_sign * 0.34f, 2.12f);
                 MDTBFloat3 parcel_pedestrian =
                     offset_outer_route_position(&route_context, route_context.pad_position, along_sign * 1.08f, 1.34f);
+                MDTBFloat3 continuity_hotspot = outer_route_continuity_pad_position(block, &route_context);
+                MDTBFloat3 continuity_pedestrian = outer_route_continuity_pull_position(block, &route_context);
+                MDTBFloat3 continuity_landmark = outer_route_continuity_landmark_position(block, &route_context);
                 float support_hotspot_radius = 6.6f;
                 float marker_hotspot_radius = 6.0f;
                 float parcel_hotspot_radius = 5.8f;
+                float continuity_hotspot_radius = 5.4f;
+                float continuity_landmark_radius = 6.2f;
 
                 support_hotspot.y = kSidewalkHeight;
                 marker_hotspot.y = kSidewalkHeight;
                 support_pedestrian.y = kSidewalkHeight;
                 parcel_hotspot.y = kSidewalkHeight;
                 parcel_pedestrian.y = kSidewalkHeight;
+                continuity_hotspot.y = kSidewalkHeight;
+                continuity_pedestrian.y = kSidewalkHeight;
+                continuity_landmark.y = kSidewalkHeight;
 
                 switch (block->frontage_template) {
                     case MDTBFrontageTemplateResidentialCourt:
                         support_hotspot_radius = 5.8f;
                         marker_hotspot_radius = 5.4f;
                         parcel_hotspot_radius = 5.2f;
+                        continuity_hotspot_radius = 4.8f;
+                        continuity_landmark_radius = 5.8f;
                         break;
                     case MDTBFrontageTemplateTransitMarket:
                         support_hotspot_radius = 6.8f;
                         marker_hotspot_radius = 6.4f;
                         parcel_hotspot_radius = 6.2f;
+                        continuity_hotspot_radius = 6.4f;
+                        continuity_landmark_radius = 6.8f;
                         break;
                     case MDTBFrontageTemplateServiceSpur:
                         support_hotspot_radius = 6.4f;
                         marker_hotspot_radius = 6.0f;
                         parcel_hotspot_radius = 6.0f;
+                        continuity_hotspot_radius = 6.0f;
+                        continuity_landmark_radius = 6.4f;
                         break;
                     case MDTBFrontageTemplateCivicRetail:
                     default:
                         support_hotspot_radius = 6.6f;
                         marker_hotspot_radius = 6.2f;
                         parcel_hotspot_radius = 5.8f;
+                        continuity_hotspot_radius = 5.6f;
+                        continuity_landmark_radius = 6.4f;
                         break;
                 }
 
@@ -12965,6 +13261,9 @@ static void build_hotspot_hooks(const MDTBBlockDescriptor *block, uint32_t block
                 push_interest_point(support_pedestrian, 4.4f, MDTBInterestPointPedestrianSpawn, block_index);
                 push_interest_point(parcel_hotspot, parcel_hotspot_radius, MDTBInterestPointHotspot, block_index);
                 push_interest_point(parcel_pedestrian, 4.6f, MDTBInterestPointPedestrianSpawn, block_index);
+                push_interest_point(continuity_hotspot, continuity_hotspot_radius, MDTBInterestPointHotspot, block_index);
+                push_interest_point(continuity_pedestrian, 4.4f, MDTBInterestPointPedestrianSpawn, block_index);
+                push_interest_point(continuity_landmark, continuity_landmark_radius, MDTBInterestPointLandmark, block_index);
             }
         }
     }
@@ -13101,7 +13400,7 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
             }
 
             {
-                const float along_sign = ((block->variant & 1u) != 0u) ? 1.0f : -1.0f;
+                const float along_sign = outer_route_longitudinal_sign_for_block(block);
                 MDTBFloat3 branch_anchor =
                     secondary_connector_branch_position_for_block(block, &connector_profile, branch_anchor_distance, 0.0f);
                 MDTBFloat3 branch_pedestrian =
@@ -13136,8 +13435,13 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
                         offset_outer_route_position(&route_context, route_context.support_position, along_sign * 0.28f, 1.82f);
                     MDTBFloat3 pocket_pedestrian =
                         offset_outer_route_position(&route_context, route_context.pad_position, along_sign * 0.96f, 1.20f);
+                    MDTBFloat3 continuity_anchor =
+                        offset_outer_route_position(&route_context, outer_route_continuity_pad_position(block, &route_context), along_sign * 0.12f, -0.08f);
+                    MDTBFloat3 continuity_pedestrian = outer_route_continuity_pull_position(block, &route_context);
                     uint32_t pocket_kind = branch_kind;
                     uint32_t pocket_parking_state = branch_parking_state;
+                    uint32_t continuity_kind = branch_kind;
+                    uint32_t continuity_parking_state = branch_parking_state;
                     const float pocket_yaw =
                         branch_axis == MDTBRoadAxisEastWest
                         ? (along_sign >= 0.0f ? kPi * 0.5f : -(kPi * 0.5f))
@@ -13147,23 +13451,32 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
                         case MDTBFrontageTemplateResidentialCourt:
                             pocket_kind = MDTBVehicleKindCoupe;
                             pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            continuity_kind = MDTBVehicleKindCoupe;
+                            continuity_parking_state = MDTBVehicleParkingStateCurbside;
                             break;
                         case MDTBFrontageTemplateTransitMarket:
                             pocket_kind = MDTBVehicleKindMoped;
                             pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            continuity_kind = MDTBVehicleKindMoped;
+                            continuity_parking_state = MDTBVehicleParkingStateCurbside;
                             break;
                         case MDTBFrontageTemplateServiceSpur:
                             pocket_kind = MDTBVehicleKindSedan;
                             pocket_parking_state = MDTBVehicleParkingStateService;
+                            continuity_kind = MDTBVehicleKindSedan;
+                            continuity_parking_state = MDTBVehicleParkingStateService;
                             break;
                         case MDTBFrontageTemplateCivicRetail:
                         default:
                             pocket_kind = MDTBVehicleKindMotorcycle;
                             pocket_parking_state = MDTBVehicleParkingStateCurbside;
+                            continuity_kind = MDTBVehicleKindCoupe;
+                            continuity_parking_state = MDTBVehicleParkingStateCurbside;
                             break;
                     }
 
                     pocket_pedestrian.y = kSidewalkHeight;
+                    continuity_pedestrian.y = kSidewalkHeight;
                     push_interest_point(pocket_anchor, 4.8f, MDTBInterestPointVehicleSpawn, block_index);
                     push_interest_point(pocket_pedestrian, 4.6f, MDTBInterestPointPedestrianSpawn, block_index);
                     push_vehicle_anchor(
@@ -13172,6 +13485,17 @@ static void build_vehicle_handoff_hooks(const MDTBBlockDescriptor *block, uint32
                         block_index,
                         pocket_kind,
                         pocket_parking_state,
+                        branch_axis,
+                        connector_profile.branch_center_offset
+                    );
+                    push_interest_point(continuity_anchor, 4.4f, MDTBInterestPointVehicleSpawn, block_index);
+                    push_interest_point(continuity_pedestrian, 4.2f, MDTBInterestPointPedestrianSpawn, block_index);
+                    push_vehicle_anchor(
+                        continuity_anchor,
+                        pocket_yaw,
+                        block_index,
+                        continuity_kind,
+                        continuity_parking_state,
                         branch_axis,
                         connector_profile.branch_center_offset
                     );
