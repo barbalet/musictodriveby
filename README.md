@@ -21,6 +21,24 @@ Please plan for the cycles needed to create this game allowing for 125 cycles or
 Cycle 117 was completed on April 19, 2026.
 See `docs/cycles/cycle-117.md` for the cycle report.
 
+### Art Reset Demo
+
+The current reset pass moves the most visible characters, vehicles, weapons, and block-owned environment art onto imported OBJ assets instead of the older all-box placeholder presentation.
+
+See `docs/art-reset.md` for the component inventory, free source packs, current in-game mapping, and remaining art gaps.
+
+### Screenshots
+
+Current in-game captures from the active combat-lane slice:
+
+![First-person street view](docs/images/combat-lane-first-person.png)
+
+First-person view across the current West Adams / Crenshaw test lane.
+
+![Third-person street view](docs/images/combat-lane-third-person.png)
+
+Third-person view showing the current player character, roadway, and nearby vehicle pass.
+
 ### Cycle Plan
 
 Assume each cycle ends with:

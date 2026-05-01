@@ -17,6 +17,9 @@ let package = Package(
             name: "MusicToDriveBy",
             dependencies: ["EngineCore"],
             path: "Sources/MusicToDriveBy",
+            resources: [
+                .copy("Resources"),
+            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Metal"),

@@ -8,7 +8,7 @@ import simd
 import EngineCore
 #endif
 
-private struct Vertex {
+struct Vertex {
     var position: SIMD4<Float>
     var color: SIMD4<Float>
 }
@@ -123,9 +123,10 @@ private struct AmbientFrame {
 
 @MainActor
 final class Renderer: NSObject, MTKViewDelegate {
-    private static let dynamicVertexBudget = 512 * 36
+    private static let dynamicVertexBudget = 4096 * 36
     private static let vertexGrowthStep = 256 * 36
     private static let vehicleMountRadius: Float = 3.6
+    private static let artMeshes = ArtMeshCatalog.shared
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -263,8 +264,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         let visibleBlockIndices = Self.visibleBlockIndices(activeChunkIndices: activeChunkIndices, blocks: blocks)
         let staticVertices = Self.makeStaticSceneVertices(
             staticSceneBoxes: staticSceneBoxes,
-            blocks: blocks,
-            activeChunkIndices: activeChunkIndices
+            visibleBlockIndices: visibleBlockIndices
+        )
+        let environmentArtVertices = Self.makeEnvironmentArtVertices(
+            visibleBlockIndices: visibleBlockIndices,
+            blocks: blocks
         )
         let ambientFrame = Self.makeAmbientVertices(
             elapsedTime: engineState.elapsed_time,
@@ -304,7 +308,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 firearmShotTimer: engineState.firearm_last_shot_timer
             )
             : []
-        let drawVertices = staticVertices + ambientFrame.vertices + combatVertices + vehicleAnchorVertices + actorVertices
+        let drawVertices = staticVertices + environmentArtVertices + ambientFrame.vertices + combatVertices + vehicleAnchorVertices + actorVertices
         let drawVertexCount = drawVertices.count
         latestVisibleStaticBoxCount = staticVertices.count / 36
 
@@ -675,16 +679,89 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private static func makeStaticSceneVertices(staticSceneBoxes: [SceneStaticBox], blocks: [SceneBlock], activeChunkIndices: Set<Int>) -> [Vertex] {
+    private static func makeStaticSceneVertices(staticSceneBoxes: [SceneStaticBox], visibleBlockIndices: Set<Int>) -> [Vertex] {
         var vertices: [Vertex] = []
         vertices.reserveCapacity(staticSceneBoxes.count * 36)
 
         for sceneBox in staticSceneBoxes {
-            if sceneBox.layer != UInt32(MDTBSceneLayerShared) && sceneBox.layer != UInt32(MDTBSceneLayerBlockOwned) {
+            if sceneBox.layer == UInt32(MDTBSceneLayerShared) {
+                vertices.append(contentsOf: makeBoxVertices(sceneBox.box))
                 continue
             }
 
-            vertices.append(contentsOf: makeBoxVertices(sceneBox.box))
+            if sceneBox.layer == UInt32(MDTBSceneLayerBlockOwned) && visibleBlockIndices.contains(Int(sceneBox.blockIndex)) {
+                continue
+            }
+
+            if sceneBox.layer == UInt32(MDTBSceneLayerBlockOwned) {
+                vertices.append(contentsOf: makeBoxVertices(sceneBox.box))
+            }
+        }
+
+        return vertices
+    }
+
+    private static func makeEnvironmentArtVertices(visibleBlockIndices: Set<Int>, blocks: [SceneBlock]) -> [Vertex] {
+        var vertices: [Vertex] = []
+
+        for blockIndex in visibleBlockIndices.sorted() where blockIndex < blocks.count {
+            let block = blocks[blockIndex]
+            let origin = block.origin
+            let blockTint = environmentTint(for: block)
+
+            if block.frontageTemplate == UInt32(MDTBFrontageTemplateResidentialCourt) || block.kind == UInt32(MDTBBlockKindResidential) {
+                let primaryScale = artMeshes.fittedUniformScale(for: .suburbanHouseA, targetWidth: 18.0, targetDepth: 16.0, targetHeight: 18.0)
+                let secondaryScale = artMeshes.fittedUniformScale(for: .suburbanHouseL, targetWidth: 16.0, targetDepth: 16.0, targetHeight: 17.0)
+                let treeScale = artMeshes.fittedUniformScale(for: .suburbanTree, targetWidth: 5.0, targetDepth: 5.0, targetHeight: 9.0)
+                let fenceScale = artMeshes.fittedUniformScale(for: .suburbanFence, targetWidth: 14.0, targetDepth: 1.4, targetHeight: 2.5)
+                let planterScale = artMeshes.fittedUniformScale(for: .suburbanPlanter, targetWidth: 2.4, targetDepth: 2.4, targetHeight: 1.8)
+                let lightScale = artMeshes.fittedUniformScale(for: .lightSquare, targetWidth: 2.2, targetDepth: 2.2, targetHeight: 8.0)
+
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .suburbanHouseA, position: origin + SIMD3<Float>(-18.0, 0.0, 12.0), yaw: 0.0, scale: primaryScale, tint: blockTint))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .suburbanHouseL, position: origin + SIMD3<Float>(18.0, 0.0, -12.0), yaw: .pi, scale: secondaryScale, tint: blockTint))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .suburbanTree, position: origin + SIMD3<Float>(-32.0, 0.0, -26.0), yaw: 0.0, scale: treeScale, tint: SIMD4<Float>(0.92, 1.0, 0.92, 1.0)))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .suburbanFence, position: origin + SIMD3<Float>(0.0, 0.0, 27.0), yaw: 0.0, scale: fenceScale, tint: SIMD4<Float>(1.0, 1.0, 1.0, 1.0)))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .suburbanPlanter, position: origin + SIMD3<Float>(-10.0, 0.0, 25.0), yaw: 0.0, scale: planterScale, tint: SIMD4<Float>(1.0, 1.0, 1.0, 1.0)))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .lightSquare, position: origin + SIMD3<Float>(36.0, 0.0, 36.0), yaw: 0.0, scale: lightScale))
+                continue
+            }
+
+            if block.frontageTemplate == UInt32(MDTBFrontageTemplateServiceSpur) || (block.tagMask & UInt32(MDTBBlockTagSpur)) != 0 {
+                let primaryScale = artMeshes.fittedUniformScale(for: .industrialBuildingD, targetWidth: 24.0, targetDepth: 20.0, targetHeight: 18.0)
+                let secondaryScale = artMeshes.fittedUniformScale(for: .industrialBuildingN, targetWidth: 18.0, targetDepth: 16.0, targetHeight: 14.0)
+                let tankScale = artMeshes.fittedUniformScale(for: .industrialTank, targetWidth: 5.0, targetDepth: 5.0, targetHeight: 4.0)
+                let chimneyScale = artMeshes.fittedUniformScale(for: .industrialChimney, targetWidth: 3.0, targetDepth: 3.0, targetHeight: 10.0)
+                let coneScale = artMeshes.fittedUniformScale(for: .constructionCone, targetWidth: 1.0, targetDepth: 1.0, targetHeight: 1.4)
+                let lightScale = artMeshes.fittedUniformScale(for: .lightSquare, targetWidth: 2.2, targetDepth: 2.2, targetHeight: 8.0)
+
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .industrialBuildingD, position: origin + SIMD3<Float>(-12.0, 0.0, 4.0), yaw: 0.0, scale: primaryScale, tint: blockTint))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .industrialBuildingN, position: origin + SIMD3<Float>(18.0, 0.0, -18.0), yaw: .pi * 0.5, scale: secondaryScale, tint: blockTint))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .industrialTank, position: origin + SIMD3<Float>(26.0, 0.0, 18.0), yaw: 0.0, scale: tankScale))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .industrialChimney, position: origin + SIMD3<Float>(-22.0, 0.0, -20.0), yaw: 0.0, scale: chimneyScale))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .constructionCone, position: origin + SIMD3<Float>(30.0, 0.0, 30.0), yaw: 0.0, scale: coneScale))
+                vertices.append(contentsOf: artMeshes.makeVertices(for: .lightSquare, position: origin + SIMD3<Float>(36.0, 0.0, -34.0), yaw: 0.0, scale: lightScale))
+                continue
+            }
+
+            let downtownBlock =
+                block.kind == UInt32(MDTBBlockKindHub) ||
+                block.district == UInt32(MDTBDistrictKoreatown) ||
+                block.district == UInt32(MDTBDistrictUniversityPark) ||
+                block.district == UInt32(MDTBDistrictSouthPark)
+
+            let primaryMesh: ArtMeshID = downtownBlock ? .commercialTowerA : .commercialLowA
+            let secondaryMesh: ArtMeshID = downtownBlock ? .commercialWideA : .commercialAwning
+            let primaryScale = artMeshes.fittedUniformScale(for: primaryMesh, targetWidth: downtownBlock ? 18.0 : 22.0, targetDepth: downtownBlock ? 18.0 : 22.0, targetHeight: downtownBlock ? 34.0 : 18.0)
+            let secondaryScale = artMeshes.fittedUniformScale(for: secondaryMesh, targetWidth: downtownBlock ? 26.0 : 10.0, targetDepth: downtownBlock ? 20.0 : 6.0, targetHeight: downtownBlock ? 16.0 : 4.0)
+            let awningScale = artMeshes.fittedUniformScale(for: .commercialAwning, targetWidth: 8.0, targetDepth: 3.0, targetHeight: 3.0)
+            let signScale = artMeshes.fittedUniformScale(for: .signHighway, targetWidth: 5.0, targetDepth: 1.6, targetHeight: 5.0)
+            let lightScale = artMeshes.fittedUniformScale(for: .lightSquare, targetWidth: 2.2, targetDepth: 2.2, targetHeight: 8.0)
+
+            vertices.append(contentsOf: artMeshes.makeVertices(for: primaryMesh, position: origin + SIMD3<Float>(-10.0, 0.0, 0.0), yaw: 0.0, scale: primaryScale, tint: blockTint))
+            vertices.append(contentsOf: artMeshes.makeVertices(for: secondaryMesh, position: origin + SIMD3<Float>(18.0, 0.0, -12.0), yaw: .pi * 0.5, scale: secondaryScale, tint: blockTint))
+            vertices.append(contentsOf: artMeshes.makeVertices(for: .commercialAwning, position: origin + SIMD3<Float>(12.0, 0.0, 18.0), yaw: 0.0, scale: awningScale))
+            vertices.append(contentsOf: artMeshes.makeVertices(for: .signHighway, position: origin + SIMD3<Float>(-34.0, 0.0, 34.0), yaw: 0.0, scale: signScale))
+            vertices.append(contentsOf: artMeshes.makeVertices(for: .lightSquare, position: origin + SIMD3<Float>(34.0, 0.0, -34.0), yaw: 0.0, scale: lightScale))
         }
 
         return vertices
@@ -1614,123 +1691,27 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private static func makePedestrianPlaceholderVertices(position: SIMD3<Float>, heading: Float, elapsedTime: Float, tint: SIMD4<Float>) -> [Vertex] {
-        let gaitPhase = elapsedTime * 3.2
-        let stride = sin(gaitPhase) * 0.12
-        let torsoYaw = heading + (sin(gaitPhase * 0.5) * 0.08)
-        let headYaw = torsoYaw + (sin(gaitPhase * 0.24) * 0.04)
-        let armSwing = sin(gaitPhase + (.pi * 0.5)) * 0.11
-        let shirtColor = animatedColor(tint, intensity: 0.90)
-        let shoulderColor = animatedColor(tint, intensity: 0.82)
-        let pantsColor = blendedColor(tint, SIMD4<Float>(0.11, 0.12, 0.15, 1.0), amount: 0.68)
-        let shoeColor = SIMD4<Float>(0.08, 0.09, 0.10, 1.0)
-        let skinColor = blendedColor(tint, SIMD4<Float>(0.82, 0.66, 0.54, 1.0), amount: 0.84)
-        let hairColor = blendedColor(tint, SIMD4<Float>(0.16, 0.14, 0.13, 1.0), amount: 0.90)
-
-        return
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.03, 0.02), halfExtents: SIMD3<Float>(0.18, 0.02, 0.28), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.10, 0.11, 0.13, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.60, 0.0), halfExtents: SIMD3<Float>(0.18, 0.12, 0.11), bodyYaw: heading, partYaw: heading, color: pantsColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, -0.02), halfExtents: SIMD3<Float>(0.18, 0.20, 0.11), bodyYaw: heading, partYaw: torsoYaw, color: shirtColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.22, 0.02), halfExtents: SIMD3<Float>(0.23, 0.24, 0.12), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.48, 0.0), halfExtents: SIMD3<Float>(0.28, 0.06, 0.10), bodyYaw: heading, partYaw: torsoYaw, color: animatedColor(tint, intensity: 0.96)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.63, 0.0), halfExtents: SIMD3<Float>(0.07, 0.06, 0.06), bodyYaw: heading, partYaw: headYaw, color: skinColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.84, 0.02), halfExtents: SIMD3<Float>(0.15, 0.18, 0.14), bodyYaw: heading, partYaw: headYaw, color: skinColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 2.00, 0.0), halfExtents: SIMD3<Float>(0.16, 0.04, 0.12), bodyYaw: heading, partYaw: headYaw, color: hairColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.12, 0.40, stride * 0.42), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: pantsColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.12, 0.40, -stride * 0.42), halfExtents: SIMD3<Float>(0.08, 0.22, 0.08), bodyYaw: heading, partYaw: heading, color: pantsColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.11, 0.15, stride), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: heading, color: blendedColor(pantsColor, shoeColor, amount: 0.24)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.11, 0.15, -stride), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: heading, color: blendedColor(pantsColor, shoeColor, amount: 0.24)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.11, 0.03, stride + 0.08), halfExtents: SIMD3<Float>(0.09, 0.03, 0.16), bodyYaw: heading, partYaw: heading, color: shoeColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.11, 0.03, -stride + 0.08), halfExtents: SIMD3<Float>(0.09, 0.03, 0.16), bodyYaw: heading, partYaw: heading, color: shoeColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.28, 1.22, -armSwing * 0.38), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.28, 1.22, armSwing * 0.38), halfExtents: SIMD3<Float>(0.07, 0.20, 0.07), bodyYaw: heading, partYaw: torsoYaw, color: shoulderColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.30, 0.94, -armSwing * 0.74), halfExtents: SIMD3<Float>(0.06, 0.18, 0.06), bodyYaw: heading, partYaw: torsoYaw, color: skinColor) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.30, 0.94, armSwing * 0.74), halfExtents: SIMD3<Float>(0.06, 0.18, 0.06), bodyYaw: heading, partYaw: torsoYaw, color: skinColor)
+        let variant = pedestrianMeshVariant(position: position)
+        return artMeshes.makeVertices(
+            for: variant,
+            position: position,
+            yaw: heading,
+            scale: SIMD3<Float>(repeating: 0.82),
+            tint: tint,
+            lift: sin(elapsedTime * 3.2) * 0.04
+        )
     }
 
     private static func makeVehiclePlaceholderVertices(position: SIMD3<Float>, yaw: Float, elapsedTime: Float, tint: SIMD4<Float>, kind: UInt32, yieldIntensity: Float) -> [Vertex] {
-        let lightPulse = 0.74 + (sin(elapsedTime * 3.6) * 0.14)
-        let glassColor = SIMD4<Float>(0.70, 0.78, 0.84, 1.0)
-        let trimColor = SIMD4<Float>(0.14, 0.16, 0.18, 1.0)
-        let wheelColor = SIMD4<Float>(0.10, 0.11, 0.12, 1.0)
-        let rimColor = SIMD4<Float>(0.56, 0.60, 0.64, 1.0)
-        let brakeGlow = 0.22 + yieldIntensity * 0.72
-        let tailLightColor = SIMD4<Float>(0.62 + brakeGlow * 0.32, 0.10 + brakeGlow * 0.10, 0.10 + brakeGlow * 0.08, 1.0)
-
-        switch kind {
-        case UInt32(MDTBVehicleKindBicycle):
-            return
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.36, 0.84), axleHalfWidth: 0.04, radius: 0.26, treadHalfDepth: 0.09, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.36, -0.90), axleHalfWidth: 0.04, radius: 0.26, treadHalfDepth: 0.09, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.64, -0.08), halfExtents: SIMD3<Float>(0.04, 0.14, 0.50), yaw: yaw, color: tint) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.72, 0.12), halfExtents: SIMD3<Float>(0.18, 0.03, 0.30), yaw: yaw, color: animatedColor(tint, intensity: 0.86)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.84, -0.22), halfExtents: SIMD3<Float>(0.20, 0.03, 0.03), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, 0.14), halfExtents: SIMD3<Float>(0.05, 0.05, 0.08), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.92, -0.56), halfExtents: SIMD3<Float>(0.22, 0.03, 0.03), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, 1.02), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.84, 1.0)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.66, -1.04), halfExtents: SIMD3<Float>(0.04, 0.04, 0.02), yaw: yaw, color: tailLightColor)
-        case UInt32(MDTBVehicleKindCoupe):
-            return
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.18, 0.04), halfExtents: SIMD3<Float>(0.98, 0.14, 1.66), yaw: yaw, color: animatedColor(tint, intensity: 0.74)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.38, 0.02), halfExtents: SIMD3<Float>(0.94, 0.18, 1.56), yaw: yaw, color: tint) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, 1.04), halfExtents: SIMD3<Float>(0.82, 0.14, 0.62), yaw: yaw, color: animatedColor(tint, intensity: 0.88)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.54, -1.12), halfExtents: SIMD3<Float>(0.80, 0.12, 0.56), yaw: yaw, color: animatedColor(tint, intensity: 0.76)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, -0.08), halfExtents: SIMD3<Float>(0.60, 0.18, 0.92), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.96, -0.18), halfExtents: SIMD3<Float>(0.42, 0.10, 0.42), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(-0.54, 0.78, -0.08), halfExtents: SIMD3<Float>(0.07, 0.12, 0.60), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.54, 0.78, -0.08), halfExtents: SIMD3<Float>(0.07, 0.12, 0.60), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.82, 0.64), halfExtents: SIMD3<Float>(0.42, 0.12, 0.18), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.82, -0.74), halfExtents: SIMD3<Float>(0.38, 0.10, 0.16), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, 1.72), halfExtents: SIMD3<Float>(0.74, 0.07, 0.09), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, -1.68), halfExtents: SIMD3<Float>(0.74, 0.07, 0.09), yaw: yaw, color: trimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.68, 0.34, 1.14), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.68, 0.34, 1.14), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.68, 0.34, -1.12), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.68, 0.34, -1.12), axleHalfWidth: 0.12, radius: 0.24, treadHalfDepth: 0.16, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.54, localY: 0.48, localZ: 1.80, halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.50, localY: 0.46, localZ: -1.78, halfExtents: SIMD3<Float>(0.10, 0.06, 0.04), color: tailLightColor)
-        case UInt32(MDTBVehicleKindMoped):
-            return
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.38, 1.06), axleHalfWidth: 0.08, radius: 0.24, treadHalfDepth: 0.12, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.38, -1.00), axleHalfWidth: 0.08, radius: 0.24, treadHalfDepth: 0.12, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.30, 0.18), halfExtents: SIMD3<Float>(0.18, 0.20, 0.82), yaw: yaw, color: tint) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.58, -0.08), halfExtents: SIMD3<Float>(0.10, 0.10, 0.36), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.78, -0.52), halfExtents: SIMD3<Float>(0.42, 0.04, 0.04), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.74, 0.12), halfExtents: SIMD3<Float>(0.20, 0.04, 0.22), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.66, 0.22), halfExtents: SIMD3<Float>(0.08, 0.10, 0.18), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, 1.22), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.50, -1.14), halfExtents: SIMD3<Float>(0.06, 0.06, 0.03), yaw: yaw, color: tailLightColor)
-        case UInt32(MDTBVehicleKindMotorcycle):
-            return
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.42, 1.16), axleHalfWidth: 0.10, radius: 0.28, treadHalfDepth: 0.14, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.0, 0.42, -1.08), axleHalfWidth: 0.10, radius: 0.28, treadHalfDepth: 0.14, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.34, 0.06), halfExtents: SIMD3<Float>(0.22, 0.22, 0.94), yaw: yaw, color: tint) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.70, -0.14), halfExtents: SIMD3<Float>(0.12, 0.12, 0.50), yaw: yaw, color: animatedColor(tint, intensity: 0.82)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.90, -0.56), halfExtents: SIMD3<Float>(0.46, 0.04, 0.04), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.84, 0.12), halfExtents: SIMD3<Float>(0.22, 0.05, 0.22), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.70, 0.20), halfExtents: SIMD3<Float>(0.10, 0.10, 0.26), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.64, 1.38), halfExtents: SIMD3<Float>(0.08, 0.08, 0.03), yaw: yaw, color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.60, -1.22), halfExtents: SIMD3<Float>(0.07, 0.07, 0.03), yaw: yaw, color: tailLightColor)
-        default:
-            return
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.20, 0.04), halfExtents: SIMD3<Float>(1.10, 0.15, 1.86), yaw: yaw, color: animatedColor(tint, intensity: 0.74)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.40, 0.02), halfExtents: SIMD3<Float>(1.06, 0.20, 1.78), yaw: yaw, color: tint) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.58, 1.10), halfExtents: SIMD3<Float>(0.92, 0.16, 0.72), yaw: yaw, color: animatedColor(tint, intensity: 0.88)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.56, -1.18), halfExtents: SIMD3<Float>(0.90, 0.14, 0.62), yaw: yaw, color: animatedColor(tint, intensity: 0.78)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.78, -0.04), halfExtents: SIMD3<Float>(0.68, 0.20, 1.08), yaw: yaw, color: animatedColor(tint, intensity: 0.84)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.02, -0.10), halfExtents: SIMD3<Float>(0.50, 0.11, 0.52), yaw: yaw, color: animatedColor(tint, intensity: 0.72)) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(-0.62, 0.84, -0.04), halfExtents: SIMD3<Float>(0.08, 0.14, 0.76), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.62, 0.84, -0.04), halfExtents: SIMD3<Float>(0.08, 0.14, 0.76), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.88, 0.72), halfExtents: SIMD3<Float>(0.50, 0.12, 0.18), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.88, -0.86), halfExtents: SIMD3<Float>(0.44, 0.10, 0.18), yaw: yaw, color: glassColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.32, 1.92), halfExtents: SIMD3<Float>(0.82, 0.08, 0.10), yaw: yaw, color: trimColor) +
-                makeVehicleLocalPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.32, -1.88), halfExtents: SIMD3<Float>(0.82, 0.08, 0.10), yaw: yaw, color: trimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.76, 0.36, 1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.76, 0.36, 1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(-0.76, 0.36, -1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleWheelVertices(position: position, yaw: yaw, localCenter: SIMD3<Float>(0.76, 0.36, -1.28), axleHalfWidth: 0.14, radius: 0.26, treadHalfDepth: 0.18, tireColor: wheelColor, rimColor: rimColor) +
-                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.62, localY: 0.48, localZ: 2.02, halfExtents: SIMD3<Float>(0.14, 0.08, 0.04), color: SIMD4<Float>(lightPulse, lightPulse, 0.88, 1.0)) +
-                makeVehicleLightPairVertices(position: position, yaw: yaw, lateralOffset: 0.60, localY: 0.46, localZ: -1.98, halfExtents: SIMD3<Float>(0.12, 0.08, 0.04), color: tailLightColor)
-        }
+        let (meshID, scale) = vehicleMeshDescriptor(for: kind)
+        let liveTint = animatedColor(tint, intensity: 0.90 + yieldIntensity * 0.14 + sin(elapsedTime * 3.6) * 0.04)
+        return artMeshes.makeVertices(
+            for: meshID,
+            position: position,
+            yaw: yaw,
+            scale: scale,
+            tint: liveTint
+        )
     }
 
     private static func makeTrafficHazardVertices(position: SIMD3<Float>, intensity: Float, traversalMode: UInt32, elapsedTime: Float) -> [Vertex] {
@@ -1956,8 +1937,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         let incidentPulse = 0.76 + (sin(elapsedTime * 4.8) * 0.16)
         let pipePickupColor = SIMD4<Float>(0.77, 0.72, 0.66, 1.0)
         let pipePickupHalo = SIMD4<Float>(0.94, 0.80, 0.30, 0.42)
-        let pistolBodyColor = SIMD4<Float>(0.19, 0.21, 0.24, 1.0)
-        let pistolAccentColor = SIMD4<Float>(0.48, 0.68, 0.92, 1.0)
         let pistolPickupHalo = SIMD4<Float>(0.38, 0.70, 1.0, 0.38)
         let dummyBodyColor = SIMD4<Float>(
             0.30 + ((1.0 - dummyHealthRatio) * 0.36) + (dummyReaction * 0.16),
@@ -2041,7 +2020,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         let hostileHeading = state.combat_hostile_heading
         let witnessHeading = state.witness_heading
         let bystanderHeading = state.bystander_heading
-        let hostileRight = SIMD3<Float>(cos(hostileHeading), 0.0, sin(hostileHeading))
         let witnessRight = SIMD3<Float>(cos(witnessHeading), 0.0, sin(witnessHeading))
         let bystanderRight = SIMD3<Float>(cos(bystanderHeading), 0.0, sin(bystanderHeading))
         let territoryPatrolRight = SIMD3<Float>(cos(territoryPatrolHeading), 0.0, sin(territoryPatrolHeading))
@@ -2719,17 +2697,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         if state.firearm_owned == 0 {
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.12, pistolPickupPosition.z + 0.04),
-                halfExtents: SIMD3<Float>(0.18, 0.08, 0.26),
+            vertices.append(contentsOf: artMeshes.makeVertices(
+                for: .pistol,
+                position: pistolPickupPosition + SIMD3<Float>(0.0, 0.14, 0.04),
                 yaw: 0.34,
-                color: pistolBodyColor
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.03, pistolPickupPosition.z - 0.08),
-                halfExtents: SIMD3<Float>(0.08, 0.11, 0.10),
-                yaw: 0.34,
-                color: pistolAccentColor
+                roll: -.pi * 0.28,
+                scale: SIMD3<Float>(repeating: 0.09),
+                tint: SIMD4<Float>(0.96, 0.96, 0.96, 1.0)
             ))
             vertices.append(contentsOf: makeWorldBoxVertices(
                 center: SIMD3<Float>(pistolPickupPosition.x, pistolPickupPosition.y + 0.02, pistolPickupPosition.z),
@@ -2740,36 +2714,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         if dummyDowned {
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 0.24, dummyPosition.z),
-                halfExtents: SIMD3<Float>(0.82, 0.20, 0.34),
+            vertices.append(contentsOf: artMeshes.makeVertices(
+                for: .characterL,
+                position: dummyPosition + SIMD3<Float>(0.0, 0.34, 0.0),
                 yaw: 0.18,
-                color: dummyBodyColor
+                roll: .pi * 0.5,
+                scale: SIMD3<Float>(repeating: 0.82),
+                tint: blendedColor(dummyBodyColor, SIMD4<Float>(0.74, 0.68, 0.62, 1.0), amount: 0.22)
             ))
         } else {
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 1.00 + dummyReaction * 0.08, dummyPosition.z),
-                halfExtents: SIMD3<Float>(0.28, 0.88, 0.20),
+            vertices.append(contentsOf: artMeshes.makeVertices(
+                for: .characterL,
+                position: dummyPosition,
                 yaw: 0.0,
-                color: dummyBodyColor
+                scale: SIMD3<Float>(repeating: 0.82),
+                tint: dummyBodyColor,
+                lift: dummyReaction * 0.08
             ))
             vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(dummyPosition.x, dummyPosition.y + 1.92 + dummyReaction * 0.12, dummyPosition.z + 0.02),
-                halfExtents: SIMD3<Float>(0.18, 0.20, 0.18),
-                yaw: 0.0,
-                color: SIMD4<Float>(0.80, 0.63, 0.51, 1.0)
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(dummyPosition.x - 0.36, dummyPosition.y + 1.02, dummyPosition.z),
-                halfExtents: SIMD3<Float>(0.07, 0.34, 0.07),
-                yaw: -0.10 - dummyReaction * 0.26,
-                color: dummyAccentColor
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(dummyPosition.x + 0.36, dummyPosition.y + 1.02, dummyPosition.z),
-                halfExtents: SIMD3<Float>(0.07, 0.34, 0.07),
-                yaw: 0.10 + dummyReaction * 0.26,
-                color: dummyAccentColor
+                center: dummyPosition + SIMD3<Float>(0.0, 1.92 + dummyReaction * 0.10, 0.0),
+                halfExtents: SIMD3<Float>(0.10, 0.08, 0.10),
+                yaw: elapsedTime * 1.2,
+                color: animatedColor(dummyAccentColor, intensity: 0.86 + dummyReaction * 0.18)
             ))
         }
 
@@ -2807,42 +2773,38 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         if hostileDowned {
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 0.22, hostilePosition.z),
-                halfExtents: SIMD3<Float>(0.76, 0.18, 0.32),
+            vertices.append(contentsOf: artMeshes.makeVertices(
+                for: .characterG,
+                position: hostilePosition + SIMD3<Float>(0.0, 0.34, 0.0),
                 yaw: hostileHeading + 0.38,
-                color: hostileBodyColor
+                roll: -.pi * 0.5,
+                scale: SIMD3<Float>(repeating: 0.84),
+                tint: blendedColor(hostileBodyColor, SIMD4<Float>(0.78, 0.46, 0.34, 1.0), amount: 0.18)
             ))
         } else {
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 1.02 + hostileReaction * 0.08, hostilePosition.z),
-                halfExtents: SIMD3<Float>(0.26, 0.90, 0.22),
+            vertices.append(contentsOf: artMeshes.makeVertices(
+                for: .characterG,
+                position: hostilePosition,
                 yaw: hostileHeading,
-                color: hostileBodyColor
+                scale: SIMD3<Float>(repeating: 0.84),
+                tint: hostileBodyColor,
+                lift: hostileReaction * 0.08
+            ))
+            vertices.append(contentsOf: makeHeldWeaponVertices(
+                position: hostilePosition,
+                heading: hostileHeading,
+                lateralOffset: 0.34,
+                forwardOffset: 0.24,
+                heightOffset: 1.10 + hostileReaction * 0.08,
+                meshID: .pistol,
+                scale: SIMD3<Float>(repeating: 0.085),
+                tint: SIMD4<Float>(0.96, 0.96, 0.96, 1.0)
             ))
             vertices.append(contentsOf: makeWorldBoxVertices(
-                center: SIMD3<Float>(hostilePosition.x, hostilePosition.y + 1.98 + hostileReaction * 0.10, hostilePosition.z),
-                halfExtents: SIMD3<Float>(0.17, 0.19, 0.17),
-                yaw: hostileHeading,
-                color: SIMD4<Float>(0.72, 0.52, 0.42, 1.0)
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: hostilePosition + (hostileRight * 0.34) + SIMD3<Float>(0.0, 1.12, 0.0),
-                halfExtents: SIMD3<Float>(0.08, 0.34, 0.08),
-                yaw: hostileHeading + 0.22 + hostileReaction * 0.12,
-                color: hostileAccentColor
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: hostilePosition - (hostileRight * 0.34) + SIMD3<Float>(0.0, 1.08, 0.0),
-                halfExtents: SIMD3<Float>(0.08, 0.30, 0.08),
-                yaw: hostileHeading - 0.16,
-                color: hostileAccentColor
-            ))
-            vertices.append(contentsOf: makeWorldBoxVertices(
-                center: hostilePosition + (hostileRight * 0.36) + SIMD3<Float>(0.0, 0.98, -0.06),
-                halfExtents: SIMD3<Float>(0.26, 0.05, 0.05),
-                yaw: hostileHeading + 0.06,
-                color: SIMD4<Float>(0.14, 0.15, 0.18, 1.0)
+                center: hostilePosition + SIMD3<Float>(0.0, 2.02 + hostileReaction * 0.10, 0.0),
+                halfExtents: SIMD3<Float>(0.10, 0.08, 0.10),
+                yaw: elapsedTime * 1.3,
+                color: animatedColor(hostileAccentColor, intensity: 0.88 + hostileAlert * 0.18)
             ))
         }
 
@@ -2926,128 +2888,100 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private static func makeActorVertices(position: SIMD3<Float>, heading: Float, cameraYaw: Float, speed: Float, elapsedTime: Float, equippedWeapon: UInt32, meleeAttackPhase: UInt32, meleeAttackTimer: Float, firearmReloading: Bool, firearmReloadTimer: Float, firearmShotTimer: Float) -> [Vertex] {
-        let gaitFrequency: Float = 6.0 + (speed * 0.45)
-        let gaitPhase = elapsedTime * gaitFrequency
-        let strideIntensity = min(speed / 6.0, 1.0)
-        let stride = sin(gaitPhase) * strideIntensity * 0.14
-        let armSwing = sin(gaitPhase + (Float.pi * 0.5)) * strideIntensity * 0.12
         let headDelta = max(min(Self.wrapAngle(cameraYaw - heading), 0.75), -0.75)
-        let torsoYaw = heading + (headDelta * 0.22)
-        let headYaw = heading + (headDelta * 0.56)
         let isPipeEquipped = equippedWeapon == UInt32(MDTBEquippedWeaponLeadPipe)
         let isPistolEquipped = equippedWeapon == UInt32(MDTBEquippedWeaponPistol)
-        let attackSwing: Float
-        let attackReach: Float
-
-        switch meleeAttackPhase {
-        case UInt32(MDTBMeleeAttackWindup):
-            let progress = 1.0 - min(max(meleeAttackTimer / 0.12, 0.0), 1.0)
-            attackSwing = -0.62 * progress
-            attackReach = 0.12 * progress
-        case UInt32(MDTBMeleeAttackStrike):
-            let progress = 1.0 - min(max(meleeAttackTimer / 0.10, 0.0), 1.0)
-            attackSwing = 0.96 * progress
-            attackReach = 0.28 + progress * 0.18
-        case UInt32(MDTBMeleeAttackRecovery):
-            let progress = min(max(meleeAttackTimer / 0.24, 0.0), 1.0)
-            attackSwing = 0.32 * progress
-            attackReach = 0.14 * progress
-        default:
-            attackSwing = 0.0
-            attackReach = 0.0
-        }
-
-        let shotKick = min(max(firearmShotTimer / 0.10, 0.0), 1.0)
-        let reloadProgress = firearmReloading ? 1.0 - min(max(firearmReloadTimer / 1.15, 0.0), 1.0) : 0.0
-        let leftArmYaw: Float
-        let rightArmYaw: Float
-        let leftArmOffset: Float
-        let rightArmOffset: Float
+        let bodyYaw = heading + (headDelta * 0.24)
+        let lift = sin(elapsedTime * (4.8 + min(speed * 0.22, 1.4))) * min(speed / 10.0, 0.06)
+        let bodyTint = SIMD4<Float>(0.98, 0.96, 0.92, 1.0)
+        var vertices = artMeshes.makeVertices(
+            for: .characterA,
+            position: position,
+            yaw: bodyYaw,
+            scale: SIMD3<Float>(repeating: 0.88),
+            tint: bodyTint,
+            lift: lift
+        )
 
         if isPipeEquipped {
-            leftArmYaw = torsoYaw
-            rightArmYaw = torsoYaw + attackSwing + 0.10
-            leftArmOffset = -armSwing
-            rightArmOffset = armSwing + 0.08 - attackReach * 0.35
+            let attackLift: Float = meleeAttackPhase == UInt32(MDTBMeleeAttackStrike) ? 0.16 : 0.08
+            vertices.append(
+                contentsOf: makeWorldBoxVertices(
+                    center: position + SIMD3<Float>(cos(bodyYaw) * 0.42, 1.14 + attackLift, sin(bodyYaw) * 0.42),
+                    halfExtents: SIMD3<Float>(0.05, 0.05, 0.72),
+                    yaw: bodyYaw,
+                    color: SIMD4<Float>(0.62, 0.64, 0.69, 1.0)
+                )
+            )
         } else if isPistolEquipped {
-            let reloadLift = reloadProgress * 0.72
-            let recoil = shotKick * 0.24
-            leftArmYaw = torsoYaw + 0.10 - reloadLift * 0.24
-            rightArmYaw = torsoYaw + 0.18 + reloadLift * 0.40 - recoil
-            leftArmOffset = -armSwing * 0.45 + reloadLift * 0.12
-            rightArmOffset = 0.10 - recoil * 0.10 + reloadLift * 0.28
-        } else {
-            leftArmYaw = torsoYaw
-            rightArmYaw = torsoYaw
-            leftArmOffset = -armSwing
-            rightArmOffset = armSwing
-        }
-
-        var vertices =
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.04, 0.02), halfExtents: SIMD3<Float>(0.44, 0.02, 0.72), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.10, 0.11, 0.13, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.02, 0.0), halfExtents: SIMD3<Float>(0.34, 0.50, 0.18), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.14, -0.22), halfExtents: SIMD3<Float>(0.24, 0.30, 0.08), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.18, 0.20, 0.25, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.76, 0.04), halfExtents: SIMD3<Float>(0.18, 0.22, 0.18), bodyYaw: heading, partYaw: headYaw, color: SIMD4<Float>(0.80, 0.63, 0.51, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.96, -0.02), halfExtents: SIMD3<Float>(0.19, 0.05, 0.09), bodyYaw: heading, partYaw: headYaw, color: SIMD4<Float>(0.18, 0.20, 0.25, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 0.48, 0.0), halfExtents: SIMD3<Float>(0.30, 0.14, 0.16), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.17, 0.19, 0.24, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.12, 0.22, stride), halfExtents: SIMD3<Float>(0.10, 0.22, 0.10), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.12, 0.14, 0.18, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.12, 0.22, -stride), halfExtents: SIMD3<Float>(0.10, 0.22, 0.10), bodyYaw: heading, partYaw: heading, color: SIMD4<Float>(0.12, 0.14, 0.18, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(-0.42, 1.04, leftArmOffset), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: leftArmYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.42, 1.04, rightArmOffset), halfExtents: SIMD3<Float>(0.08, 0.34, 0.08), bodyYaw: heading, partYaw: rightArmYaw, color: SIMD4<Float>(0.91, 0.39, 0.22, 1.0)) +
-            makeActorPartVertices(position: position, localCenter: SIMD3<Float>(0.0, 1.45, 0.18), halfExtents: SIMD3<Float>(0.22, 0.18, 0.10), bodyYaw: heading, partYaw: torsoYaw, color: SIMD4<Float>(0.86, 0.73, 0.33, 1.0))
-
-        if isPipeEquipped {
-            let weaponColor = meleeAttackPhase == UInt32(MDTBMeleeAttackIdle)
-                ? SIMD4<Float>(0.73, 0.69, 0.62, 1.0)
-                : SIMD4<Float>(0.94, 0.82, 0.36, 1.0)
-            vertices.append(contentsOf: makeActorPartVertices(
+            let recoil = min(max(firearmShotTimer / 0.10, 0.0), 1.0)
+            let reloadLift = firearmReloading ? 1.0 - min(max(firearmReloadTimer / 1.15, 0.0), 1.0) : 0.0
+            vertices.append(contentsOf: makeHeldWeaponVertices(
                 position: position,
-                localCenter: SIMD3<Float>(0.64, 0.94, 0.26 - attackReach * 0.25),
-                halfExtents: SIMD3<Float>(0.04, 0.04, 0.64),
-                bodyYaw: heading,
-                partYaw: rightArmYaw,
-                color: weaponColor
-            ))
-            vertices.append(contentsOf: makeActorPartVertices(
-                position: position,
-                localCenter: SIMD3<Float>(0.64, 0.92, -0.12 - attackReach * 0.10),
-                halfExtents: SIMD3<Float>(0.10, 0.05, 0.10),
-                bodyYaw: heading,
-                partYaw: rightArmYaw,
-                color: SIMD4<Float>(0.18, 0.19, 0.21, 1.0)
-            ))
-        } else if isPistolEquipped {
-            let recoil = shotKick * 0.20
-            let slideColor = firearmReloading
-                ? SIMD4<Float>(0.94, 0.72, 0.34, 1.0)
-                : SIMD4<Float>(0.55, 0.70, 0.94, 1.0)
-            vertices.append(contentsOf: makeActorPartVertices(
-                position: position,
-                localCenter: SIMD3<Float>(0.60, 0.92, 0.04 - recoil * 0.12),
-                halfExtents: SIMD3<Float>(0.16, 0.07, 0.20),
-                bodyYaw: heading,
-                partYaw: rightArmYaw,
-                color: SIMD4<Float>(0.16, 0.18, 0.21, 1.0)
-            ))
-            vertices.append(contentsOf: makeActorPartVertices(
-                position: position,
-                localCenter: SIMD3<Float>(0.60, 0.82, -0.02 + reloadProgress * 0.04),
-                halfExtents: SIMD3<Float>(0.08, 0.12, 0.08),
-                bodyYaw: heading,
-                partYaw: rightArmYaw,
-                color: slideColor
-            ))
-            vertices.append(contentsOf: makeActorPartVertices(
-                position: position,
-                localCenter: SIMD3<Float>(0.44, 0.98, -0.02),
-                halfExtents: SIMD3<Float>(0.06, 0.10, 0.06),
-                bodyYaw: heading,
-                partYaw: leftArmYaw,
-                color: SIMD4<Float>(0.18, 0.20, 0.24, 1.0)
+                heading: bodyYaw,
+                lateralOffset: 0.36,
+                forwardOffset: 0.26 + reloadLift * 0.08 - recoil * 0.04,
+                heightOffset: 1.18 + reloadLift * 0.12,
+                meshID: .pistol,
+                scale: SIMD3<Float>(repeating: 0.086),
+                tint: firearmReloading ? SIMD4<Float>(1.0, 0.94, 0.78, 1.0) : SIMD4<Float>(0.96, 0.96, 0.96, 1.0)
             ))
         }
 
         return vertices
+    }
+
+    private static func pedestrianMeshVariant(position: SIMD3<Float>) -> ArtMeshID {
+        let seed = Int(abs((position.x * 0.31) + (position.z * 0.17)).rounded())
+        switch seed % 4 {
+        case 0:
+            return .characterA
+        case 1:
+            return .characterG
+        case 2:
+            return .characterL
+        default:
+            return .characterR
+        }
+    }
+
+    private static func vehicleMeshDescriptor(for kind: UInt32) -> (ArtMeshID, SIMD3<Float>) {
+        switch kind {
+        case UInt32(MDTBVehicleKindCoupe):
+            return (.hatchback, SIMD3<Float>(repeating: 1.46))
+        case UInt32(MDTBVehicleKindMoped):
+            return (.kart, SIMD3<Float>(repeating: 1.38))
+        case UInt32(MDTBVehicleKindBicycle):
+            return (.kart, SIMD3<Float>(repeating: 1.18))
+        case UInt32(MDTBVehicleKindMotorcycle):
+            return (.raceCar, SIMD3<Float>(repeating: 1.22))
+        default:
+            return (.sedan, SIMD3<Float>(repeating: 1.42))
+        }
+    }
+
+    private static func makeHeldWeaponVertices(position: SIMD3<Float>, heading: Float, lateralOffset: Float, forwardOffset: Float, heightOffset: Float, meshID: ArtMeshID, scale: SIMD3<Float>, tint: SIMD4<Float> = SIMD4<Float>(repeating: 1.0)) -> [Vertex] {
+        let right = SIMD3<Float>(cos(heading), 0.0, sin(heading))
+        let forward = SIMD3<Float>(sin(heading), 0.0, -cos(heading))
+        let weaponPosition =
+            position +
+            (right * lateralOffset) +
+            (forward * forwardOffset) +
+            SIMD3<Float>(0.0, heightOffset, 0.0)
+        return artMeshes.makeVertices(for: meshID, position: weaponPosition, yaw: heading + (.pi * 0.5), scale: scale, tint: tint)
+    }
+
+    private static func environmentTint(for block: SceneBlock) -> SIMD4<Float> {
+        switch block.district {
+        case UInt32(MDTBDistrictKoreatown), UInt32(MDTBDistrictSouthPark), UInt32(MDTBDistrictUniversityPark):
+            return SIMD4<Float>(1.0, 0.98, 0.98, 1.0)
+        case UInt32(MDTBDistrictInglewood), UInt32(MDTBDistrictLeimertPark), UInt32(MDTBDistrictWillowbrook):
+            return SIMD4<Float>(0.94, 1.0, 0.95, 1.0)
+        case UInt32(MDTBDistrictHistoricSouthCentral), UInt32(MDTBDistrictWatts), UInt32(MDTBDistrictHuntingtonPark):
+            return SIMD4<Float>(0.96, 0.94, 0.92, 1.0)
+        default:
+            return SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
+        }
     }
 
     private static func makeWorldBoxVertices(center: SIMD3<Float>, halfExtents: SIMD3<Float>, yaw: Float, color: SIMD4<Float>) -> [Vertex] {

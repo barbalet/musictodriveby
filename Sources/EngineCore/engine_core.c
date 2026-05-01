@@ -326,6 +326,18 @@ static MDTBFloat3 outer_route_yard_tail_staging_position(
     const MDTBBlockDescriptor *block,
     const MDTBOuterRouteNodeContext *route_context
 );
+static MDTBFloat3 outer_route_tail_cap_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
+static MDTBFloat3 outer_route_tail_cap_pull_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
+static MDTBFloat3 outer_route_tail_cap_staging_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+);
 static const MDTBRoadSpine *road_spine_for_axis_coordinate(uint32_t axis, float coordinate);
 static int road_spine_segment_hits_intersection(const MDTBRoadSpine *spine, float segment_center);
 static const MDTBRoadProfile *road_profile_for_class(uint32_t road_class);
@@ -6870,6 +6882,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
             float terminal_enclosure_pull_strength_scale = 0.015f;
             float yard_tail_strength_scale = 0.010f;
             float yard_tail_pull_strength_scale = 0.008f;
+            float tail_cap_strength_scale = 0.006f;
+            float tail_cap_pull_strength_scale = 0.004f;
 
             if (!block_is_outer_expansion_tile(block) ||
                 !secondary_connector_profile_for_block(block, &connector_profile) ||
@@ -6914,6 +6928,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     terminal_enclosure_pull_strength_scale = 0.008f;
                     yard_tail_strength_scale = 0.006f;
                     yard_tail_pull_strength_scale = 0.004f;
+                    tail_cap_strength_scale = 0.003f;
+                    tail_cap_pull_strength_scale = 0.002f;
                     break;
                 case MDTBFrontageTemplateTransitMarket:
                     route_strength = 0.34f;
@@ -6940,6 +6956,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     terminal_enclosure_pull_strength_scale = 0.06f;
                     yard_tail_strength_scale = 0.05f;
                     yard_tail_pull_strength_scale = 0.04f;
+                    tail_cap_strength_scale = 0.03f;
+                    tail_cap_pull_strength_scale = 0.02f;
                     break;
                 case MDTBFrontageTemplateServiceSpur:
                     route_strength = 0.40f;
@@ -6966,6 +6984,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     terminal_enclosure_pull_strength_scale = 0.05f;
                     yard_tail_strength_scale = 0.04f;
                     yard_tail_pull_strength_scale = 0.03f;
+                    tail_cap_strength_scale = 0.025f;
+                    tail_cap_pull_strength_scale = 0.018f;
                     break;
                 case MDTBFrontageTemplateCivicRetail:
                 default:
@@ -6993,6 +7013,8 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     terminal_enclosure_pull_strength_scale = 0.04f;
                     yard_tail_strength_scale = 0.03f;
                     yard_tail_pull_strength_scale = 0.02f;
+                    tail_cap_strength_scale = 0.02f;
+                    tail_cap_pull_strength_scale = 0.014f;
                     break;
             }
 
@@ -7051,6 +7073,10 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     outer_route_yard_tail_position(block, &route_context);
                 const MDTBFloat3 yard_tail_pull =
                     outer_route_yard_tail_pull_position(block, &route_context);
+                const MDTBFloat3 tail_cap_position =
+                    outer_route_tail_cap_position(block, &route_context);
+                const MDTBFloat3 tail_cap_pull =
+                    outer_route_tail_cap_pull_position(block, &route_context);
 
                 push_traffic_occupancy(
                     branch_position,
@@ -7235,6 +7261,22 @@ static void refresh_traffic_occupancies(const MDTBEngineState *state) {
                     route_context.branch_axis,
                     MDTBTrafficOccupancyReasonStopZone,
                     route_strength * yard_tail_pull_strength_scale
+                );
+                push_traffic_occupancy(
+                    tail_cap_position,
+                    fmaxf(route_radius - 1.42f, 0.76f),
+                    (uint32_t)index,
+                    route_context.branch_axis,
+                    MDTBTrafficOccupancyReasonStopZone,
+                    route_strength * tail_cap_strength_scale
+                );
+                push_traffic_occupancy(
+                    tail_cap_pull,
+                    fmaxf(route_radius - 1.46f, 0.74f),
+                    (uint32_t)index,
+                    route_context.branch_axis,
+                    MDTBTrafficOccupancyReasonStopZone,
+                    route_strength * tail_cap_pull_strength_scale
                 );
             }
 
@@ -13143,6 +13185,45 @@ static MDTBFloat3 outer_route_yard_tail_staging_position(
     );
 }
 
+static MDTBFloat3 outer_route_tail_cap_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    const MDTBFloat3 yard_tail = outer_route_yard_tail_position(block, route_context);
+    return offset_outer_route_position(
+        route_context,
+        yard_tail,
+        outer_route_longitudinal_sign_for_block(block) * 0.02f,
+        0.56f
+    );
+}
+
+static MDTBFloat3 outer_route_tail_cap_pull_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    const MDTBFloat3 yard_tail_pull = outer_route_yard_tail_pull_position(block, route_context);
+    return offset_outer_route_position(
+        route_context,
+        yard_tail_pull,
+        outer_route_longitudinal_sign_for_block(block) * 0.22f,
+        0.22f
+    );
+}
+
+static MDTBFloat3 outer_route_tail_cap_staging_position(
+    const MDTBBlockDescriptor *block,
+    const MDTBOuterRouteNodeContext *route_context
+) {
+    const MDTBFloat3 tail_cap = outer_route_tail_cap_position(block, route_context);
+    return offset_outer_route_position(
+        route_context,
+        tail_cap,
+        -(outer_route_longitudinal_sign_for_block(block) * 0.06f),
+        -0.10f
+    );
+}
+
 static void build_outer_route_frontage_massing(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
     if (block == NULL || route_context == NULL) {
         return;
@@ -15787,6 +15868,272 @@ static void build_outer_route_yard_tail_detail(const MDTBBlockDescriptor *block,
     if (add_bollards) {
         MDTBFloat3 left_bollard = offset_outer_route_position(route_context, pad_center, -along_sign * 0.24f, -0.02f);
         MDTBFloat3 right_bollard = offset_outer_route_position(route_context, pad_center, along_sign * 0.24f, -0.02f);
+        push_bollard(left_bollard.x, left_bollard.z, 0.92f);
+        push_bollard(right_bollard.x, right_bollard.z, 0.92f);
+    }
+}
+
+static void build_outer_route_tail_cap_detail(const MDTBBlockDescriptor *block, const MDTBOuterRouteNodeContext *route_context) {
+    MDTBFloat3 pad_center;
+    MDTBFloat3 seam_center;
+    MDTBFloat3 mass_center;
+    MDTBFloat3 cap_center;
+    MDTBFloat4 pad_color = make_float4(0.24f, 0.23f, 0.22f, 1.0f);
+    MDTBFloat4 seam_color = make_float4(0.18f, 0.17f, 0.16f, 1.0f);
+    MDTBFloat4 mass_color = make_float4(0.36f, 0.33f, 0.29f, 1.0f);
+    MDTBFloat4 cap_color = make_float4(0.25f, 0.26f, 0.28f, 1.0f);
+    MDTBFloat4 post_color = make_float4(0.27f, 0.26f, 0.24f, 1.0f);
+    const float along_sign = outer_route_longitudinal_sign_for_block(block);
+    float pad_axis_half = 0.62f;
+    float pad_cross_half = 0.34f;
+    float mass_axis_half = 0.38f;
+    float mass_half_height = 0.34f;
+    float mass_cross_half = 0.05f;
+    float cap_axis_half = 0.28f;
+    float cap_height = 0.88f;
+    float cap_cross_half = 0.10f;
+    float post_axis_offset = 0.12f;
+    float post_cross_shift = 0.02f;
+    int add_posts = 0;
+    int add_tree = 0;
+    int add_bollards = 0;
+
+    if (block == NULL || route_context == NULL) {
+        return;
+    }
+
+    pad_center = outer_route_tail_cap_position(block, route_context);
+    seam_center = offset_outer_route_position(route_context, pad_center, 0.0f, -0.06f);
+    mass_center = offset_outer_route_position(route_context, pad_center, along_sign * 0.01f, 0.04f);
+    cap_center = offset_outer_route_position(route_context, mass_center, 0.0f, -0.01f);
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            pad_color = make_float4(0.32f, 0.30f, 0.27f, 1.0f);
+            seam_color = make_float4(0.24f, 0.22f, 0.20f, 1.0f);
+            mass_color = make_float4(0.44f, 0.40f, 0.36f, 1.0f);
+            cap_color = make_float4(0.31f, 0.28f, 0.25f, 1.0f);
+            post_color = make_float4(0.35f, 0.30f, 0.26f, 1.0f);
+            pad_axis_half = 0.68f;
+            pad_cross_half = 0.38f;
+            mass_axis_half = 0.48f;
+            mass_half_height = 0.18f;
+            mass_cross_half = 0.04f;
+            cap_axis_half = 0.54f;
+            cap_height = 0.80f;
+            cap_cross_half = 0.14f;
+            post_axis_offset = 0.20f;
+            post_cross_shift = 0.03f;
+            add_posts = 1;
+            add_tree = 1;
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            pad_color = make_float4(0.36f, 0.35f, 0.32f, 1.0f);
+            seam_color = make_float4(0.25f, 0.26f, 0.28f, 1.0f);
+            mass_color = make_float4(0.23f, 0.36f, 0.48f, 1.0f);
+            cap_color = make_float4(0.18f, 0.31f, 0.44f, 1.0f);
+            post_color = make_float4(0.23f, 0.26f, 0.30f, 1.0f);
+            pad_axis_half = 0.70f;
+            pad_cross_half = 0.40f;
+            mass_axis_half = 0.05f;
+            mass_half_height = 0.56f;
+            mass_cross_half = 0.14f;
+            cap_axis_half = 0.32f;
+            cap_height = 1.00f;
+            cap_cross_half = 0.12f;
+            post_axis_offset = 0.10f;
+            post_cross_shift = 0.03f;
+            add_posts = 1;
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            pad_color = make_float4(0.22f, 0.22f, 0.23f, 1.0f);
+            seam_color = make_float4(0.15f, 0.15f, 0.16f, 1.0f);
+            mass_color = make_float4(0.29f, 0.27f, 0.24f, 1.0f);
+            cap_color = make_float4(0.26f, 0.24f, 0.21f, 1.0f);
+            post_color = make_float4(0.23f, 0.22f, 0.20f, 1.0f);
+            pad_axis_half = 0.76f;
+            pad_cross_half = 0.44f;
+            mass_axis_half = 0.70f;
+            mass_half_height = 0.42f;
+            mass_cross_half = 0.04f;
+            cap_axis_half = 0.42f;
+            cap_height = 0.92f;
+            cap_cross_half = 0.06f;
+            add_bollards = 1;
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            pad_color = make_float4(0.31f, 0.28f, 0.25f, 1.0f);
+            seam_color = make_float4(0.23f, 0.21f, 0.18f, 1.0f);
+            mass_color = make_float4(0.43f, 0.34f, 0.29f, 1.0f);
+            cap_color = make_float4(0.35f, 0.20f, 0.16f, 1.0f);
+            post_color = make_float4(0.28f, 0.23f, 0.20f, 1.0f);
+            pad_axis_half = 0.64f;
+            pad_cross_half = 0.36f;
+            mass_axis_half = 0.34f;
+            mass_half_height = 0.40f;
+            mass_cross_half = 0.07f;
+            cap_axis_half = 0.24f;
+            cap_height = 0.94f;
+            cap_cross_half = 0.10f;
+            post_axis_offset = 0.14f;
+            post_cross_shift = 0.02f;
+            add_posts = 1;
+            break;
+    }
+
+    push_scene_box(make_box(
+        make_float3(pad_center.x, kRoadHeight + 0.015f, pad_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, pad_axis_half, 0.015f, pad_cross_half),
+        pad_color
+    ));
+    push_scene_box(make_box(
+        make_float3(seam_center.x, kRoadHeight + 0.02f, seam_center.z),
+        oriented_half_extents_for_axis(route_context->branch_axis, fmaxf(pad_axis_half - 0.05f, 0.4f), 0.01f, 0.03f),
+        seam_color
+    ));
+
+    mass_center.y = kRoadHeight + mass_half_height;
+    push_prop(
+        mass_center,
+        oriented_half_extents_for_axis(route_context->branch_axis, mass_axis_half, mass_half_height, mass_cross_half),
+        mass_color,
+        1
+    );
+
+    cap_center.y = kRoadHeight + cap_height;
+    push_prop(
+        cap_center,
+        oriented_half_extents_for_axis(route_context->branch_axis, cap_axis_half, 0.04f, cap_cross_half),
+        cap_color,
+        0
+    );
+
+    if (add_posts) {
+        MDTBFloat3 left_post = offset_outer_route_position(route_context, cap_center, -along_sign * post_axis_offset, post_cross_shift);
+        MDTBFloat3 right_post = offset_outer_route_position(route_context, cap_center, along_sign * post_axis_offset, post_cross_shift);
+        left_post.y = kRoadHeight + (cap_height * 0.5f);
+        right_post.y = kRoadHeight + (cap_height * 0.5f);
+        push_prop(
+            left_post,
+            oriented_half_extents_for_axis(route_context->branch_axis, 0.02f, cap_height * 0.5f, 0.02f),
+            post_color,
+            1
+        );
+        push_prop(
+            right_post,
+            oriented_half_extents_for_axis(route_context->branch_axis, 0.02f, cap_height * 0.5f, 0.02f),
+            post_color,
+            1
+        );
+    }
+
+    switch (block->frontage_template) {
+        case MDTBFrontageTemplateResidentialCourt:
+            {
+                MDTBFloat3 cap_wall = offset_outer_route_position(route_context, mass_center, 0.0f, 0.03f);
+                cap_wall.y = kRoadHeight + 0.10f;
+                push_prop(
+                    cap_wall,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.30f, 0.10f, 0.03f),
+                    scaled_color(mass_color, 0.88f),
+                    1
+                );
+            }
+            push_planter(
+                offset_outer_route_position(route_context, pad_center, -along_sign * 0.10f, -0.02f).x,
+                offset_outer_route_position(route_context, pad_center, -along_sign * 0.10f, -0.02f).z,
+                0.03f
+            );
+            push_planter(
+                offset_outer_route_position(route_context, pad_center, along_sign * 0.10f, -0.02f).x,
+                offset_outer_route_position(route_context, pad_center, along_sign * 0.10f, -0.02f).z,
+                0.02f
+            );
+            if (add_tree) {
+                push_tree(
+                    offset_outer_route_position(route_context, pad_center, along_sign * 0.10f, 0.24f).x,
+                    offset_outer_route_position(route_context, pad_center, along_sign * 0.10f, 0.24f).z,
+                    0.20f
+                );
+            }
+            break;
+        case MDTBFrontageTemplateTransitMarket:
+            {
+                MDTBFloat3 cap_post = offset_outer_route_position(route_context, mass_center, 0.0f, -0.01f);
+                MDTBFloat3 bench = offset_outer_route_position(route_context, pad_center, -along_sign * 0.10f, -0.01f);
+                cap_post.y = kRoadHeight + 0.30f;
+                bench.y = kRoadHeight + 0.05f;
+                push_prop(
+                    cap_post,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.03f, 0.30f, 0.06f),
+                    make_float4(0.84f, 0.80f, 0.72f, 1.0f),
+                    1
+                );
+                push_prop(
+                    bench,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.06f, 0.05f, 0.02f),
+                    make_float4(0.86f, 0.82f, 0.74f, 1.0f),
+                    1
+                );
+            }
+            break;
+        case MDTBFrontageTemplateServiceSpur:
+            {
+                MDTBFloat3 kit_block = offset_outer_route_position(route_context, mass_center, 0.0f, 0.03f);
+                MDTBFloat3 cabinet = offset_outer_route_position(route_context, pad_center, along_sign * 0.12f, -0.01f);
+                kit_block.y = kRoadHeight + 0.14f;
+                cabinet.y = kRoadHeight + 0.10f;
+                push_prop(
+                    kit_block,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.34f, 0.14f, 0.03f),
+                    scaled_color(mass_color, 0.84f),
+                    1
+                );
+                push_prop(
+                    cabinet,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.06f, 0.10f, 0.06f),
+                    make_float4(0.28f, 0.26f, 0.23f, 1.0f),
+                    1
+                );
+            }
+            break;
+        case MDTBFrontageTemplateCivicRetail:
+        default:
+            {
+                MDTBFloat3 plinth = offset_outer_route_position(route_context, pad_center, 0.0f, -0.01f);
+                MDTBFloat3 cap_detail = offset_outer_route_position(route_context, mass_center, 0.0f, 0.03f);
+                plinth.y = kRoadHeight + 0.04f;
+                cap_detail.y = kRoadHeight + 0.12f;
+                push_prop(
+                    plinth,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.12f, 0.04f, 0.03f),
+                    scaled_color(mass_color, 0.90f),
+                    1
+                );
+                push_prop(
+                    cap_detail,
+                    oriented_half_extents_for_axis(route_context->branch_axis, 0.20f, 0.12f, 0.03f),
+                    scaled_color(cap_color, 0.88f),
+                    1
+                );
+            }
+            push_planter(
+                offset_outer_route_position(route_context, pad_center, -along_sign * 0.08f, -0.01f).x,
+                offset_outer_route_position(route_context, pad_center, -along_sign * 0.08f, -0.01f).z,
+                0.02f
+            );
+            push_planter(
+                offset_outer_route_position(route_context, pad_center, along_sign * 0.08f, -0.01f).x,
+                offset_outer_route_position(route_context, pad_center, along_sign * 0.08f, -0.01f).z,
+                0.02f
+            );
+            break;
+    }
+
+    if (add_bollards) {
+        MDTBFloat3 left_bollard = offset_outer_route_position(route_context, pad_center, -along_sign * 0.18f, -0.01f);
+        MDTBFloat3 right_bollard = offset_outer_route_position(route_context, pad_center, along_sign * 0.18f, -0.01f);
         push_bollard(left_bollard.x, left_bollard.z, 0.92f);
         push_bollard(right_bollard.x, right_bollard.z, 0.92f);
     }
