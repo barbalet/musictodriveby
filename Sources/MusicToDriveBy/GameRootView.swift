@@ -9,6 +9,7 @@ struct GameRootView: View {
         ZStack {
             MetalGameView(viewModel: viewModel)
                 .ignoresSafeArea()
+                .accessibilityIdentifier("root.gameSurface")
 
             CombatHUDView(model: viewModel.combatHUD)
                 .padding(.horizontal, 20)
@@ -17,6 +18,7 @@ struct GameRootView: View {
                 .allowsHitTesting(false)
         }
         .background(Color.black)
+        .accessibilityIdentifier("root.gameRoot")
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
                 Button {
@@ -28,6 +30,7 @@ struct GameRootView: View {
                     )
                 }
                 .help("Show or hide the floating controls panel")
+                .accessibilityIdentifier("toolbar.toggleControls")
 
                 Button {
                     MainGameWindowController.toggleFullScreen()
@@ -35,6 +38,7 @@ struct GameRootView: View {
                     Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
                 .help("Toggle fullscreen for the main rendering window")
+                .accessibilityIdentifier("toolbar.fullScreen")
             }
         }
         .onAppear {
@@ -43,6 +47,9 @@ struct GameRootView: View {
             }
 
             showedInitialControls = true
+            guard !UITestSupport.hideInitialControls else {
+                return
+            }
             controlPanelController.show(viewModel: viewModel)
         }
     }
@@ -87,25 +94,29 @@ private struct CombatHUDView: View {
                             section: "Weapon",
                             headline: model.weaponTitle,
                             detail: model.weaponDetail,
-                            tint: tint
+                            tint: tint,
+                            accessibilityID: "hud.weaponCard"
                         )
                         HUDDetailCard(
                             section: "Encounter",
                             headline: model.encounterTitle,
                             detail: model.encounterDetail,
-                            tint: tint
+                            tint: tint,
+                            accessibilityID: "hud.encounterCard"
                         )
                         HUDDetailCard(
                             section: "Street",
                             headline: model.systemTitle,
                             detail: model.systemDetail,
-                            tint: tint
+                            tint: tint,
+                            accessibilityID: "hud.streetCard"
                         )
                         HUDDetailCard(
                             section: "Map",
                             headline: model.mapTitle,
                             detail: model.mapDetail,
-                            tint: tint
+                            tint: tint,
+                            accessibilityID: "hud.mapCard"
                         )
                     }
                 }
@@ -124,11 +135,13 @@ private struct HUDTopBanner: View {
             Text(model.title)
                 .font(.system(size: 17, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
+                .accessibilityIdentifier("hud.topBanner.title")
 
             Text(model.subtitle)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.82))
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("hud.topBanner.subtitle")
         }
         .frame(maxWidth: 420, alignment: .leading)
         .padding(.horizontal, 16)
@@ -149,6 +162,8 @@ private struct HUDTopBanner: View {
                 .stroke(tint.opacity(0.55), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("hud.topBanner")
     }
 }
 
@@ -174,6 +189,7 @@ private struct HUDPromptPill: View {
                     .stroke(tint.opacity(0.42), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
+            .accessibilityIdentifier("hud.promptPill")
     }
 }
 
@@ -186,14 +202,17 @@ private struct HUDHealthCard: View {
             Text("Condition")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.68))
+                .accessibilityIdentifier("hud.healthCard.section")
 
             Text(model.healthText)
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
+                .accessibilityIdentifier("hud.healthCard.value")
 
             Text(model.healthDetail)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.82))
+                .accessibilityIdentifier("hud.healthCard.detail")
 
             ZStack(alignment: .leading) {
                 Capsule()
@@ -223,6 +242,8 @@ private struct HUDHealthCard: View {
                 .stroke(tint.opacity(0.38), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.30), radius: 14, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("hud.healthCard")
     }
 }
 
@@ -231,6 +252,7 @@ private struct HUDDetailCard: View {
     let headline: String
     let detail: String
     let tint: Color
+    let accessibilityID: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -266,5 +288,7 @@ private struct HUDDetailCard: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(accessibilityID)
     }
 }

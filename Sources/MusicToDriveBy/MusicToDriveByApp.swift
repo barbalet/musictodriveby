@@ -10,6 +10,7 @@ struct MusicToDriveByApp: App {
             GameRootView(viewModel: viewModel, controlPanelController: controlPanelController)
                 .frame(minWidth: 1280, minHeight: 800)
                 .background(MainGameWindowConfigurator())
+                .accessibilityIdentifier("root.gameWindowContent")
         }
         .commands {
             MusicToDriveByCommands(viewModel: viewModel, controlPanelController: controlPanelController)

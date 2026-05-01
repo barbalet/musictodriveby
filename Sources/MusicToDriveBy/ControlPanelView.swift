@@ -21,10 +21,12 @@ struct ControlPanelView: View {
                 Button("Full Screen") {
                     MainGameWindowController.toggleFullScreen()
                 }
+                .accessibilityIdentifier("controls.button.fullScreen")
 
                 Button("Hide") {
                     controller.hide()
                 }
+                .accessibilityIdentifier("controls.button.hide")
             }
             .padding(18)
 
@@ -32,14 +34,15 @@ struct ControlPanelView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    PanelSection(title: "Status", bodyText: viewModel.debugSummary, usesSecondaryStyle: false)
-                    PanelSection(title: "Controls", bodyText: viewModel.controlsSummary, usesSecondaryStyle: true)
+                    PanelSection(title: "Status", bodyText: viewModel.debugSummary, usesSecondaryStyle: false, accessibilityID: "controls.section.status")
+                    PanelSection(title: "Controls", bodyText: viewModel.controlsSummary, usesSecondaryStyle: true, accessibilityID: "controls.section.controls")
                 }
                 .padding(18)
             }
         }
         .frame(minWidth: 360, minHeight: 520)
         .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityIdentifier("controls.window.content")
     }
 }
 
@@ -47,6 +50,7 @@ private struct PanelSection: View {
     let title: String
     let bodyText: String
     let usesSecondaryStyle: Bool
+    let accessibilityID: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -62,5 +66,7 @@ private struct PanelSection: View {
                 .padding(14)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(accessibilityID)
     }
 }

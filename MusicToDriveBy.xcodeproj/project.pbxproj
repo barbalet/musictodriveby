@@ -20,6 +20,10 @@
 		9A1B2C3D4E5F678901000212 /* WindowSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000112 /* WindowSupport.swift */; };
 		9A1B2C3D4E5F678901000213 /* MeshArt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000113 /* MeshArt.swift */; };
 		9A1B2C3D4E5F678901000214 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000114 /* Resources */; };
+		9A1B2C3D4E5F678901000215 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000115 /* UITestSupport.swift */; };
+		9A1B2C3D4E5F678901000216 /* MusicToDriveByUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000116 /* MusicToDriveByUITests.swift */; };
+		9A1B2C3D4E5F678901000217 /* MusicToDriveByUITestMatrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000117 /* MusicToDriveByUITestMatrix.swift */; };
+		9A1B2C3D4E5F678901000218 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000118 /* XCTest.framework */; };
 		9A1B2C3D4E5F67890100020C /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010C /* AppKit.framework */; };
 		9A1B2C3D4E5F67890100020D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010D /* Metal.framework */; };
 		9A1B2C3D4E5F67890100020E /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F67890100010E /* MetalKit.framework */; };
@@ -27,8 +31,19 @@
 		9A1B2C3D4E5F678901000210 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A1B2C3D4E5F678901000110 /* SwiftUI.framework */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		9A1B2C3D4E5F67890100001B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9A1B2C3D4E5F678901000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9A1B2C3D4E5F678901000010;
+			remoteInfo = MusicToDriveBy;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusicToDriveBy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A1B2C3D4E5F678901000119 /* MusicToDriveByUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MusicToDriveByUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A1B2C3D4E5F678901000100 /* MusicToDriveByApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicToDriveByApp.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000101 /* GameRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameRootView.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000102 /* GameViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewModel.swift; sourceTree = "<group>"; };
@@ -50,6 +65,10 @@
 		9A1B2C3D4E5F678901000112 /* WindowSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSupport.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000113 /* MeshArt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshArt.swift; sourceTree = "<group>"; };
 		9A1B2C3D4E5F678901000114 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000115 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000116 /* MusicToDriveByUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicToDriveByUITests.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000117 /* MusicToDriveByUITestMatrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicToDriveByUITestMatrix.swift; sourceTree = "<group>"; };
+		9A1B2C3D4E5F678901000118 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +84,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9A1B2C3D4E5F678901000019 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A1B2C3D4E5F678901000218 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -72,6 +99,7 @@
 			isa = PBXGroup;
 			children = (
 				9A1B2C3D4E5F678901000004 /* Sources */,
+				9A1B2C3D4E5F678901000008 /* Tests */,
 				9A1B2C3D4E5F678901000007 /* XcodeSupport */,
 				9A1B2C3D4E5F678901000003 /* Products */,
 			);
@@ -81,6 +109,7 @@
 			isa = PBXGroup;
 			children = (
 				9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */,
+				9A1B2C3D4E5F678901000119 /* MusicToDriveByUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +137,7 @@
 				9A1B2C3D4E5F678901000111 /* ControlPanelView.swift */,
 				9A1B2C3D4E5F678901000112 /* WindowSupport.swift */,
 				9A1B2C3D4E5F678901000113 /* MeshArt.swift */,
+				9A1B2C3D4E5F678901000115 /* UITestSupport.swift */,
 				9A1B2C3D4E5F678901000114 /* Resources */,
 			);
 			path = MusicToDriveBy;
@@ -131,6 +161,23 @@
 			path = XcodeSupport;
 			sourceTree = "<group>";
 		};
+		9A1B2C3D4E5F678901000008 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000009 /* MusicToDriveByUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		9A1B2C3D4E5F678901000009 /* MusicToDriveByUITests */ = {
+			isa = PBXGroup;
+			children = (
+				9A1B2C3D4E5F678901000116 /* MusicToDriveByUITests.swift */,
+				9A1B2C3D4E5F678901000117 /* MusicToDriveByUITestMatrix.swift */,
+			);
+			path = MusicToDriveByUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -151,6 +198,23 @@
 			productReference = 9A1B2C3D4E5F678901000011 /* MusicToDriveBy.app */;
 			productType = "com.apple.product-type.application";
 		};
+		9A1B2C3D4E5F678901000017 /* MusicToDriveByUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A1B2C3D4E5F67890100001A /* Build configuration list for PBXNativeTarget "MusicToDriveByUITests" */;
+			buildPhases = (
+				9A1B2C3D4E5F678901000018 /* Sources */,
+				9A1B2C3D4E5F678901000019 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9A1B2C3D4E5F67890100001C /* PBXTargetDependency */,
+			);
+			name = MusicToDriveByUITests;
+			productName = MusicToDriveByUITests;
+			productReference = 9A1B2C3D4E5F678901000119 /* MusicToDriveByUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -163,6 +227,10 @@
 				TargetAttributes = {
 					9A1B2C3D4E5F678901000010 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					9A1B2C3D4E5F678901000017 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 9A1B2C3D4E5F678901000010;
 					};
 				};
 			};
@@ -180,6 +248,7 @@
 			projectRoot = "";
 			targets = (
 				9A1B2C3D4E5F678901000010 /* MusicToDriveBy */,
+				9A1B2C3D4E5F678901000017 /* MusicToDriveByUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -211,11 +280,29 @@
 				9A1B2C3D4E5F678901000211 /* ControlPanelView.swift in Sources */,
 				9A1B2C3D4E5F678901000212 /* WindowSupport.swift in Sources */,
 				9A1B2C3D4E5F678901000213 /* MeshArt.swift in Sources */,
+				9A1B2C3D4E5F678901000215 /* UITestSupport.swift in Sources */,
 				9A1B2C3D4E5F678901000208 /* engine_core.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9A1B2C3D4E5F678901000018 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A1B2C3D4E5F678901000216 /* MusicToDriveByUITests.swift in Sources */,
+				9A1B2C3D4E5F678901000217 /* MusicToDriveByUITestMatrix.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		9A1B2C3D4E5F67890100001C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9A1B2C3D4E5F678901000010 /* MusicToDriveBy */;
+			targetProxy = 9A1B2C3D4E5F67890100001B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		9A1B2C3D4E5F678901000301 /* Debug */ = {
@@ -320,6 +407,38 @@
 			};
 			name = Release;
 		};
+		9A1B2C3D4E5F678901000305 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = by.barbalet.MusicToDriveByUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = MusicToDriveBy;
+			};
+			name = Debug;
+		};
+		9A1B2C3D4E5F678901000306 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = by.barbalet.MusicToDriveByUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = MusicToDriveBy;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -337,6 +456,15 @@
 			buildConfigurations = (
 				9A1B2C3D4E5F678901000303 /* Debug */,
 				9A1B2C3D4E5F678901000304 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9A1B2C3D4E5F67890100001A /* Build configuration list for PBXNativeTarget "MusicToDriveByUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A1B2C3D4E5F678901000305 /* Debug */,
+				9A1B2C3D4E5F678901000306 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

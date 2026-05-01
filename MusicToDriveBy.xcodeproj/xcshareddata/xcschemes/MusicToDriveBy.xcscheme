@@ -28,7 +28,26 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9A1B2C3D4E5F678901000017"
+               BuildableName = "MusicToDriveByUITests.xctest"
+               BlueprintName = "MusicToDriveByUITests"
+               ReferencedContainer = "container:MusicToDriveBy.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "9A1B2C3D4E5F678901000010"
+            BuildableName = "MusicToDriveBy.app"
+            BlueprintName = "MusicToDriveBy"
+            ReferencedContainer = "container:MusicToDriveBy.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

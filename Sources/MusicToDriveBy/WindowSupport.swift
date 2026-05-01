@@ -3,6 +3,7 @@ import SwiftUI
 
 private enum WindowIdentifier {
     static let mainGame = NSUserInterfaceItemIdentifier("by.barbalet.musictodriveby.main-window")
+    static let controls = NSUserInterfaceItemIdentifier("by.barbalet.musictodriveby.controls-window")
 }
 
 @MainActor
@@ -95,6 +96,7 @@ final class ControlPanelController: NSObject, ObservableObject, NSWindowDelegate
             defer: false
         )
         panel.title = "Controls"
+        panel.identifier = WindowIdentifier.controls
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
